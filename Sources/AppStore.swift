@@ -7,7 +7,7 @@ final class AppStore: ObservableObject {
     static let legacyDomain = "local.tboch.now"
     static let soundNames = ["Basso", "Blow", "Bottle", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"]
 
-    @Published var subscriptions: [CalendarSubscription] { didSet { persist(); recolorEvents() } }
+    @Published var subscriptions: [CalendarSubscription] { didSet { persist(); reconcileEvents() } }
     @Published var settings: AppSettings { didSet { settingsChanged() } }
     @Published private(set) var events: [MeetingEvent] = []
     @Published private(set) var errors: [UUID: String] = [:]
@@ -80,6 +80,40 @@ final class AppStore: ObservableObject {
         refresh()
     }
 
+    func resync(subscriptionID: UUID) {
+        guard let subscription = subscriptions.first(where: { $0.id == subscriptionID }) else { return }
+        Task { [weak self] in
+            let results = await Self.performFetch(subscriptions: [subscription])
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.merge(results: results)
+            }
+        }
+    }
+
+    private func merge(results: [FetchResult]) {
+        var updated = events.filter { event in
+            !results.contains { $0.subscription.id == event.calendarID }
+        }
+        let byID = Dictionary(uniqueKeysWithValues: subscriptions.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
+        for result in results {
+            if let error = result.error {
+                errors[result.subscription.id] = error
+                continue
+            }
+            errors.removeValue(forKey: result.subscription.id)
+            updated.append(contentsOf: result.events.map { event in
+                var copy = event
+                if let hex = byID[event.calendarID] { copy.colorHex = hex }
+                return copy
+            })
+        }
+        let active = Set(updated.map(\.id))
+        alerted.subtract(Set(alerted).subtracting(active))
+        snoozed = snoozed.filter { active.contains($0.key) }
+        events = updated.sorted { $0.start < $1.start }
+    }
+
     func snooze(_ ids: [String]) {
         let fireAt = Date().addingTimeInterval(60)
         for id in ids { snoozed[id] = fireAt }
@@ -114,17 +148,17 @@ final class AppStore: ObservableObject {
     }
 
     func refresh() {
+        let enabled = subscriptions.filter(\.isEnabled)
         guard !isRefreshing else {
             pendingRefresh = true
             return
         }
         isRefreshing = true
-        let subs = subscriptions
         Task { [weak self] in
-            let results = await Self.performFetch(subscriptions: subs)
+            let results = await Self.performFetch(subscriptions: enabled)
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
-                self.apply(results: results, fetched: subs)
+                self.apply(results: results, fetched: enabled)
             }
         }
     }
@@ -182,23 +216,38 @@ final class AppStore: ObservableObject {
             if let hex = byID[event.calendarID] { copy.colorHex = hex }
             return copy
         }
+        let nowEnabled = Set(subscriptions.filter(\.isEnabled).map(\.id))
+        allEvents = allEvents.filter { nowEnabled.contains($0.calendarID) }
+        if allEvents.map(\.id).sorted() != events.map(\.id).sorted() {
+            let active = Set(allEvents.map(\.id))
+            alerted.subtract(Set(alerted).subtracting(active))
+            snoozed = snoozed.filter { active.contains($0.key) }
+        }
         self.events = allEvents.sorted { $0.start < $1.start }
         self.errors = newErrors
         self.lastRefresh = Date()
         self.isRefreshing = false
-        if pendingRefresh || fetched.map(\.id) != subscriptions.map(\.id) || fetched.map(\.url) != subscriptions.map(\.url) {
+        if pendingRefresh || fetched.map(\.id) != subscriptions.filter(\.isEnabled).map(\.id) || fetched.map(\.url) != subscriptions.filter(\.isEnabled).map(\.url) {
             pendingRefresh = false
             refresh()
         }
     }
 
-    private func recolorEvents() {
+    private func reconcileEvents() {
         let byID = Dictionary(uniqueKeysWithValues: subscriptions.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
-        events = events.map { event in
+        let enabled = Set(subscriptions.filter(\.isEnabled).map(\.id))
+        let next = events.compactMap { event -> MeetingEvent? in
+            guard enabled.contains(event.calendarID) else { return nil }
             var copy = event
-            if let hex = byID[event.calendarID], hex != event.colorHex { copy.colorHex = hex }
+            if let hex = byID[event.calendarID] { copy.colorHex = hex }
             return copy
         }
+        if next.map(\.id) != events.map(\.id) {
+            let active = Set(next.map(\.id))
+            alerted.subtract(Set(alerted).subtracting(active))
+            snoozed = snoozed.filter { active.contains($0.key) }
+        }
+        events = next
     }
 
     private func tick() {

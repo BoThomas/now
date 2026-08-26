@@ -7,6 +7,26 @@ enum Links {
     static let website = URL(string: "https://thomasboch.com")!
 }
 
+struct CursorModifier: ViewModifier {
+    let cursor: NSCursor
+
+    func body(content: Content) -> some View {
+        content.onHover { inside in
+            if inside {
+                cursor.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+    }
+}
+
+extension View {
+    func cursor(_ cursor: NSCursor) -> some View {
+        modifier(CursorModifier(cursor: cursor))
+    }
+}
+
 struct GitHubMark: Shape {
     private static let pathData = "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"
 
@@ -207,11 +227,18 @@ struct SubscriptionRow: View {
     let hasMoreEvents: Bool
     let error: String?
     let onDelete: () -> Void
+    let onEdited: () -> Void
     @State private var expanded = false
+    @State private var showEditSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
+                Toggle("", isOn: $subscription.isEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .help(subscription.isEnabled ? "Disable calendar (stops sync and reminders)" : "Enable calendar")
                 ColorPicker("", selection: Binding(
                     get: { Palette.color(hex: subscription.colorHex) },
                     set: { subscription.colorHex = Palette.hexString(from: NSColor($0)) }
@@ -227,11 +254,20 @@ struct SubscriptionRow: View {
                         Text(error).font(.system(size: 11)).foregroundStyle(.red).lineLimit(2)
                     }
                 }
+                .opacity(subscription.isEnabled ? 1 : 0.5)
                 Spacer()
+                Button {
+                    showEditSheet = true
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .buttonStyle(.borderless)
+                .help("Edit name or URL")
                 Button(action: onDelete) {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)
+                .help("Remove calendar")
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
                 } label: {
@@ -241,14 +277,23 @@ struct SubscriptionRow: View {
                         .frame(width: 16)
                 }
                 .buttonStyle(.borderless)
-                .help("Show upcoming events")
+                .disabled(!subscription.isEnabled)
+                .help(subscription.isEnabled ? "Show upcoming events" : "Calendar disabled")
             }
-            if expanded {
+            if expanded && subscription.isEnabled {
                 eventList
             }
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .onChange(of: subscription.isEnabled) { enabled in
+            if !enabled { expanded = false }
+        }
+        .sheet(isPresented: $showEditSheet) {
+            EditCalendarView(subscription: $subscription) {
+                onEdited()
+            }
+        }
     }
 
     @ViewBuilder private var eventList: some View {
@@ -260,10 +305,14 @@ struct SubscriptionRow: View {
             } else {
                 ForEach(events) { event in
                     HStack(spacing: 8) {
-                        Text(timeText(event))
-                            .font(.system(size: 11).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .frame(width: 92, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(dayText(event))
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                            Text(Fmt.time.string(from: event.start))
+                                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        }
+                        .frame(width: 60, alignment: .leading)
                         Text(event.title.isEmpty ? "Untitled" : event.title)
                             .font(.system(size: 11))
                             .lineLimit(1)
@@ -277,7 +326,9 @@ struct SubscriptionRow: View {
                                     .font(.system(size: 10))
                                     .foregroundStyle(Palette.color(hex: subscription.colorHex))
                             }
-                            .buttonStyle(.borderless)
+                            .buttonStyle(.link)
+                            .cursor(.pointingHand)
+                            .help("Open \(link.absoluteString)")
                         }
                     }
                     .padding(.leading, 4)
@@ -293,18 +344,79 @@ struct SubscriptionRow: View {
         .padding(.top, 2)
     }
 
-    private func timeText(_ event: MeetingEvent) -> String {
-        if Calendar.current.isDateInToday(event.start) {
-            return Fmt.time.string(from: event.start)
+    private func dayText(_ event: MeetingEvent) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(event.start) { return "Today" }
+        if calendar.isDate(event.start, inSameDayAs: Date().addingTimeInterval(86400)) { return "Tomorrow" }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: Date()), to: calendar.startOfDay(for: event.start)).day ?? 0
+        if days < 7 {
+            return event.start.formatted(.dateTime.weekday(.abbreviated))
         }
-        if Calendar.current.isDate(event.start, inSameDayAs: Date().addingTimeInterval(86400)) {
-            return "Tomorrow \(Fmt.time.string(from: event.start))"
-        }
-        return event.start.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute())
+        return event.start.formatted(.dateTime.day().month(.abbreviated))
     }
 
     private func hostText(_ link: URL) -> String {
         (link.host ?? "").replacingOccurrences(of: "www.", with: "")
+    }
+}
+
+struct EditCalendarView: View {
+    @Binding var subscription: CalendarSubscription
+    let onSave: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var urlString: String
+    @State private var errorText: String?
+    @State private var didChangeURL = false
+
+    init(subscription: Binding<CalendarSubscription>, onSave: @escaping () -> Void) {
+        _subscription = subscription
+        self.onSave = onSave
+        _name = State(initialValue: subscription.wrappedValue.name)
+        _urlString = State(initialValue: subscription.wrappedValue.url)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Edit Calendar")
+                .font(.title2.bold())
+            TextField("Name (e.g. Work)", text: $name)
+                .textFieldStyle(.roundedBorder)
+            TextField("iCal URL (https://…/basic.ics)", text: $urlString)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: urlString) { _ in
+                    didChangeURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines) != subscription.url
+                }
+            if let errorText = errorText {
+                Text(errorText)
+                    .foregroundStyle(.red)
+                    .font(.caption)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { submit() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
+    }
+
+    private func submit() {
+        var trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("webcal://") {
+            trimmed = "https://" + String(trimmed.dropFirst("webcal://".count))
+        }
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https", url.host != nil else {
+            errorText = "That doesn't look like a valid calendar URL."
+            return
+        }
+        subscription.name = name.trimmingCharacters(in: .whitespaces).isEmpty ? subscription.name : name.trimmingCharacters(in: .whitespaces)
+        subscription.url = trimmed
+        dismiss()
+        onSave()
     }
 }
 
@@ -389,12 +501,27 @@ struct SettingsView: View {
         }
     }
 
+    private func confirmDelete(_ subscription: CalendarSubscription) {
+        let alert = NSAlert()
+        alert.messageText = "Remove “\(subscription.name)”?"
+        alert.informativeText = "Reminders for this calendar will stop. You can add it again anytime with the same link."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            store.removeSubscription(subscription.id)
+        }
+    }
+
     private func upcomingEvents(for subscription: CalendarSubscription) -> [MeetingEvent] {
+        guard subscription.isEnabled else { return [] }
         let now = Date()
         return Array(store.events.filter { $0.calendarID == subscription.id && store.isVisible($0, at: now) }.prefix(8))
     }
 
     private func upcomingCount(for subscription: CalendarSubscription) -> Int {
+        guard subscription.isEnabled else { return 0 }
         let now = Date()
         return store.events.filter { $0.calendarID == subscription.id && store.isVisible($0, at: now) }.count
     }
@@ -428,7 +555,9 @@ struct SettingsView: View {
                             hasMoreEvents: upcomingCount(for: subscription) > 8,
                             error: store.errors[subscription.id]
                         ) {
-                            store.removeSubscription(subscription.id)
+                            confirmDelete(subscription)
+                        } onEdited: {
+                            store.resync(subscriptionID: subscription.id)
                         }
                     }
                 }

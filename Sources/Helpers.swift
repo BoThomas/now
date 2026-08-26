@@ -35,11 +35,11 @@ enum Palette {
         Color(nsColor: nsColor(hex: hex))
     }
 
-    static func dotImage(color: NSColor) -> NSImage {
-        let image = NSImage(size: NSSize(width: 12, height: 12))
+    static func dotImage(color: NSColor, size: CGFloat = 12) -> NSImage {
+        let image = NSImage(size: NSSize(width: size, height: size))
         image.lockFocus()
         color.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 10, height: 10)).fill()
+        NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: size, height: size)).fill()
         image.unlockFocus()
         return image
     }
@@ -80,15 +80,19 @@ enum Fmt {
 
     static func barCountdown(to date: Date) -> String {
         let s = Int(date.timeIntervalSince(Date()))
-        if s > 0 {
-            if s < 3600 { return "\(max(1, s / 60))m" }
-            if s < 86400 { return "\(s / 3600)h" }
-            return "\(s / 86400)d"
+        let sign = s < 0 ? "-" : ""
+        let t = abs(s)
+        if t == 0 { return "now" }
+        if t < 60 { return "\(sign)\(t)s" }
+        if t < 3600 { return "\(sign)\(max(1, t / 60))m" }
+        if t < 86400 {
+            let h = t / 3600
+            let m = (t % 3600) / 60
+            return m > 0 ? "\(sign)\(h)h \(m)m" : "\(sign)\(h)h"
         }
-        let late = -s
-        if late < 60 { return "-\(late)s" }
-        if late < 3600 { return "-\(late / 60)m" }
-        return "-\(late / 3600)h"
+        let d = t / 86400
+        let h = (t % 86400) / 3600
+        return h > 0 ? "\(sign)\(d)d \(h)h" : "\(sign)\(d)d"
     }
 
     static func ago(_ date: Date) -> String {

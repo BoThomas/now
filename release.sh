@@ -173,8 +173,10 @@ print "• Creating GitHub release"
 NOTES_FILE=$(mktemp)
 {
   printf '%s' "$NOTES_ENTRY"
-  print ""
-  print "Full changelog: $CHANGE_URL"
+  if [[ -n "$PREV_TAG" ]]; then
+    print ""
+    print "Full changelog: $CHANGE_URL"
+  fi
 } > "$NOTES_FILE"
 gh release create "$TAG" "outputs/now-$TAG.zip" --title "now $VERSION" --notes-file "$NOTES_FILE"
 rm -f "$NOTES_FILE"

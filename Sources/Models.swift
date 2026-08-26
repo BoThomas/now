@@ -7,9 +7,10 @@ struct CalendarSubscription: Codable, Identifiable, Equatable {
     var url: String
     var colorIndex: Int = 0
     var colorHex: String = ""
+    var isEnabled = true
 
     enum CodingKeys: String, CodingKey {
-        case id, name, url, colorIndex, colorHex
+        case id, name, url, colorIndex, colorHex, isEnabled
     }
 
     init(name: String, url: String, colorIndex: Int) {
@@ -26,6 +27,7 @@ struct CalendarSubscription: Codable, Identifiable, Equatable {
         url = try c.decode(String.self, forKey: .url)
         colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
         colorHex = try c.decodeIfPresent(String.self, forKey: .colorHex) ?? Palette.hex(for: colorIndex)
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
     }
 }
 

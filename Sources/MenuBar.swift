@@ -36,13 +36,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
         button.image = nil
-        let color = next.nsColor
-        let text = NSMutableAttributedString(string: "● ", attributes: [
-            .font: NSFont.systemFont(ofSize: 9),
-            .foregroundColor: color
-        ])
-        text.append(NSAttributedString(string: Fmt.barCountdown(to: next.start), attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
+        let textFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        let dotSize: CGFloat = 7
+        let attachment = NSTextAttachment()
+        attachment.image = Palette.dotImage(color: next.nsColor, size: dotSize)
+        attachment.bounds = CGRect(x: 0, y: textFont.capHeight / 2 - dotSize / 2, width: dotSize, height: dotSize)
+        let text = NSMutableAttributedString(attachment: attachment)
+        text.append(NSAttributedString(string: " \(Fmt.barCountdown(to: next.start))", attributes: [
+            .font: textFont,
             .foregroundColor: NSColor.labelColor
         ]))
         button.attributedTitle = text
