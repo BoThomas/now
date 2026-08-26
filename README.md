@@ -5,7 +5,20 @@
 
 Native macOS menu bar app for meeting reminders, inspired by [inyourface.app](https://inyourface.app). Add the shared iCal (ICS) links of your calendars and `now` takes over the whole screen right before a meeting starts — with a big one-click join button when it finds a meeting link.
 
+<table>
+  <tr>
+    <td><img src="docs/screenshots/now-reminder.jpg" height="220" alt="Fullscreen meeting reminder with join button and countdown"></td>
+    <td><img src="docs/screenshots/now-settings.jpg" height="220" alt="Settings with calendars, colors and reminder options"></td>
+    <td><img src="docs/screenshots/now-menubar.jpg" height="220" alt="Menu bar countdown and quick menu"></td>
+  </tr>
+</table>
+
 ## Download
+
+<p>
+  <a href="https://github.com/BoThomas/now/releases/latest"><img src="https://img.shields.io/badge/⬇_Download-Latest_Release-2478D0?style=for-the-badge" alt="Download latest release"></a>
+  <a href="https://thomasboch.com"><img src="https://img.shields.io/badge/Made_by-Thomas_Boch-181717?style=for-the-badge" alt="Thomas Boch"></a>
+</p>
 
 Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/releases/latest), unzip, and move `now.app` to /Applications.
 
