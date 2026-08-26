@@ -81,7 +81,9 @@ NOTES_ENTRY=""
 if [[ -n "${NOTES// }" ]]; then
   while IFS= read -r line; do
     [[ -z "${line// }" ]] && continue
-    if [[ "$line" == -* ]]; then
+    if [[ "$line" == "#"* ]]; then
+      NOTES_ENTRY+="$line"$'\n'
+    elif [[ "$line" == -* ]]; then
       NOTES_ENTRY+="$line"$'\n'
     else
       NOTES_ENTRY+="- $line"$'\n'
