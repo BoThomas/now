@@ -22,7 +22,11 @@ Native macOS menu bar app for meeting reminders, inspired by [inyourface.app](ht
 
 Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/releases/latest), unzip, and move `now.app` to /Applications.
 
-> The app is ad-hoc signed, so macOS quarantines downloaded copies. If it refuses to open: right-click → **Open**, or run `xattr -d com.apple.quarantine /Applications/now.app`.
+> The app is ad-hoc signed (not notarized), so macOS Gatekeeper shows a warning on first launch. Any one of these fixes it — only needed once:
+>
+> 1. Click **Done** in the warning dialog, then open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
+> 2. Right-click `now.app` → **Open** → **Open**.
+> 3. In Terminal: `xattr -cr /Applications/now.app`
 
 ## Features
 
