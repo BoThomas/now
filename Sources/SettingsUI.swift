@@ -397,6 +397,8 @@ struct NativeCalendarRow: View {
                 .scaleEffect(x: 0.75, y: 0.75)
                 .frame(width: 24, height: 20)
                 .padding(.leading, 2)
+                .disabled(!isOn)
+                .help(isOn ? "Tint for this calendar's events" : "Enable the calendar to pick a color")
                 VStack(alignment: .leading, spacing: 2) {
                     Text(info.title).font(.system(size: 13, weight: .semibold))
                     Text(info.sourceTitle.isEmpty ? "Apple Calendars" : "via \(info.sourceTitle)")

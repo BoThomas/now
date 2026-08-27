@@ -174,6 +174,7 @@ END:VCALENDAR
         expect(LinkExtractor.isJoinLinkOnlyText(appleNotes + "\nBring slides", link: appleLink) == false, "wrapper + real notes still shown")
         expect(LinkExtractor.isJoinLinkOnlyText("Plain agenda\nsecond line", link: appleLink) == false, "plain notes never suppressed")
         expect(LinkExtractor.isDecorationLine("----( Video Call )----") && LinkExtractor.isDecorationLine("---===---"), "decoration lines recognized")
+        expect(!LinkExtractor.isDecorationLine("( see doc )") && !LinkExtractor.isJoinLinkOnlyText("( see doc )", link: nil), "bare parenthetical is not decoration")
 
         if failures.isEmpty {
             print("SELFTEST OK — runA \(runA.count) events, runB \(runB.count) events")
