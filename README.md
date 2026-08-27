@@ -3,13 +3,14 @@
 [![Release](https://img.shields.io/github/v/release/BoThomas/now?sort=semver)](https://github.com/BoThomas/now/releases/latest)
 [![License](https://img.shields.io/github/license/BoThomas/now?style=flat)](https://github.com/BoThomas/now/blob/main/LICENSE)
 
-Native macOS menu bar app for meeting reminders, inspired by [inyourface.app](https://inyourface.app). Add the shared iCal (ICS) links of your calendars and `now` takes over the whole screen right before a meeting starts — with a big one-click join button when it finds a meeting link.
+Native macOS menu bar app for meeting reminders, inspired by [inyourface.app](https://inyourface.app).
+
+Add the shared iCal (ICS) links of your calendars and `now` takes over the whole screen right before a meeting starts, using a big one-click join button when it finds a meeting link!
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/now-reminder.jpg" height="220" alt="Fullscreen meeting reminder with join button and countdown"></td>
-    <td><img src="docs/screenshots/now-settings.jpg" height="220" alt="Settings with calendars, colors and reminder options"></td>
-    <td><img src="docs/screenshots/now-menubar.jpg" height="220" alt="Menu bar countdown and quick menu"></td>
+    <td align="center"><img src="docs/screenshots/now-reminder.jpg" height="380" alt="Fullscreen meeting reminder with join button and countdown"></td>
+    <td align="center"><img src="docs/screenshots/now-menubar.jpg" height="380" alt="Menu bar countdown and quick menu"></td>
   </tr>
 </table>
 
