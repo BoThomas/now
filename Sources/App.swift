@@ -16,19 +16,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                event.modifierFlags.contains(.command),
                event.charactersIgnoringModifiers == "q",
                !event.modifierFlags.contains(.shift) {
-                if let window = NSApp.keyWindow, window === self.settingsWindow {
-                    self.handleQuitFromSettings()
-                } else if self.alertController.isOpen {
-                    self.alertController.close()
-                } else {
-                    NSApp.terminate(nil)
-                }
+                self.handleQuitRequest()
                 return nil
             }
             return event
         }
         store.alertController = alertController
         alertController.store = store
+        alertController.policyDidChange = { [weak self] in
+            self?.syncActivationPolicy()
+        }
         store.onAlert = { [weak alertController] events in
             alertController?.present(events)
         }
@@ -48,6 +45,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupMainMenu() {
         let mainMenu = NSMenu()
+
+        // "now" app menu — Quit goes through the custom flow (confirm / close alert),
+        // same as the ⌘Q local monitor, which still takes precedence for the key combo.
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu(title: "now")
+        appMenu.addItem(withTitle: "Quit now", action: #selector(handleQuitRequest), keyEquivalent: "q").target = self
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
         let editMenuItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
@@ -59,7 +65,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
+
+        // Window menu — ⌘W/⌘M are menu key equivalents (not built-in window behaviors),
+        // so Settings needs these items for close/minimize to work. The alert's monitor
+        // swallows both silently while the fullscreen reminder is showing.
+        let windowMenuItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+
         NSApp.mainMenu = mainMenu
+    }
+
+    /// Shared quit behavior for ⌘Q and the "Quit now" menu item: confirm while
+    /// Settings is key, dismiss a showing alert, otherwise terminate.
+    @objc private func handleQuitRequest() {
+        if let window = NSApp.keyWindow, window === settingsWindow {
+            handleQuitFromSettings()
+        } else if alertController.isOpen {
+            alertController.close()
+        } else {
+            NSApp.terminate(nil)
+        }
     }
 
     private func handleQuitFromSettings() {
@@ -83,16 +112,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func openSettings() {
-        NSApp.activate(ignoringOtherApps: true)
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 720), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "now · Settings"
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: SettingsView().environmentObject(store).environmentObject(alertController))
             window.center()
+            window.delegate = self
             settingsWindow = window
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
+        // Being .regular is what actually puts our menus in the menu bar — an
+        // .accessory app activating with a window often keeps the previous app's
+        // menu bar on screen. syncActivationPolicy also runs when the window closes
+        // (windowWillClose) to hand the menu bar back.
+        syncActivationPolicy()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// The app is .regular (Dock icon + owns the menu bar) while Settings or the
+    /// fullscreen alert is visible, .accessory otherwise (menu-bar-only). Called
+    /// whenever either appears/disappears — never set the policy anywhere else.
+    private func syncActivationPolicy() {
+        let wantRegular = (settingsWindow?.isVisible ?? false) || alertController.isOpen
+        let current = NSApp.activationPolicy()
+        if wantRegular, current == .accessory {
+            NSApp.setActivationPolicy(.regular)
+        } else if !wantRegular, current == .regular {
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+}
+
+extension AppDelegate: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        syncActivationPolicy()
     }
 }
 

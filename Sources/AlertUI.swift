@@ -9,6 +9,11 @@ final class AlertController: ObservableObject {
     @Published private(set) var shownEvents: [MeetingEvent] = []
     private var panel: AlertPanel?
     private var monitor: Any?
+    /// Set by AppDelegate: flips the app .regular/.accessory. A timer-fired panel
+    /// can't take keyboard focus while we're a background .accessory app (macOS
+    /// ignores activate() without user interaction) — being .regular is what makes
+    /// activation real. Called on present AND close.
+    var policyDidChange: (() -> Void)?
     var store: AppStore?
 
     var isOpen: Bool { panel != nil }
@@ -31,6 +36,12 @@ final class AlertController: ObservableObject {
             panel.setFrame(screen.frame, display: true)
         }
         self.panel = panel
+        // A timer-fired panel can't take keyboard focus while we're a background
+        // .accessory app — macOS ignores activate() without user interaction, and
+        // keystrokes would invisibly go to the app hidden behind the overlay (think:
+        // typing Enter into a chat you can't see). The delegate flips us to .regular
+        // (Dock icon + our menu bar show for the alert's duration) and back on close.
+        policyDidChange?()
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         installMonitor()
@@ -74,15 +85,37 @@ final class AlertController: ObservableObject {
     private func closePanel() {
         panel?.orderOut(nil)
         panel = nil
+        policyDidChange?()
         if let monitor = monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil
         }
     }
 
+    /// Snooze re-fires while `now <= event.end` (AppStore.tick) — a running meeting can still be snoozed.
+    private var isSnoozeable: Bool {
+        let now = Date()
+        return shownEvents.contains { now < $0.end }
+    }
+
     private func installMonitor() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, self.isOpen else { return event }
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+            // ⌘W/⌘M would only beep on the borderless panel — swallow them silently.
+            if modifiers == .command,
+               let key = event.charactersIgnoringModifiers?.lowercased(),
+               key == "w" || key == "m" {
+                return nil
+            }
+            // Plain "s" snoozes while any event is still running; consumed quietly otherwise.
+            if modifiers.isEmpty,
+               event.charactersIgnoringModifiers?.lowercased() == "s" {
+                if self.isSnoozeable {
+                    self.snoozeAll()
+                }
+                return nil
+            }
             switch event.keyCode {
             case 53:
                 self.close()
@@ -140,9 +173,11 @@ struct AlertView: View {
     }
 
     private func footer(events: [MeetingEvent]) -> some View {
-        VStack(spacing: 16) {
+        // Snooze stays available while any event is running (it re-fires until end).
+        let snoozeable = events.contains { $0.end > Date() }
+        return VStack(spacing: 16) {
             HStack(spacing: 16) {
-                if events.contains(where: { $0.start > Date() }) {
+                if snoozeable {
                     Button {
                         controller.snoozeAll()
                     } label: {
@@ -163,7 +198,7 @@ struct AlertView: View {
                 .controlSize(.large)
                 .keyboardShortcut(.escape, modifiers: [])
             }
-            Text("esc close · return join · s snooze")
+            Text(snoozeable ? "esc close · return join · s snooze" : "esc close · return join")
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.35))
         }
