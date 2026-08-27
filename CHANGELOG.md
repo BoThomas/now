@@ -1,4 +1,19 @@
 # Changelog
+## [1.3.0] - 2026-08-28
+
+### Added
+- Apple Calendar integration — use your native macOS calendars alongside ICS feeds, with per-calendar enable + color and a "hide declined" option
+- Grouped menu dropdown — events grouped by day, with rich hover tooltips (title, time, location, notes)
+### Improved
+- Alert windows now reliably get keyboard focus: Enter joins, Esc dismisses, "s" snoozes — including for already-started meetings
+- Standard shortcuts (⌘Q, ⌘W, ⌘M, copy/paste) work in Settings
+- Location row shows the provider name ("Zoom", "Google Meet", …) for link-only meetings
+- Smaller download: app bundle 5.7 → 3.2 MB
+### Fixed
+- No duplicate alerts when a calendar sync briefly omits an event; snooze state survives it too
+- Revoking Calendar permission clears events immediately
+- Apple video-call decoration lines no longer leak into meeting notes
+
 ## [1.2.0] - 2026-08-27
 
 ### Added
@@ -34,3 +49,4 @@
 [1.0.0]: https://github.com/BoThomas/now/releases/tag/v1.0.0
 [1.1.0]: https://github.com/BoThomas/now/compare/v1.0.0...v1.1.0
 [1.2.0]: https://github.com/BoThomas/now/compare/v1.1.0...v1.2.0
+[1.3.0]: https://github.com/BoThomas/now/compare/v1.2.0...v1.3.0
