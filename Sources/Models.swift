@@ -39,9 +39,10 @@ struct AppSettings: Codable, Equatable {
     var showMenuBarCountdown = true
     var launchAtLogin = false
     var lateMinutes = 0
+    var skipDeclined = true
 
     enum CodingKeys: String, CodingKey {
-        case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, lateMinutes
+        case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, lateMinutes, skipDeclined
     }
 
     init() {}
@@ -55,12 +56,61 @@ struct AppSettings: Codable, Equatable {
         showMenuBarCountdown = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarCountdown) ?? true
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
         lateMinutes = try c.decodeIfPresent(Int.self, forKey: .lateMinutes) ?? 0
+        skipDeclined = try c.decodeIfPresent(Bool.self, forKey: .skipDeclined) ?? true
+    }
+}
+
+/// A calendar from EventKit (Calendar.app) the user has enabled. `id` is OUR stable UUID —
+/// `MeetingEvent.calendarID` and alert/snooze bookkeeping key off it, never off the
+/// EventKit identifier (which can change when an account is re-added).
+struct NativeCalendar: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var ekIdentifier: String
+    var name: String
+    var colorHex: String = ""
+    var colorIndex: Int = 0
+    var isEnabled = true
+
+    enum CodingKeys: String, CodingKey {
+        case id, ekIdentifier, name, colorHex, colorIndex, isEnabled
+    }
+
+    init(ekIdentifier: String, name: String, colorHex: String = "", colorIndex: Int = 0, isEnabled: Bool = true) {
+        self.ekIdentifier = ekIdentifier
+        self.name = name
+        self.colorHex = colorHex
+        self.colorIndex = colorIndex
+        self.isEnabled = isEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        ekIdentifier = try c.decode(String.self, forKey: .ekIdentifier)
+        name = try c.decode(String.self, forKey: .name)
+        colorHex = try c.decodeIfPresent(String.self, forKey: .colorHex) ?? ""
+        colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
     }
 }
 
 struct Persisted: Codable {
     var subscriptions: [CalendarSubscription]
     var settings: AppSettings
+    var nativeCalendars: [NativeCalendar] = []
+
+    init(subscriptions: [CalendarSubscription] = [], settings: AppSettings = AppSettings(), nativeCalendars: [NativeCalendar] = []) {
+        self.subscriptions = subscriptions
+        self.settings = settings
+        self.nativeCalendars = nativeCalendars
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        subscriptions = try c.decodeIfPresent([CalendarSubscription].self, forKey: .subscriptions) ?? []
+        settings = try c.decodeIfPresent(AppSettings.self, forKey: .settings) ?? AppSettings()
+        nativeCalendars = try c.decodeIfPresent([NativeCalendar].self, forKey: .nativeCalendars) ?? []
+    }
 }
 
 struct MeetingEvent: Identifiable {

@@ -22,6 +22,10 @@
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>now reads your calendars to show upcoming meetings in the menu bar. Calendar data stays on your Mac.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>now reads your calendars to show upcoming meetings in the menu bar. Calendar data stays on your Mac.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

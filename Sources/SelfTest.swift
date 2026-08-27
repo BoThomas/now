@@ -142,6 +142,25 @@ END:VCALENDAR
         let crlf = ics.replacingOccurrences(of: "\n", with: "\r\n")
         let runC = ICSBuilder.meetings(fromICS: crlf, subscription: subscription, now: runANow)
         expect(runC.count == runA.count, "CRLF line endings parse identically (got \(runC.count), want \(runA.count))")
+
+        // Native (EventKit) mapping — pure function, no EKEventStore, stays TCC-free.
+        let nativeStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let nativeEnd = nativeStart.addingTimeInterval(1800)
+        let nativeParsed = NativeCalendarSource.parsedEvent(
+            uid: "EK-123",
+            title: "Native standup",
+            location: nil,
+            notes: "Join at https://zoom.us/j/987654",
+            url: nil,
+            start: nativeStart,
+            end: nativeEnd
+        )
+        let nativeLink = LinkExtractor.link(from: nativeParsed)
+        expect(nativeLink?.host == "zoom.us", "native notes link extraction (got \(nativeLink?.host ?? "nil"))")
+        expect(nativeParsed.durationSeconds == 1800, "native duration from end-start")
+        expect(nativeParsed.rrule == nil && nativeParsed.exdates.isEmpty, "native events carry no recurrence data")
+        expect(nativeParsed.status.isEmpty && !nativeParsed.isAllDay, "native defaults: not cancelled, not all-day")
+
         if failures.isEmpty {
             print("SELFTEST OK — runA \(runA.count) events, runB \(runB.count) events")
         } else {
