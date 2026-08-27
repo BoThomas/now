@@ -140,7 +140,13 @@ enum NowApp {
                 granted = await source.requestAccess()
                 semaphore.signal()
             }
-            semaphore.wait()
+            // Service the main run loop while waiting instead of a bare wait(): the
+            // macOS 13 legacy request path may deliver its completion on the main
+            // queue, which a blocking wait would deadlock (the 14+ async path never
+            // needs the main thread, so this is belt-and-braces).
+            while semaphore.wait(timeout: .now() + 0.05) == .timedOut {
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            }
             authorized = granted
             print("ACCESS: \(granted ? "granted" : "not granted")")
         }

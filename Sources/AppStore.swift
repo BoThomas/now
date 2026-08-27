@@ -54,6 +54,9 @@ final class AppStore: ObservableObject {
 
     private var alerted: Set<String> = []
     private var snoozed: [String: Date] = [:]
+    /// IDs present in the most recent `commitEvents` — lets the prune there require
+    /// two consecutive misses before dropping alert/snooze bookkeeping.
+    private var previousCommitIDs: Set<String> = []
     private var pendingRefresh = false
     private var tickTimer: Timer?
     private var refreshTimer: Timer?
@@ -193,10 +196,13 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Re-fetch on ANY authorization-status change, not just grants: revoking
+    /// Calendar while the app runs must clear native events immediately instead of
+    /// showing them until the next periodic refresh.
     private func appBecameActive() {
         let before = nativeAuthorization
         refreshNativeAuthorization()
-        if nativeAuthorization != before, nativeSource.isAuthorized {
+        if nativeAuthorization != before {
             fetchNativeEvents()
         }
     }
@@ -372,13 +378,20 @@ final class AppStore: ObservableObject {
     }
 
     /// Single funnel for publishing the merged (ICS + native) event list: sorts, and
-    /// prunes alert/snooze bookkeeping for events that disappeared.
+    /// prunes alert/snooze bookkeeping for events that disappeared. An id is only
+    /// pruned once it's missing from **two consecutive commits**: a single miss is
+    /// treated as transient (a fetch racing a CalDAV sync, one bad/empty ICS
+    /// response) so a reappearing event neither re-alerts nor loses its snooze.
+    /// Bookkeeping for ids absent from `events` is inert — `tick()` only looks at
+    /// `events` — so the extra commit of lag is harmless.
     private func commitEvents(_ newEvents: [MeetingEvent]) {
         let sorted = newEvents.sorted { $0.start < $1.start }
-        if sorted.map(\.id) != events.map(\.id) {
-            let active = Set(sorted.map(\.id))
-            alerted.subtract(Set(alerted).subtracting(active))
-            snoozed = snoozed.filter { active.contains($0.key) }
+        let active = Set(sorted.map(\.id))
+        if active != previousCommitIDs {
+            let prunable = alerted.union(snoozed.keys).filter { !active.contains($0) && !previousCommitIDs.contains($0) }
+            alerted.subtract(prunable)
+            snoozed = snoozed.filter { !prunable.contains($0.key) }
+            previousCommitIDs = active
         }
         events = sorted
     }
