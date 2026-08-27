@@ -481,6 +481,35 @@ enum LinkExtractor {
         return joinHints.contains { text.contains($0) }
     }
 
+    /// True when every non-empty line of `text` is either Apple's conference decoration
+    /// (`----( Video Call )----`, `---===---`, …) or the event's join link itself — i.e.
+    /// the description carries no information beyond the Join button and should be
+    /// hidden wherever notes are displayed. Link *extraction* is unaffected.
+    static func isJoinLinkOnlyText(_ text: String, link: URL?) -> Bool {
+        let lines = text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return false }
+        for line in lines {
+            if isDecorationLine(line) { continue }
+            if let link, line == link.absoluteString { continue }
+            return false
+        }
+        return true
+    }
+
+    /// Ruler lines (`---===---`, `-----`) and decorated labels (`----( Video Call )----`).
+    static func isDecorationLine(_ line: String) -> Bool {
+        guard line.count >= 3 else { return false }
+        if line.allSatisfy({ $0 == "-" || $0 == "=" }) { return true }
+        var inner = line
+        while inner.hasPrefix("-") { inner.removeFirst() }
+        while inner.hasSuffix("-") { inner.removeLast() }
+        let label = inner.trimmingCharacters(in: .whitespaces)
+        return label.hasPrefix("(") && label.hasSuffix(")") && label.count >= 3
+    }
+
     static func decodeHTMLEntities(_ value: String) -> String {
         value
             .replacingOccurrences(of: "&amp;", with: "&")

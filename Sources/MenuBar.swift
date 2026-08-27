@@ -117,7 +117,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     /// Multi-line hover tooltip: title, when, location, notes. Values that are nothing
-    /// but the join link are suppressed (redundant — clicking the row opens it).
+    /// but the join link (or Apple's `----( Video Call )----` wrapper around it) are
+    /// suppressed (redundant — clicking the row opens it).
     private static func tooltipText(for event: MeetingEvent) -> String {
         var lines: [String] = []
         lines.append(event.title.isEmpty ? "Untitled" : event.title)
@@ -127,7 +128,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if let location = event.location, !location.isEmpty, !isJustJoinLink(location, event: event) {
             lines.append("Location: \(Fmt.ellipsized(location, limit: 100))")
         }
-        if let notes = event.notes, !notes.isEmpty, !isJustJoinLink(notes, event: event) {
+        if let notes = event.notes, !notes.isEmpty, !isJustJoinLink(notes, event: event), !LinkExtractor.isJoinLinkOnlyText(notes, link: event.link) {
             lines.append("Notes: \(Fmt.wrapped(notes, width: 72, maxLines: 4))")
         }
         return lines.joined(separator: "\n")
