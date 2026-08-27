@@ -1,4 +1,13 @@
 # Changelog
+## [1.2.0] - 2026-08-27
+
+### Added
+- Just in time reminder option — fullscreen alert exactly when the meeting starts (fine tune now goes down to 0)
+### Improved
+- Smarter meeting link detection: Outlook HTML descriptions (X-ALT-DESC), attachments, event titles, and many more providers (RingCentral, join.me, Dialpad, …); native zoommtg:// and msteams: conference links are converted to browser URLs; unknown hosts with join-style paths (/j/, /join, confno=, …) are recognized
+### Fixed
+- Enabling a disabled calendar now syncs its events immediately instead of waiting for the next refresh
+
 ## [1.1.0] - 2026-08-27
 
 ### Added
@@ -24,3 +33,4 @@
 
 [1.0.0]: https://github.com/BoThomas/now/releases/tag/v1.0.0
 [1.1.0]: https://github.com/BoThomas/now/compare/v1.0.0...v1.1.0
+[1.2.0]: https://github.com/BoThomas/now/compare/v1.1.0...v1.2.0
