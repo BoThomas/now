@@ -56,6 +56,42 @@ DTEND:20260903T110000Z
 SUMMARY:Cancelled one
 STATUS:CANCELLED
 END:VEVENT
+BEGIN:VEVENT
+UID:altdesc@test
+DTSTART:20260826T100000Z
+DTEND:20260826T103000Z
+SUMMARY:Outlook thing
+DESCRIPTION:Agenda attached\\, see you there.
+X-ALT-DESC;FMTTYPE=text/html:<html><body>Please join the meeting.<br>&#13;&#10;
+ <a href="https://teams.microsoft.com/l/meetup-join/1/2/3">Join here</a></body></html>
+END:VEVENT
+BEGIN:VEVENT
+UID:zoommtg@test
+DTSTART:20260826T110000Z
+DTEND:20260826T113000Z
+SUMMARY:Native scheme conf
+CONFERENCE;VALUE=URI:zoommtg://zoom.us/join?confno=123456789&pwd=abc123
+END:VEVENT
+BEGIN:VEVENT
+UID:attach@test
+DTSTART:20260826T120000Z
+DTEND:20260826T123000Z
+SUMMARY:RingCentral via attach
+ATTACH:https://meetings.ringcentral.com/j/1667
+END:VEVENT
+BEGIN:VEVENT
+UID:joiny@test
+DTSTART:20260826T130000Z
+DTEND:20260826T133000Z
+SUMMARY:Internal bridge
+DESCRIPTION:Join at https://meet.corp.example.com/join/42
+END:VEVENT
+BEGIN:VEVENT
+UID:titlelink@test
+DTSTART:20260826T140000Z
+DTEND:20260826T143000Z
+SUMMARY:Sync https://meet.internal.test/j/99
+END:VEVENT
 END:VCALENDAR
 """
         let utc = TimeZone(identifier: "UTC")!
@@ -87,6 +123,11 @@ END:VCALENDAR
         expect(!weeklyB.contains { abs($0.start.timeIntervalSince(overrideOriginal)) < 60 }, "override replaced original")
         expect(!runA.contains { $0.uid == "cancel@test" }, "cancelled skipped")
         expect(!runA.contains { $0.uid == "allday@test" }, "all-day skipped")
+        expect(runA.contains { $0.uid == "altdesc@test" && $0.link?.host == "teams.microsoft.com" }, "X-ALT-DESC teams link")
+        expect(runA.first { $0.uid == "zoommtg@test" }?.link?.absoluteString == "https://zoom.us/j/123456789?pwd=abc123", "zoommtg conference converted")
+        expect(runA.contains { $0.uid == "attach@test" && $0.link?.host == "meetings.ringcentral.com" }, "ATTACH ringcentral link")
+        expect(runA.first { $0.uid == "joiny@test" }?.link?.host == "meet.corp.example.com", "join-path heuristic link")
+        expect(runA.first { $0.uid == "titlelink@test" }?.link?.host == "meet.internal.test", "title fallback link")
         expect(runB.contains { $0.uid == "one@test" }, "single event in run B")
         let crlf = ics.replacingOccurrences(of: "\n", with: "\r\n")
         let runC = ICSBuilder.meetings(fromICS: crlf, subscription: subscription, now: runANow)

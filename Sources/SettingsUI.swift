@@ -591,7 +591,7 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack(spacing: 6) {
-                ForEach([10, 30, 60, 120, 300, 600, 900], id: \.self) { seconds in
+                ForEach([0, 10, 30, 60, 120, 300, 600, 900], id: \.self) { seconds in
                     Button {
                         store.settings.leadSeconds = seconds
                     } label: {
@@ -600,7 +600,7 @@ struct SettingsView: View {
                     .buttonStyle(PresetButtonStyle(active: store.settings.leadSeconds == seconds))
                 }
             }
-            Stepper(value: $store.settings.leadSeconds, in: 10...7200, step: 15) {
+            Stepper(value: $store.settings.leadSeconds, in: 0...7200, step: 15) {
                 Text("Fine tune: \(Fmt.leadTime(store.settings.leadSeconds))")
             }
             Divider()

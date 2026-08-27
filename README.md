@@ -31,8 +31,8 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 ## Features
 
 **Reminders**
-- Fullscreen takeover N seconds/minutes before an event starts (presets + fine tune)
-- One-click **Join** when a meeting link is found — detected in `CONFERENCE`/`URL` properties, location and notes (Zoom, Google Meet, Teams, WebEx, GoTo, Jitsi, … or any URL)
+- Fullscreen takeover N seconds/minutes before an event starts (presets incl. Just in time + fine tune)
+- One-click **Join** when a meeting link is found — detected in `CONFERENCE`/`URL` properties, location, notes, Outlook HTML descriptions, attachments, even the title (Zoom, Google Meet, Teams, WebEx, GoTo, RingCentral, Jitsi, … or any URL — native `zoommtg://` and `msteams:` links are converted automatically)
 - Live countdown, Snooze 1 min (re-appears even after the meeting has started), Close
 - Keyboard: `esc` close · `return` join · `s` snooze — multiple simultaneous meetings in one alert
 

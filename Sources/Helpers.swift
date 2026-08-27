@@ -71,6 +71,7 @@ enum Fmt {
     }
 
     static func leadTime(_ seconds: Int) -> String {
+        if seconds == 0 { return "Just in time" }
         let m = seconds / 60
         let s = seconds % 60
         if m == 0 { return "\(s)s" }

@@ -7,7 +7,17 @@ final class AppStore: ObservableObject {
     static let legacyDomain = "local.tboch.now"
     static let soundNames = ["Basso", "Blow", "Bottle", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"]
 
-    @Published var subscriptions: [CalendarSubscription] { didSet { persist(); reconcileEvents() } }
+    @Published var subscriptions: [CalendarSubscription] {
+        didSet {
+            persist()
+            reconcileEvents()
+            let enabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
+            let newlyEnabled = enabledIDs.subtracting(previousEnabledIDs)
+            previousEnabledIDs = enabledIDs
+            newlyEnabled.forEach { resync(subscriptionID: $0) }
+        }
+    }
+    private var previousEnabledIDs: Set<UUID> = []
     @Published var settings: AppSettings { didSet { settingsChanged() } }
     @Published private(set) var events: [MeetingEvent] = []
     @Published private(set) var errors: [UUID: String] = [:]
@@ -35,6 +45,7 @@ final class AppStore: ObservableObject {
         let state = Self.loadState()
         subscriptions = state.subscriptions
         settings = state.settings
+        previousEnabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
     }
 
     func start() {
@@ -111,7 +122,8 @@ final class AppStore: ObservableObject {
         let active = Set(updated.map(\.id))
         alerted.subtract(Set(alerted).subtracting(active))
         snoozed = snoozed.filter { active.contains($0.key) }
-        events = updated.sorted { $0.start < $1.start }
+        let enabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
+        events = updated.filter { enabledIDs.contains($0.calendarID) }.sorted { $0.start < $1.start }
     }
 
     func snooze(_ ids: [String]) {

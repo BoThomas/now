@@ -75,8 +75,10 @@ struct ParsedEvent {
     var title: String
     var location: String?
     var description: String?
+    var altDescription: String?
     var conference: String?
     var url: String?
+    var attach: String?
     var status: String
     var isAllDay: Bool
     var dtStart: Date?
@@ -161,8 +163,10 @@ enum ICSParser {
         var title = ""
         var location = ""
         var description = ""
+        var altDescription = ""
         var conference = ""
         var url = ""
+        var attach = ""
         var status = ""
         var isAllDay = false
         var dtStart: Date?
@@ -182,6 +186,12 @@ enum ICSParser {
                 location = unescape(property.value)
             case "DESCRIPTION":
                 description = unescape(property.value)
+            case "X-ALT-DESC":
+                if altDescription.isEmpty { altDescription = unescape(property.value) }
+            case "ATTACH":
+                if attach.isEmpty, property.params["ENCODING"]?.uppercased() != "BASE64" {
+                    attach = property.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
             case "STATUS":
                 status = property.value.uppercased()
             case "DTSTART":
@@ -220,8 +230,10 @@ enum ICSParser {
             title: title,
             location: location.isEmpty ? nil : location,
             description: description.isEmpty ? nil : description,
+            altDescription: altDescription.isEmpty ? nil : altDescription,
             conference: conference.isEmpty ? nil : conference,
             url: url.isEmpty ? nil : url,
+            attach: attach.isEmpty ? nil : attach,
             status: status,
             isAllDay: isAllDay,
             dtStart: start,
@@ -372,35 +384,87 @@ enum RRULEExpander {
 }
 
 enum LinkExtractor {
-    static let meetingHosts = ["zoom.us", "meet.google.com", "hangouts.google.com", "teams.microsoft.com", "teams.live.com", "webex.com", "gotomeet.me", "goto.com", "meet.jit.si", "whereby.com", "discord.gg", "discord.com", "slack.com", "chime.aws", "8x8.vc", "bluejeans.com", "facetime.apple.com"]
+    static let meetingHosts = ["zoom.us", "zoom.com", "meet.google.com", "hangouts.google.com", "teams.microsoft.com", "teams.live.com", "webex.com", "gotomeet.me", "goto.com", "meet.jit.si", "whereby.com", "discord.gg", "discord.com", "slack.com", "chime.aws", "8x8.vc", "bluejeans.com", "facetime.apple.com", "ringcentral.com", "join.me", "dialpad.com", "uberconference.com", "freeconferencecall.com", "meeting.zoho.com"]
+
+    /// Path/query fragments that mark a URL as a join link even on unknown hosts
+    /// (self-hosted Jitsi, internal Zoom-like gateways, …).
+    static let joinHints = ["/j/", "/join", "meetup-join", "confno=", "pwd=", "/meet/", "/w/"]
 
     static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
     static func link(from event: ParsedEvent) -> URL? {
-        if let conference = event.conference {
-            let trimmed = conference.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
-                return url
-            }
-        }
-        if let urlValue = event.url {
-            let trimmed = urlValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
-                return url
-            }
-        }
-        let texts = [event.location ?? "", event.description ?? ""].filter { !$0.isEmpty }
-        guard let detector = detector, !texts.isEmpty else { return nil }
+        if let conference = event.conference, let url = joinURL(conference) { return url }
+        if let urlValue = event.url, let url = joinURL(urlValue) { return url }
         var urls: [URL] = []
-        for text in texts {
-            for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                if let url = match.url { urls.append(url) }
+        if let attach = event.attach, let url = joinURL(attach) { urls.append(url) }
+        let texts = [event.location ?? "", event.description ?? "", event.altDescription.map(decodeHTMLEntities) ?? "", event.title]
+            .filter { !$0.isEmpty }
+        if let detector = detector {
+            for text in texts {
+                for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                    if let url = match.url { urls.append(url) }
+                }
             }
         }
-        return urls.first { url in
-            guard let host = url.host?.lowercased() else { return false }
-            return meetingHosts.contains { host == $0 || host.hasSuffix("." + $0) }
-        } ?? urls.first { $0.scheme == "https" || $0.scheme == "http" }
+        return urls.first(where: isKnownMeetingHost)
+            ?? urls.first(where: looksLikeJoin)
+            ?? urls.first { $0.scheme == "https" || $0.scheme == "http" }
+    }
+
+    /// Accepts an http(s) URL and also converts common native-scheme meeting links
+    /// (`zoommtg://zoom.us/join?confno=…`, `msteams:/l/meetup-join/…`) into browser-usable ones.
+    static func joinURL(_ raw: String) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return nil }
+        let scheme = url.scheme?.lowercased() ?? ""
+        if scheme == "http" || scheme == "https" { return url }
+        let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        if scheme == "zoommtg" || scheme == "zoomus" {
+            guard let host = url.host, host != "" else { return nil }
+            let query = parts?.queryItems ?? []
+            if let confno = query.first(where: { $0.name == "confno" })?.value, !confno.isEmpty {
+                var comps = URLComponents()
+                comps.scheme = "https"
+                comps.host = host
+                comps.path = "/j/\(confno)"
+                if let pwd = query.first(where: { $0.name == "pwd" })?.value, !pwd.isEmpty {
+                    comps.queryItems = [URLQueryItem(name: "pwd", value: pwd)]
+                }
+                return comps.url
+            }
+            return nil
+        }
+        if scheme == "msteams" || scheme == "teams" {
+            guard url.path.hasPrefix("/l/") else { return nil }
+            var comps = URLComponents()
+            comps.scheme = "https"
+            comps.host = "teams.microsoft.com"
+            comps.path = url.path
+            comps.query = parts?.query
+            return comps.url
+        }
+        return nil
+    }
+
+    static func isKnownMeetingHost(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return meetingHosts.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
+
+    static func looksLikeJoin(_ url: URL) -> Bool {
+        guard url.scheme == "https" || url.scheme == "http" else { return false }
+        let text = url.absoluteString.lowercased()
+        return joinHints.contains { text.contains($0) }
+    }
+
+    static func decodeHTMLEntities(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&#13;", with: "")
+            .replacingOccurrences(of: "&#10;", with: "\n")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
     }
 }
 
