@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import EventKit
 import ServiceManagement
 
 final class AppStore: ObservableObject {
@@ -19,6 +20,18 @@ final class AppStore: ObservableObject {
     }
     private var previousEnabledIDs: Set<UUID> = []
     @Published var settings: AppSettings { didSet { settingsChanged() } }
+    @Published var nativeCalendars: [NativeCalendar] {
+        didSet {
+            persist()
+            reconcileNativeEvents()
+            let enabledIDs = Set(nativeCalendars.filter(\.isEnabled).map(\.id))
+            let newlyEnabled = enabledIDs.subtracting(previousEnabledNativeIDs)
+            previousEnabledNativeIDs = enabledIDs
+            if !newlyEnabled.isEmpty { fetchNativeEvents() }
+        }
+    }
+    @Published private(set) var nativeAuthorization: EKAuthorizationStatus = .notDetermined
+    @Published private(set) var nativeCalendarInfos: [NativeCalendarInfo] = []
     @Published private(set) var events: [MeetingEvent] = []
     @Published private(set) var errors: [UUID: String] = [:]
     @Published private(set) var isRefreshing = false
@@ -27,6 +40,17 @@ final class AppStore: ObservableObject {
 
     var onAlert: (([MeetingEvent]) -> Void)?
     weak var alertController: AlertController?
+
+    /// Owns the single long-lived EKEventStore (see NativeCalendarSource docs).
+    let nativeSource = NativeCalendarSource()
+    private var nativeEvents: [MeetingEvent] = []
+    /// Every calendar that ever fed us native events this session — used to tell native
+    /// events apart from ICS ones by `calendarID` even after the calendar is removed.
+    private var knownNativeCalendarIDs: Set<UUID> = []
+    private var previousEnabledNativeIDs: Set<UUID> = []
+    private var previousSkipDeclined = true
+    private var nativeChangeDebounce: Timer?
+    private var activeObserver: NSObjectProtocol?
 
     private var alerted: Set<String> = []
     private var snoozed: [String: Date] = [:]
@@ -45,10 +69,23 @@ final class AppStore: ObservableObject {
         let state = Self.loadState()
         subscriptions = state.subscriptions
         settings = state.settings
+        nativeCalendars = state.nativeCalendars
         previousEnabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
+        knownNativeCalendarIDs = Set(nativeCalendars.map(\.id))
+        previousEnabledNativeIDs = Set(nativeCalendars.filter(\.isEnabled).map(\.id))
+        previousSkipDeclined = settings.skipDeclined
     }
 
     func start() {
+        refreshNativeAuthorization()
+        nativeSource.onStoreChange = { [weak self] in self?.scheduleNativeStoreRefresh() }
+        activeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.appBecameActive()
+        }
         scheduleRefreshTimer()
         tickTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             self?.tick()
@@ -91,6 +128,103 @@ final class AppStore: ObservableObject {
         refresh()
     }
 
+    // MARK: - Native calendars (EventKit)
+
+    /// Toggling a calendar on in settings. First enable persists it with the calendar's
+    /// own EventKit color as the default tint.
+    func setNativeCalendarEnabled(_ info: NativeCalendarInfo, enabled: Bool) {
+        if let index = nativeCalendars.firstIndex(where: { $0.ekIdentifier == info.ekIdentifier }) {
+            nativeCalendars[index].isEnabled = enabled
+            if enabled { nativeCalendars[index].name = info.title }
+        } else if enabled {
+            let hex = info.colorHex.isEmpty ? Palette.hex(for: nativeCalendars.count) : info.colorHex
+            nativeCalendars.append(NativeCalendar(ekIdentifier: info.ekIdentifier, name: info.title, colorHex: hex, colorIndex: nativeCalendars.count))
+        }
+    }
+
+    func setNativeCalendarColor(_ info: NativeCalendarInfo, hex: String) {
+        guard let index = nativeCalendars.firstIndex(where: { $0.ekIdentifier == info.ekIdentifier }) else { return }
+        nativeCalendars[index].colorHex = hex
+    }
+
+    func forgetNativeCalendar(_ id: UUID) {
+        nativeCalendars.removeAll { $0.id == id }
+    }
+
+    /// Fires the TCC prompt. Only ever called from the settings UI — never at launch.
+    func requestNativeAccess() {
+        let source = nativeSource
+        Task { [weak self] in
+            let granted = await source.requestAccess()
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.refreshNativeAuthorization()
+                if granted { self.fetchNativeEvents() }
+            }
+        }
+    }
+
+    func refreshNativeAuthorization() {
+        nativeAuthorization = nativeSource.authorizationStatus()
+    }
+
+    /// EventKit is a fast local query — fetch synchronously on the main actor (same
+    /// replace-on-apply semantics as the ICS refresh) and rebuild the merged event list.
+    func fetchNativeEvents() {
+        refreshNativeAuthorization()
+        nativeCalendarInfos = nativeSource.availableCalendarInfos()
+        let enabled = nativeCalendars.filter(\.isEnabled)
+        guard nativeSource.isAuthorized, !enabled.isEmpty else {
+            if !nativeEvents.isEmpty {
+                nativeEvents = []
+                rebuildEvents()
+            }
+            return
+        }
+        nativeEvents = nativeSource.fetchEvents(calendars: enabled, skipDeclined: settings.skipDeclined, now: Date())
+        rebuildEvents()
+    }
+
+    private func scheduleNativeStoreRefresh() {
+        guard nativeSource.isAuthorized, nativeCalendars.contains(where: \.isEnabled) else { return }
+        nativeChangeDebounce?.invalidate()
+        nativeChangeDebounce = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+            self?.fetchNativeEvents()
+        }
+    }
+
+    private func appBecameActive() {
+        let before = nativeAuthorization
+        refreshNativeAuthorization()
+        if nativeAuthorization != before, nativeSource.isAuthorized {
+            fetchNativeEvents()
+        }
+    }
+
+    /// Native events for currently-enabled native calendars, tinted per current settings.
+    private func coloredNativeSnapshot() -> [MeetingEvent] {
+        let byID = Dictionary(uniqueKeysWithValues: nativeCalendars.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
+        let enabled = Set(nativeCalendars.filter(\.isEnabled).map(\.id))
+        return nativeEvents.filter { enabled.contains($0.calendarID) }.map { event in
+            var copy = event
+            if let hex = byID[event.calendarID] { copy.colorHex = hex }
+            return copy
+        }
+    }
+
+    /// Recombine the ICS half of `events` (untouched) with the current native snapshot.
+    private func rebuildEvents() {
+        let icsEvents = events.filter { !knownNativeCalendarIDs.contains($0.calendarID) }
+        commitEvents(icsEvents + coloredNativeSnapshot())
+    }
+
+    private func reconcileNativeEvents() {
+        let enabled = Set(nativeCalendars.filter(\.isEnabled).map(\.id))
+        knownNativeCalendarIDs.formUnion(nativeCalendars.map(\.id))
+        nativeEvents = nativeEvents.filter { enabled.contains($0.calendarID) }
+        rebuildEvents()
+    }
+
     func resync(subscriptionID: UUID) {
         guard let subscription = subscriptions.first(where: { $0.id == subscriptionID }) else { return }
         Task { [weak self] in
@@ -119,11 +253,7 @@ final class AppStore: ObservableObject {
                 return copy
             })
         }
-        let active = Set(updated.map(\.id))
-        alerted.subtract(Set(alerted).subtracting(active))
-        snoozed = snoozed.filter { active.contains($0.key) }
-        let enabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
-        events = updated.filter { enabledIDs.contains($0.calendarID) }.sorted { $0.start < $1.start }
+        commitEvents(updated)
     }
 
     func snooze(_ ids: [String]) {
@@ -160,6 +290,7 @@ final class AppStore: ObservableObject {
     }
 
     func refresh() {
+        fetchNativeEvents()
         let enabled = subscriptions.filter(\.isEnabled)
         guard !isRefreshing else {
             pendingRefresh = true
@@ -230,12 +361,7 @@ final class AppStore: ObservableObject {
         }
         let nowEnabled = Set(subscriptions.filter(\.isEnabled).map(\.id))
         allEvents = allEvents.filter { nowEnabled.contains($0.calendarID) }
-        if allEvents.map(\.id).sorted() != events.map(\.id).sorted() {
-            let active = Set(allEvents.map(\.id))
-            alerted.subtract(Set(alerted).subtracting(active))
-            snoozed = snoozed.filter { active.contains($0.key) }
-        }
-        self.events = allEvents.sorted { $0.start < $1.start }
+        commitEvents(allEvents + coloredNativeSnapshot())
         self.errors = newErrors
         self.lastRefresh = Date()
         self.isRefreshing = false
@@ -245,21 +371,29 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Single funnel for publishing the merged (ICS + native) event list: sorts, and
+    /// prunes alert/snooze bookkeeping for events that disappeared.
+    private func commitEvents(_ newEvents: [MeetingEvent]) {
+        let sorted = newEvents.sorted { $0.start < $1.start }
+        if sorted.map(\.id) != events.map(\.id) {
+            let active = Set(sorted.map(\.id))
+            alerted.subtract(Set(alerted).subtracting(active))
+            snoozed = snoozed.filter { active.contains($0.key) }
+        }
+        events = sorted
+    }
+
     private func reconcileEvents() {
         let byID = Dictionary(uniqueKeysWithValues: subscriptions.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
         let enabled = Set(subscriptions.filter(\.isEnabled).map(\.id))
         let next = events.compactMap { event -> MeetingEvent? in
+            if knownNativeCalendarIDs.contains(event.calendarID) { return event }
             guard enabled.contains(event.calendarID) else { return nil }
             var copy = event
             if let hex = byID[event.calendarID] { copy.colorHex = hex }
             return copy
         }
-        if next.map(\.id) != events.map(\.id) {
-            let active = Set(next.map(\.id))
-            alerted.subtract(Set(alerted).subtracting(active))
-            snoozed = snoozed.filter { active.contains($0.key) }
-        }
-        events = next
+        commitEvents(next)
     }
 
     private func tick() {
@@ -302,6 +436,10 @@ final class AppStore: ObservableObject {
         persist()
         scheduleRefreshTimer()
         syncLoginItem(settings.launchAtLogin)
+        if settings.skipDeclined != previousSkipDeclined {
+            previousSkipDeclined = settings.skipDeclined
+            fetchNativeEvents()
+        }
     }
 
     private func syncLoginItem(_ desired: Bool) {
@@ -320,7 +458,7 @@ final class AppStore: ObservableObject {
     }
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(Persisted(subscriptions: subscriptions, settings: settings)) {
+        if let data = try? JSONEncoder().encode(Persisted(subscriptions: subscriptions, settings: settings, nativeCalendars: nativeCalendars)) {
             UserDefaults.standard.set(data, forKey: Self.storageKey)
         }
     }

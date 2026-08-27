@@ -17,7 +17,7 @@ export SWIFT_MODULECACHE_PATH="$MODULE_CACHE"
 
 swiftc -parse-as-library -swift-version 5 -sdk "$SDK_PATH" -target arm64-apple-macos13.0 Sources/*.swift \
   -o "$APP/Contents/MacOS/$EXECUTABLE" \
-  -framework SwiftUI -framework AppKit -framework ServiceManagement
+  -framework SwiftUI -framework AppKit -framework ServiceManagement -framework EventKit
 
 swiftc -sdk "$SDK_PATH" -target arm64-apple-macos13.0 make-icon.swift -o .build/make-icon
 .build/make-icon "$ICONSET"
@@ -25,7 +25,15 @@ cp "$ICONSET/icon_512x512@2x.png" "$APP/Contents/Resources/AppIcon.png"
 
 cp Info.plist "$APP/Contents/Info.plist"
 
-codesign --force --deep --sign - "$APP"
+# Sign with the stable self-signed "now Developer" identity when present — its
+# certificate hash anchors the code signature's designated requirement, so TCC
+# (Calendar permission) grants survive rebuilds and release updates. Without the
+# identity, fall back to ad-hoc signing (cdhash-anchored → permission re-asked
+# per build). The key lives in the login keychain; never commit it (see AGENTS.md).
+if ! codesign --force --deep --sign "now Developer" --entitlements now.entitlements "$APP"; then
+  echo "warning: 'now Developer' identity not found — signing ad-hoc (Calendar permission will be re-asked per build)"
+  codesign --force --deep --sign - --entitlements now.entitlements "$APP"
+fi
 ditto -c -k --sequesterRsrc --keepParent "$APP" "outputs/${APP_NAME}.zip"
 
 echo "Built $APP"

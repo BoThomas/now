@@ -1,3 +1,7 @@
 outputs/
 .build/
 .DS_Store
+*.p12
+*.pem
+*.key
+*.mobileprovision

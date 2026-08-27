@@ -221,6 +221,78 @@ struct PresetButtonStyle: ButtonStyle {
     }
 }
 
+/// Expandable "upcoming events" list shared by ICS subscription rows and native
+/// Apple Calendar rows — same grammar in both places.
+struct UpcomingEventList: View {
+    let events: [MeetingEvent]
+    let hasMoreEvents: Bool
+    let error: String?
+    let colorHex: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if events.isEmpty {
+                Text(error != nil ? "No events — fix the sync error above" : "No upcoming events in the next two weeks")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(events) { event in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(dayText(event))
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                            Text(Fmt.time.string(from: event.start))
+                                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        }
+                        .frame(width: 60, alignment: .leading)
+                        Text(event.title.isEmpty ? "Untitled" : event.title)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer()
+                        if let link = event.link {
+                            Button {
+                                NSWorkspace.shared.open(link)
+                            } label: {
+                                Label(hostText(link), systemImage: "video.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Palette.color(hex: colorHex))
+                            }
+                            .buttonStyle(.link)
+                            .cursor(.pointingHand)
+                            .help("Open \(link.absoluteString)")
+                        }
+                    }
+                    .padding(.leading, 4)
+                }
+                if hasMoreEvents {
+                    Text("and more…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 4)
+                }
+            }
+        }
+        .padding(.top, 2)
+    }
+
+    private func dayText(_ event: MeetingEvent) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(event.start) { return "Today" }
+        if calendar.isDate(event.start, inSameDayAs: Date().addingTimeInterval(86400)) { return "Tomorrow" }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: Date()), to: calendar.startOfDay(for: event.start)).day ?? 0
+        if days < 7 {
+            return event.start.formatted(.dateTime.weekday(.abbreviated))
+        }
+        return event.start.formatted(.dateTime.day().month(.abbreviated))
+    }
+
+    private func hostText(_ link: URL) -> String {
+        (link.host ?? "").replacingOccurrences(of: "www.", with: "")
+    }
+}
+
 struct SubscriptionRow: View {
     @Binding var subscription: CalendarSubscription
     let events: [MeetingEvent]
@@ -281,7 +353,7 @@ struct SubscriptionRow: View {
                 .help(subscription.isEnabled ? "Show upcoming events" : "Calendar disabled")
             }
             if expanded && subscription.isEnabled {
-                eventList
+                UpcomingEventList(events: events, hasMoreEvents: hasMoreEvents, error: error, colorHex: subscription.colorHex)
             }
         }
         .padding(10)
@@ -295,68 +367,65 @@ struct SubscriptionRow: View {
             }
         }
     }
+}
 
-    @ViewBuilder private var eventList: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if events.isEmpty {
-                Text(error != nil ? "No events — fix the sync error above" : "No upcoming events in the next two weeks")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(events) { event in
-                    HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(dayText(event))
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                            Text(Fmt.time.string(from: event.start))
-                                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                        }
-                        .frame(width: 60, alignment: .leading)
-                        Text(event.title.isEmpty ? "Untitled" : event.title)
-                            .font(.system(size: 11))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer()
-                        if let link = event.link {
-                            Button {
-                                NSWorkspace.shared.open(link)
-                            } label: {
-                                Label(hostText(link), systemImage: "video.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Palette.color(hex: subscription.colorHex))
-                            }
-                            .buttonStyle(.link)
-                            .cursor(.pointingHand)
-                            .help("Open \(link.absoluteString)")
-                        }
-                    }
-                    .padding(.leading, 4)
-                }
-                if hasMoreEvents {
-                    Text("and more…")
+/// One calendar from EventKit: toggle = use it, color = tint for its events
+/// (seeded from the calendar's own color on first enable), chevron = upcoming events.
+struct NativeCalendarRow: View {
+    let info: NativeCalendarInfo
+    let isOn: Bool
+    let colorHex: String
+    let events: [MeetingEvent]
+    let hasMoreEvents: Bool
+    let onToggle: (Bool) -> Void
+    let onColor: (String) -> Void
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Toggle("", isOn: Binding(get: { isOn }, set: { onToggle($0) }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .help(isOn ? "Stop reminders for this calendar" : "Show reminders for this calendar")
+                ColorPicker("", selection: Binding(
+                    get: { Palette.color(hex: colorHex) },
+                    set: { onColor(Palette.hexString(from: NSColor($0))) }
+                ), supportsOpacity: false)
+                .labelsHidden()
+                .scaleEffect(x: 0.75, y: 0.75)
+                .frame(width: 24, height: 20)
+                .padding(.leading, 2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(info.title).font(.system(size: 13, weight: .semibold))
+                    Text(info.sourceTitle.isEmpty ? "Calendar.app" : "via \(info.sourceTitle)")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .padding(.leading, 4)
                 }
+                .opacity(isOn ? 1 : 0.5)
+                Spacer()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+                } label: {
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+                }
+                .buttonStyle(.borderless)
+                .disabled(!isOn)
+                .help(isOn ? "Show upcoming events" : "Calendar disabled")
+            }
+            if expanded && isOn {
+                UpcomingEventList(events: events, hasMoreEvents: hasMoreEvents, error: nil, colorHex: colorHex)
             }
         }
-        .padding(.top, 2)
-    }
-
-    private func dayText(_ event: MeetingEvent) -> String {
-        let calendar = Calendar.current
-        if calendar.isDateInToday(event.start) { return "Today" }
-        if calendar.isDate(event.start, inSameDayAs: Date().addingTimeInterval(86400)) { return "Tomorrow" }
-        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: Date()), to: calendar.startOfDay(for: event.start)).day ?? 0
-        if days < 7 {
-            return event.start.formatted(.dateTime.weekday(.abbreviated))
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .onChange(of: isOn) { enabled in
+            if !enabled { expanded = false }
         }
-        return event.start.formatted(.dateTime.day().month(.abbreviated))
-    }
-
-    private func hostText(_ link: URL) -> String {
-        (link.host ?? "").replacingOccurrences(of: "www.", with: "")
     }
 }
 
@@ -487,6 +556,7 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 calendarsSection
+                nativeSection
                 reminderSection
                 generalSection
             }
@@ -582,6 +652,137 @@ struct SettingsView: View {
         }
         .padding(16)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.05)))
+    }
+
+    // MARK: - Apple Calendar (EventKit)
+
+    private var nativeSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader("Apple Calendar", "calendar.badge.clock")
+            Text("Or use the calendars already in Calendar.app — iCloud, Google, Exchange, CalDAV and more, no links needed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            switch store.nativeAuthorization {
+            case .authorized:
+                nativeAuthorizedContent
+            case .notDetermined:
+                nativeGrantView
+            default:
+                nativeDeniedView
+            }
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.05)))
+    }
+
+    @ViewBuilder private var nativeAuthorizedContent: some View {
+        if store.nativeCalendarInfos.isEmpty {
+            HStack(spacing: 10) {
+                Image(systemName: "calendar.badge.plus").font(.title2).foregroundStyle(.secondary)
+                Text("No calendars found. Add an account in Calendar.app first, then hit Refresh.")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(16)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.06)))
+        } else {
+            VStack(spacing: 8) {
+                ForEach(store.nativeCalendarInfos) { info in
+                    nativeRow(for: info)
+                }
+                staleNativeRows
+            }
+            Toggle("Hide events I've declined", isOn: $store.settings.skipDeclined)
+                .font(.system(size: 12))
+        }
+    }
+
+    private var nativeGrantView: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "calendar.badge.clock").font(.title2).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Read calendars from Calendar.app directly")
+                    .font(.system(size: 12, weight: .medium))
+                Text("You'll be asked for permission once. Your calendar data stays on this Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                store.requestNativeAccess()
+            } label: {
+                Label("Grant Access…", systemImage: "lock.open")
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.06)))
+    }
+
+    private var nativeDeniedView: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "lock.fill").font(.title2).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Calendar access is turned off for now.")
+                    .font(.system(size: 12, weight: .medium))
+                Text("Turn it on in System Settings → Privacy & Security → Calendars.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!)
+            } label: {
+                Label("Open System Settings…", systemImage: "gear")
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.06)))
+    }
+
+    private func nativeRow(for info: NativeCalendarInfo) -> some View {
+        let persisted = store.nativeCalendars.first { $0.ekIdentifier == info.ekIdentifier }
+        let isOn = persisted?.isEnabled ?? false
+        let calendarID = persisted?.id
+        let visible = visibleNativeEvents(calendarID: calendarID, enabled: isOn)
+        return NativeCalendarRow(
+            info: info,
+            isOn: isOn,
+            colorHex: persisted?.colorHex ?? info.colorHex,
+            events: Array(visible.prefix(8)),
+            hasMoreEvents: visible.count > 8,
+            onToggle: { on in store.setNativeCalendarEnabled(info, enabled: on) },
+            onColor: { hex in store.setNativeCalendarColor(info, hex: hex) }
+        )
+    }
+
+    private func visibleNativeEvents(calendarID: UUID?, enabled: Bool) -> [MeetingEvent] {
+        guard enabled, let calendarID else { return [] }
+        let now = Date()
+        return store.events.filter { $0.calendarID == calendarID && store.isVisible($0, at: now) }
+    }
+
+    /// Enabled native calendars whose EventKit counterpart vanished (account removed).
+    @ViewBuilder private var staleNativeRows: some View {
+        let available = Set(store.nativeCalendarInfos.map(\.ekIdentifier))
+        let stale = store.nativeCalendars.filter { !available.contains($0.ekIdentifier) && $0.isEnabled }
+        if !stale.isEmpty {
+            ForEach(stale) { native in
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                    Text("“\(native.name)” is no longer in Calendar.app")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Forget") {
+                        store.forgetNativeCalendar(native.id)
+                    }
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+            }
+        }
     }
 
     private var reminderSection: some View {

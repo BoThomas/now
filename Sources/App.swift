@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import EventKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = AppStore()
@@ -38,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.store.refresh()
         }
         store.start()
-        if store.subscriptions.isEmpty {
+        if store.subscriptions.isEmpty && !store.nativeCalendars.contains(where: \.isEnabled) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                 self?.openSettings()
             }
@@ -109,10 +110,74 @@ enum NowApp {
             parseCLI(arguments[index + 1])
             exit(0)
         }
+        if let index = arguments.firstIndex(of: "--native") {
+            let subcommand = arguments.count > index + 1 ? arguments[index + 1] : nil
+            nativeCLI(subcommand)
+            exit(0)
+        }
         let app = NSApplication.shared
         app.delegate = appDelegate
         app.setActivationPolicy(.accessory)
         app.run()
+    }
+
+    /// EventKit counterpart of `--parse`: prints authorization status, every EKCalendar,
+    /// and exactly which events a fetch would keep in the −6h…+14d window.
+    /// Note: permission granted from a terminal run is attributed to the terminal app —
+    /// for real testing launch now.app and grant there.
+    static func nativeCLI(_ subcommand: String?) {
+        let source = NativeCalendarSource()
+        let status = source.authorizationStatus()
+        print("NOTE: permission requested here is attributed to your terminal app —")
+        print("      launch now.app normally for the app's own Calendar permission.")
+        print("AUTHORIZATION: \(describeNativeStatus(status))")
+        var authorized = status == .authorized
+        if !authorized, status == .notDetermined {
+            print("REQUESTING ACCESS… (answer the system prompt)")
+            let semaphore = DispatchSemaphore(value: 0)
+            var granted = false
+            Task {
+                granted = await source.requestAccess()
+                semaphore.signal()
+            }
+            semaphore.wait()
+            authorized = granted
+            print("ACCESS: \(granted ? "granted" : "not granted")")
+        }
+        guard authorized else {
+            print("No calendar access — enable it in System Settings → Privacy & Security → Calendars.")
+            return
+        }
+        let infos = source.availableCalendarInfos()
+        print("CALENDARS (\(infos.count)):")
+        for info in infos {
+            print("  \(info.ekIdentifier.prefix(12))…  \(info.sourceTitle.isEmpty ? "-" : info.sourceTitle) / \(info.title)  \(info.colorHex)")
+        }
+        guard subcommand != "list" else { return }
+        let now = Date()
+        let formatter = ISO8601DateFormatter()
+        print("WINDOW \(formatter.string(from: now.addingTimeInterval(-6 * 3600))) … \(formatter.string(from: now.addingTimeInterval(14 * 86400)))")
+        var kept = 0
+        for info in infos {
+            let native = NativeCalendar(ekIdentifier: info.ekIdentifier, name: info.title, colorHex: info.colorHex, colorIndex: 0)
+            let events = source.fetchEvents(calendars: [native], skipDeclined: true, now: now)
+            print("CALENDAR \(info.title): keeping \(events.count)")
+            for event in events {
+                kept += 1
+                print("  \(formatter.string(from: event.start)) → \(Fmt.time.string(from: event.end)) | \(event.title) | \(event.link?.absoluteString ?? "no link")")
+            }
+        }
+        print("PARSED \(kept) EVENTS (all-day, cancelled and declined are skipped)")
+    }
+
+    static func describeNativeStatus(_ status: EKAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined: return "notDetermined"
+        case .restricted: return "restricted"
+        case .denied: return "denied"
+        case .authorized: return "authorized"
+        default: return "unknown(\(status.rawValue))"
+        }
     }
 
     static func parseCLI(_ target: String) {
