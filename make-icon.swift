@@ -23,33 +23,50 @@ func whiteSymbol(_ name: String, pointSize: CGFloat) -> NSImage {
 
 func makeIcon(size: Int, scale: Int, path: String) throws {
     let pixels = CGFloat(size * scale)
-    let image = NSImage(size: NSSize(width: pixels, height: pixels))
-    image.lockFocus()
-    guard let context = NSGraphicsContext.current?.cgContext else { fatalError("No graphics context") }
+    // Render into an explicit bitmap at exact pixel dimensions. Going through
+    // NSImage.lockFocus() would rasterize at the display's backing scale (2x on
+    // Retina), so the "1024pt" icon ships as a 2048x2048 PNG with dithered
+    // gradient noise — ~3.4 MB instead of a few hundred KB. macOS only wants a
+    // true 1024x1024 PNG as CFBundleIconFile anyway.
+    let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: Int(pixels),
+        pixelsHigh: Int(pixels),
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+    )!
+    rep.size = NSSize(width: pixels, height: pixels)
+    NSGraphicsContext.saveGraphicsState()
+    guard let context = NSGraphicsContext(bitmapImageRep: rep) else { fatalError("No graphics context") }
+    NSGraphicsContext.current = context
+    let cg = context.cgContext
 
     let bounds = CGRect(x: 0, y: 0, width: pixels, height: pixels)
     let radius = pixels * 0.22
     let inset: CGFloat = pixels > 64 ? 2 : 0
     let shape = CGPath(roundedRect: bounds.insetBy(dx: inset, dy: inset), cornerWidth: radius, cornerHeight: radius, transform: nil)
-    context.saveGState()
-    context.addPath(shape)
-    context.clip()
+    cg.saveGState()
+    cg.addPath(shape)
+    cg.clip()
     let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [
         NSColor(calibratedRed: 0.10, green: 0.35, blue: 0.95, alpha: 1).cgColor,
         NSColor(calibratedRed: 0.45, green: 0.15, blue: 0.90, alpha: 1).cgColor
     ] as CFArray, locations: [0, 1])!
-    context.drawLinearGradient(gradient, start: CGPoint(x: 0, y: pixels), end: CGPoint(x: pixels, y: 0), options: [])
+    cg.drawLinearGradient(gradient, start: CGPoint(x: 0, y: pixels), end: CGPoint(x: pixels, y: 0), options: [])
 
     let side = pixels * 0.62
     let symbolRect = NSRect(x: (pixels - side) / 2, y: (pixels - side) / 2, width: side, height: side)
     whiteSymbol("alarm", pointSize: side).draw(in: symbolRect)
 
-    context.restoreGState()
-    image.unlockFocus()
+    cg.restoreGState()
+    NSGraphicsContext.restoreGraphicsState()
 
-    guard let tiff = image.tiffRepresentation,
-          let rep = NSBitmapImageRep(data: tiff),
-          let png = rep.representation(using: .png, properties: [:]) else { fatalError("Could not make PNG") }
+    guard let png = rep.representation(using: .png, properties: [:]) else { fatalError("Could not make PNG") }
     try png.write(to: URL(fileURLWithPath: path), options: .atomic)
 }
 

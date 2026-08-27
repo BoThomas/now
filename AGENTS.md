@@ -58,7 +58,7 @@ The EventKit counterpart of `--parse`: prints authorization status, every EKCale
 TCC grants (Calendar permission) are keyed to the code signature's *designated requirement*. Ad-hoc signing anchors the DR to the binary's cdhash → every rebuild = "a different app" = re-prompt. So release/dev builds are signed with a self-signed identity **"now Developer"** (RSA-2048, codeSigning EKU, valid to 2036) whose certificate hash anchors the DR instead — grants survive rebuilds and release updates.
 
 - The identity lives in the **login keychain** of the dev machine; `build-app.sh` uses it when present and falls back to ad-hoc with a warning.
-- Backup: `~/.config/now/now-codesign-backup.p12` (+ password, mode 600) — store **both** in a password manager (1Password/Bitwarden file attachment). This file must NEVER be committed (`.gitignore` blocks `*.p12/*.pem/*.key`).
+- Backup: the `.p12` (with its password) lives **only** in the password manager (1Password/Bitwarden file attachment) — there is deliberately no on-disk copy. Key material must NEVER be committed (`.gitignore` blocks `*.p12/*.pem/*.key`).
 - Restore on a new machine:
   ```bash
   security import now-codesign-backup.p12 -k ~/Library/Keychains/login.keychain-db -P '<password>' -T /usr/bin/codesign
