@@ -161,6 +161,20 @@ END:VCALENDAR
         expect(nativeParsed.rrule == nil && nativeParsed.exdates.isEmpty, "native events carry no recurrence data")
         expect(nativeParsed.status.isEmpty && !nativeParsed.isAllDay, "native defaults: not cancelled, not all-day")
 
+        // Apple conference wrapper: description is decoration + join link only → link
+        // extraction still works, but display suppresses the notes entirely.
+        let appleNotes = "----( Video Call )----\nhttps://us02web.zoom.us/j/12345?pwd=12345\n---===---"
+        let appleParsed = NativeCalendarSource.parsedEvent(
+            uid: "apple-ek", title: "asdgadfgafdg", location: nil, notes: appleNotes,
+            url: nil, start: nativeStart, end: nativeEnd
+        )
+        let appleLink = LinkExtractor.link(from: appleParsed)
+        expect(appleLink?.absoluteString == "https://us02web.zoom.us/j/12345?pwd=12345", "apple wrapper link still extracted")
+        expect(LinkExtractor.isJoinLinkOnlyText(appleNotes, link: appleLink), "apple wrapper notes suppressed")
+        expect(LinkExtractor.isJoinLinkOnlyText(appleNotes + "\nBring slides", link: appleLink) == false, "wrapper + real notes still shown")
+        expect(LinkExtractor.isJoinLinkOnlyText("Plain agenda\nsecond line", link: appleLink) == false, "plain notes never suppressed")
+        expect(LinkExtractor.isDecorationLine("----( Video Call )----") && LinkExtractor.isDecorationLine("---===---"), "decoration lines recognized")
+
         if failures.isEmpty {
             print("SELFTEST OK — runA \(runA.count) events, runB \(runB.count) events")
         } else {

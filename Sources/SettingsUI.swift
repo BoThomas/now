@@ -399,7 +399,7 @@ struct NativeCalendarRow: View {
                 .padding(.leading, 2)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(info.title).font(.system(size: 13, weight: .semibold))
-                    Text(info.sourceTitle.isEmpty ? "Calendar.app" : "via \(info.sourceTitle)")
+                    Text(info.sourceTitle.isEmpty ? "Apple Calendars" : "via \(info.sourceTitle)")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -604,7 +604,7 @@ struct SettingsView: View {
 
     private var calendarsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Calendars", "calendar")
+            sectionHeader("External Calendars", "calendar")
             Text("Paste the shared iCal (ICS) links of the calendars you want reminders for.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -658,8 +658,8 @@ struct SettingsView: View {
 
     private var nativeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Apple Calendar", "calendar.badge.clock")
-            Text("Or use the calendars already in Calendar.app — iCloud, Google, Exchange, CalDAV and more, no links needed.")
+            sectionHeader("Apple Calendars", "calendar.badge.clock")
+            Text("Or use your Apple Calendars directly: iCloud, Google, Exchange, CalDAV and more, no links needed.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             switch store.nativeAuthorization {
@@ -679,7 +679,7 @@ struct SettingsView: View {
         if store.nativeCalendarInfos.isEmpty {
             HStack(spacing: 10) {
                 Image(systemName: "calendar.badge.plus").font(.title2).foregroundStyle(.secondary)
-                Text("No calendars found. Add an account in Calendar.app first, then hit Refresh.")
+                Text("No calendars found. Add an account to your Apple Calendars first, then hit Refresh.")
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
@@ -701,7 +701,7 @@ struct SettingsView: View {
         HStack(spacing: 12) {
             Image(systemName: "calendar.badge.clock").font(.title2).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Read calendars from Calendar.app directly")
+                Text("Read your Apple Calendars directly")
                     .font(.system(size: 12, weight: .medium))
                 Text("You'll be asked for permission once. Your calendar data stays on this Mac.")
                     .font(.caption)
@@ -771,7 +771,7 @@ struct SettingsView: View {
             ForEach(stale) { native in
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
-                    Text("“\(native.name)” is no longer in Calendar.app")
+                    Text("“\(native.name)” is no longer available")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                     Spacer()
