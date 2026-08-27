@@ -1,6 +1,6 @@
 # AGENTS.md — now
 
-Native macOS menu bar app for meeting reminders (single-file Swift, no Xcode project). See README.md for user-facing docs.
+Native macOS menu bar app for meeting reminders (plain Swift files in `Sources/`, no Xcode project). See README.md for user-facing docs.
 
 ## Project layout
 
@@ -35,11 +35,10 @@ Always run the build + selftest after changes. A GUI smoke test (launch, check i
 
 `./release.sh` is the agent-friendly release pipeline: version bump (patch/minor/major or explicit `X.Y.Z`), prepends a CHANGELOG.md entry, sets Info.plist version/build, builds + selftests, commits, tags `vX.Y.Z`, pushes, and creates a GitHub release with `now-vX.Y.Z.zip` attached.
 
-- First release: `./release.sh --notes "Initial release — see README for features" --yes` (no bump needed; uses the current 1.0.0 since no tag exists yet, and creates the repo via `gh repo create` if origin is missing).
-- Subsequent: `./release.sh patch --notes $'- Fixed X\n- Added Y' --yes`
+- `./release.sh patch --notes $'- Fixed X\n- Added Y' --yes`
 - Flags: `--dry-run` (plan only), `--repo owner/name` (default `BoThomas/now`), `--yes` (skip confirm). Requires a clean tree and an authenticated `gh`.
 - README's Download section links to `/releases/latest`, so it always points at the newest release — no README edits needed per release.
-- After first publish, set repo topics once: `gh repo edit --add-topic macos --add-topic menubar --add-topic calendar --add-topic ics --add-topic meeting-reminders`
+- Repo topics are already set on `BoThomas/now` — nothing to do per release.
 
 ## Debug tool: `--parse`
 
