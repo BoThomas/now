@@ -42,7 +42,7 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 
 **Calendars**
 - Any shared iCal/ICS feed: Google secret address, Outlook publish-to-web, iCloud webcal, church.tools, …
-- **Apple Calendar integration:** use any calendar configured in Calendar.app — iCloud, Google, Exchange/Outlook, Yahoo, generic CalDAV, "On My Mac" — with no links at all. Grant access once in Settings → *Apple Calendar*. Native calendars update near-instantly (they react to Calendar.app changes live, instead of waiting for the next feed poll) and recurring events, cancellations and moved instances just work.
+- **Apple Calendar integration:** use any calendar configured in Calendar.app — iCloud, Google, Exchange/Outlook, Yahoo, generic CalDAV, "On My Mac" — with no links at all. Grant access once in Settings → *Apple Calendars*. Native calendars update near-instantly (they react to Calendar.app changes live, instead of waiting for the next feed poll) and recurring events, cancellations and moved instances just work.
 - Recurring events: RRULE with daily/weekly/monthly/yearly frequency, INTERVAL, COUNT, UNTIL, BYDAY, EXDATE, and moved or cancelled instances
 - Per-calendar color and upcoming-event list with join links, sync status and errors, refresh interval (5–60 min) plus refresh on wake
 - Option to hide events you've declined
@@ -51,7 +51,7 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 
 ### Apple Calendar permission notes
 
-- Permission is only requested when you click **Grant Access…** in Settings → *Apple Calendar* — never at launch. Calendar data never leaves your Mac.
+- Permission is only requested when you click **Grant Access…** in Settings → *Apple Calendars* — never at launch. Calendar data never leaves your Mac.
 - If you later deny it, re-enable in **System Settings → Privacy & Security → Calendars**.
 - The app is signed with a stable self-signed identity ("now Developer"), and macOS keys the Calendar grant to the code signature — that identity stays the same across releases, so the grant survives app updates. Local dev builds made *without* that identity fall back to ad-hoc signing and will be re-asked once per build. If a grant seems stuck, run `tccutil reset Calendars com.thomasboch.now` and grant again.
 - If you enable the same calendar twice (as an ICS link *and* via Apple Calendar), its events will show up twice — keep one of the two.

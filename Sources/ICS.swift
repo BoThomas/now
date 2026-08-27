@@ -500,12 +500,16 @@ enum LinkExtractor {
     }
 
     /// Ruler lines (`---===---`, `-----`) and decorated labels (`----( Video Call )----`).
+    /// The dashes are required: a bare parenthetical like "( see doc )" is real content.
     static func isDecorationLine(_ line: String) -> Bool {
         guard line.count >= 3 else { return false }
         if line.allSatisfy({ $0 == "-" || $0 == "=" }) { return true }
         var inner = line
-        while inner.hasPrefix("-") { inner.removeFirst() }
-        while inner.hasSuffix("-") { inner.removeLast() }
+        var leading = 0
+        while inner.hasPrefix("-") { inner.removeFirst(); leading += 1 }
+        var trailing = 0
+        while inner.hasSuffix("-") { inner.removeLast(); trailing += 1 }
+        guard leading >= 2, trailing >= 2 else { return false }
         let label = inner.trimmingCharacters(in: .whitespaces)
         return label.hasPrefix("(") && label.hasSuffix(")") && label.count >= 3
     }
