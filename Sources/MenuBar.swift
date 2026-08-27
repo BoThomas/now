@@ -59,15 +59,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         } else if upcoming.isEmpty {
             menu.addItem(withTitle: store.events.isEmpty ? "No calendars loaded" : "No upcoming events", action: nil, keyEquivalent: "")
         } else {
+            let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+            let measure: [NSAttributedString.Key: Any] = [.font: timeFont]
+            let timeWidth = upcoming.map { (Fmt.time.string(from: $0.start) as NSString).size(withAttributes: measure).width }.max() ?? 0
+            let tabLocation = timeWidth.rounded(.up) + 4
+            var currentDay: Date?
             for event in upcoming {
-                var title = "\(Fmt.time.string(from: event.start))  \(event.title.isEmpty ? "Untitled" : event.title)"
-                if event.start <= Date() {
-                    title += "  ·  \(Fmt.barCountdown(to: event.start))"
+                let day = Calendar.current.startOfDay(for: event.start)
+                if currentDay != day {
+                    currentDay = day
+                    menu.addItem(dayHeaderItem(for: day))
                 }
-                let item = menu.addItem(withTitle: title, action: event.link == nil ? nil : #selector(joinAction), keyEquivalent: "")
-                item.target = self
-                item.representedObject = event.link
-                item.image = Palette.dotImage(color: event.nsColor)
+                menu.addItem(eventMenuItem(for: event, timeFont: timeFont, tabLocation: tabLocation))
             }
         }
         menu.addItem(.separator())
@@ -83,7 +86,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
             pauseItem.submenu = submenu
         }
-        menu.addItem(withTitle: store.isRefreshing ? "Syncing…" : "Refresh Calendars", action: #selector(refreshAction), keyEquivalent: "").target = self
+        menu.addItem(withTitle: store.isRefreshing ? "Syncing…" : "Refresh Calendars", action: #selector(refreshAction), keyEquivalent: "r").target = self
         if let last = store.lastRefresh {
             menu.addItem(withTitle: "Last synced \(Fmt.ago(last))", action: nil, keyEquivalent: "")
         }
@@ -95,6 +98,66 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         loginItem.state = store.settings.launchAtLogin ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit now", action: #selector(quitAction), keyEquivalent: "q").target = self
+    }
+
+    private func dayHeaderItem(for day: Date) -> NSMenuItem {
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.attributedTitle = NSAttributedString(string: Self.dayHeaderText(for: day), attributes: [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: NSColor.secondaryLabelColor
+        ])
+        return item
+    }
+
+    private static func dayHeaderText(for day: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(day) { return "Today".localizedUppercase }
+        if calendar.isDateInTomorrow(day) { return "Tomorrow".localizedUppercase }
+        return day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)).localizedUppercase
+    }
+
+    /// Multi-line hover tooltip: title, when, location, notes. Values that are nothing
+    /// but the join link are suppressed (redundant — clicking the row opens it).
+    private static func tooltipText(for event: MeetingEvent) -> String {
+        var lines: [String] = []
+        lines.append(event.title.isEmpty ? "Untitled" : event.title)
+        let calendar = Calendar.current
+        let dateText = calendar.isDateInToday(event.start) ? "" : event.start.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)) + " · "
+        lines.append("\(dateText)\(Fmt.time.string(from: event.start)) – \(Fmt.time.string(from: event.end)) · \(Fmt.duration(event.end.timeIntervalSince(event.start)))")
+        if let location = event.location, !location.isEmpty, !isJustJoinLink(location, event: event) {
+            lines.append("Location: \(Fmt.ellipsized(location, limit: 100))")
+        }
+        if let notes = event.notes, !notes.isEmpty, !isJustJoinLink(notes, event: event) {
+            lines.append("Notes: \(Fmt.wrapped(notes, width: 72, maxLines: 4))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// True when `text` (trimmed) is exactly the event's join link.
+    private static func isJustJoinLink(_ text: String, event: MeetingEvent) -> Bool {
+        guard let link = event.link else { return false }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines) == link.absoluteString
+    }
+
+    private func eventMenuItem(for event: MeetingEvent, timeFont: NSFont, tabLocation: CGFloat) -> NSMenuItem {
+        let item = NSMenuItem(title: "", action: event.link == nil ? nil : #selector(joinAction), keyEquivalent: "")
+        item.target = self
+        item.representedObject = event.link
+        item.image = Palette.dotImage(color: event.nsColor)
+        item.toolTip = Self.tooltipText(for: event)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: tabLocation, options: [:])]
+        let timeAttributes: [NSAttributedString.Key: Any] = [.font: timeFont, .paragraphStyle: paragraph]
+        let titleAttributes: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 0), .paragraphStyle: paragraph]
+        let text = NSMutableAttributedString(string: Fmt.time.string(from: event.start), attributes: timeAttributes)
+        text.append(NSAttributedString(string: "\t", attributes: titleAttributes))
+        var title = " \(Fmt.ellipsized(event.title.isEmpty ? "Untitled" : event.title, limit: 48))"
+        if event.start <= Date() {
+            title += "  ·  \(Fmt.barCountdown(to: event.start))"
+        }
+        text.append(NSAttributedString(string: title, attributes: titleAttributes))
+        item.attributedTitle = text
+        return item
     }
 
     @objc private func joinAction(_ sender: NSMenuItem) {

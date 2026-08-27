@@ -203,6 +203,9 @@ struct SingleEventView: View {
                 if let location = event.location, !location.isEmpty {
                     Label(location, systemImage: "mappin.and.ellipse")
                         .lineLimit(1)
+                } else if let link = event.link, let provider = LinkExtractor.providerName(for: link) {
+                    Label(provider, systemImage: "mappin.and.ellipse")
+                        .lineLimit(1)
                 }
             }
             .font(.system(size: 19, weight: .medium))

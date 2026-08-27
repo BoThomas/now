@@ -45,6 +45,13 @@ SUMMARY:Link via URL prop
 URL:https://teams.microsoft.com/l/meetup/1/xyz
 END:VEVENT
 BEGIN:VEVENT
+UID:zoompwd@test
+DTSTART:20260827T150000Z
+DTEND:20260827T153000Z
+SUMMARY:Zoom link only via URL prop
+URL:https://us02web.zoom.us/j/12345?pwd=abc123
+END:VEVENT
+BEGIN:VEVENT
 UID:allday@test
 DTSTART;VALUE=DATE:20260902
 SUMMARY:Away day
@@ -128,6 +135,9 @@ END:VCALENDAR
         expect(runA.contains { $0.uid == "attach@test" && $0.link?.host == "meetings.ringcentral.com" }, "ATTACH ringcentral link")
         expect(runA.first { $0.uid == "joiny@test" }?.link?.host == "meet.corp.example.com", "join-path heuristic link")
         expect(runA.first { $0.uid == "titlelink@test" }?.link?.host == "meet.internal.test", "title fallback link")
+        let zoomPwd = runA.first { $0.uid == "zoompwd@test" }
+        expect(zoomPwd?.link?.absoluteString == "https://us02web.zoom.us/j/12345?pwd=abc123", "us02web zoom link with pwd")
+        expect(zoomPwd?.link.flatMap { LinkExtractor.providerName(for: $0) } == "Zoom", "zoom provider name")
         expect(runB.contains { $0.uid == "one@test" }, "single event in run B")
         let crlf = ics.replacingOccurrences(of: "\n", with: "\r\n")
         let runC = ICSBuilder.meetings(fromICS: crlf, subscription: subscription, now: runANow)

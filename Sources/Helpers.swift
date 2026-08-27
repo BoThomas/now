@@ -99,4 +99,34 @@ enum Fmt {
     static func ago(_ date: Date) -> String {
         relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
+
+    /// Truncates to `limit` grapheme clusters and appends an ellipsis, like SwiftUI's
+    /// `.lineLimit(1)` + `.truncationMode(.tail)` does in the settings event rows.
+    static func ellipsized(_ text: String, limit: Int) -> String {
+        guard text.count > limit else { return text }
+        return String(text.prefix(max(1, limit - 1))).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
+    /// Collapses whitespace/newlines, word-wraps to `width` chars per line and cuts after
+    /// `maxLines` lines with a trailing ellipsis — for multi-line tooltips.
+    static func wrapped(_ text: String, width: Int, maxLines: Int) -> String {
+        let words = text.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        var lines: [String] = []
+        var current = ""
+        for word in words {
+            if current.isEmpty {
+                current = word
+            } else if current.count + word.count + 1 <= width {
+                current += " " + word
+            } else {
+                lines.append(current)
+                current = word
+            }
+        }
+        if !current.isEmpty { lines.append(current) }
+        guard lines.count <= maxLines else {
+            return lines.prefix(maxLines).joined(separator: "\n") + " …"
+        }
+        return lines.joined(separator: "\n")
+    }
 }

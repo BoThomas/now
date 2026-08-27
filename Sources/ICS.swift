@@ -451,6 +451,30 @@ enum LinkExtractor {
         return meetingHosts.contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
+    /// Friendly service name for a join link ("Zoom", "Google Meet", …), used as the
+    /// location fallback in the reminder. Falls back to the bare host (sans www).
+    static let providerNames: [String: String] = [
+        "zoom.us": "Zoom", "zoom.com": "Zoom",
+        "meet.google.com": "Google Meet", "hangouts.google.com": "Google Meet",
+        "teams.microsoft.com": "Microsoft Teams", "teams.live.com": "Microsoft Teams",
+        "webex.com": "Webex", "gotomeet.me": "GoTo Meeting", "goto.com": "GoTo Meeting",
+        "meet.jit.si": "Jitsi Meet", "whereby.com": "Whereby",
+        "discord.gg": "Discord", "discord.com": "Discord",
+        "slack.com": "Slack", "chime.aws": "Amazon Chime", "8x8.vc": "8x8 Meet",
+        "bluejeans.com": "BlueJeans", "facetime.apple.com": "FaceTime",
+        "ringcentral.com": "RingCentral", "join.me": "join.me", "dialpad.com": "Dialpad",
+        "uberconference.com": "UberConference", "freeconferencecall.com": "FreeConferenceCall",
+        "meeting.zoho.com": "Zoho Meeting",
+    ]
+
+    static func providerName(for url: URL) -> String? {
+        guard let host = url.host?.lowercased() else { return nil }
+        for (suffix, name) in providerNames where host == suffix || host.hasSuffix("." + suffix) {
+            return name
+        }
+        return host.replacingOccurrences(of: "www.", with: "")
+    }
+
     static func looksLikeJoin(_ url: URL) -> Bool {
         guard url.scheme == "https" || url.scheme == "http" else { return false }
         let text = url.absoluteString.lowercased()
