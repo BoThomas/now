@@ -34,7 +34,7 @@ Static review performed without building, launching, or running tests, then revi
 
 - [ ] **Enforce the exact recurrence window end.** Do not emit an occurrence later than `windowEnd` merely because it is on the same day. (`Sources/ICS.swift:332-341`)
 
-- [ ] **Fast-forward recurrence expansion and cap aggregate work.** Output and per-event iteration are already bounded, but each event can still perform up to 20,000 calendar-day operations and a feed can contain many recurring events. Fast-forward old anchors and enforce a feed-level work budget. (`Sources/ICS.swift:319-349`, `Sources/ICS.swift:535-543`)
+- [ ] **Fast-forward recurrence expansion and cap aggregate work.** Output and per-event iteration are already bounded, but each event can still perform up to 20,000 calendar-day operations and a feed can contain many recurring events. This work runs off the main actor, so the primary risks are CPU, battery, and fetch latency rather than direct UI blocking. Fast-forward old anchors, which also avoids silently losing recurrences anchored more than about 55 years ago, and enforce a feed-level work budget. (`Sources/ICS.swift:319-349`, `Sources/ICS.swift:535-543`)
 
 - [ ] **Support or reject `RDATE` and `RANGE=THISANDFUTURE`.** Do not silently omit additional dates or apply range overrides as one-off changes. (`Sources/ICS.swift:179-222`, `Sources/ICS.swift:548-555`)
 
@@ -46,7 +46,7 @@ Static review performed without building, launching, or running tests, then revi
 
 - [ ] **Implement text unescaping left to right.** Prevent escaped backslashes followed by `n`, comma, or semicolon from being reinterpreted by later replacements. (`Sources/ICS.swift:308-315`)
 
-- [ ] **Define and test recurrence timestamp matching.** RFC recurrence identity is exact, so prefer normalized exact matching. Retain a tolerance only if a real compatibility case demonstrates deliberate second-level drift; document and regression-test that case and ensure nearby legitimate occurrences cannot be conflated. (`Sources/ICS.swift:340`, `Sources/ICS.swift:550`)
+- [ ] **Define and test recurrence timestamp matching.** RFC recurrence identity is exact, so prefer normalized exact matching. Normalize at parse time, including letting TZID-less EXDATE and RECURRENCE-ID values inherit the master's DTSTART zone, rather than adding match-time slack. Retain a tolerance only if a real compatibility case demonstrates deliberate second-level drift; document and regression-test that case and ensure nearby legitimate occurrences cannot be conflated. (`Sources/ICS.swift:340`, `Sources/ICS.swift:550`)
 
 - [ ] **Improve meeting-link ranking.** Prefer actual join-like URLs over unrelated pages on known providers, and preserve the documented field priority over `ATTACH`. (`Sources/ICS.swift:395-411`)
 
@@ -62,13 +62,13 @@ Static review performed without building, launching, or running tests, then revi
 
 - [ ] **Refresh the available native-calendar list on every EventKit store change.** Do not require an enabled native calendar before updating available calendar metadata. (`Sources/AppStore.swift:191-197`)
 
-- [ ] **Measure EventKit query latency and set a UI/reminder budget.** `events(matching:)` is synchronous and potentially slow, but the current main-thread design is deliberate. Instrument representative native stores first; move or restructure the query behind a generation guard only if it exceeds the accepted budget. (`Sources/AppStore.swift:174-188`, `Sources/NativeCalendars.swift:89-103`)
+- [ ] **Measure EventKit query latency and set a UI/reminder budget.** `events(matching:)` is synchronous and potentially slow, but the current main-thread design is deliberate. Before collecting results, document a pass/fail latency budget; then measure representative stores with `--native`, including warm queries and cold-cache queries after launch and wake. Complete the item with recorded measurements if they pass, or move/restructure the query behind a generation guard if they fail. (`Sources/AppStore.swift:174-188`, `Sources/NativeCalendars.swift:89-103`)
 
 - [ ] **Align native and ICS fetch-window semantics.** Explicitly enforce the intended start-time bounds on the EventKit path. (`Sources/NativeCalendars.swift:91-102`)
 
 - [ ] **Distinguish last sync attempt from last successful sync.** Do not label a failed attempt as “Last synced.” (`Sources/AppStore.swift:355-373`, `Sources/SettingsUI.swift:663-664`)
 
-- [ ] **Verify activation policy after Settings closes, then fix if reproduced.** Static ordering suggests `windowWillClose` may run while `isVisible` is still true, but this needs a GUI check on the supported macOS versions. If the Dock icon remains, re-evaluate asynchronously after close. (`Sources/App.swift:136-150`)
+- [ ] **Verify activation policy after Settings closes, then fix if reproduced.** Static ordering suggests `windowWillClose` may run while `isVisible` is still true, but this needs a GUI check on the supported macOS versions. If the Dock icon remains, re-evaluate asynchronously after close; an unconditional idempotent re-evaluation through `syncActivationPolicy()` is also acceptable hardening. (`Sources/App.swift:136-150`)
 
 - [ ] **Route every Quit entry point through the custom quit flow.** The status menu must not bypass the Settings confirmation or active-alert handling. (`Sources/MenuBar.swift:100`, `Sources/MenuBar.swift:191-193`, `Sources/App.swift:82-112`)
 
@@ -132,9 +132,9 @@ Static review performed without building, launching, or running tests, then revi
 
 - [ ] Add a regression test confirming that `.authorized`/`.fullAccess` are readable aliases, while `.writeOnly`, `.denied`, `.restricted`, and `.notDetermined` are not readable.
 
-- [ ] Test that a failed full refresh preserves cached events and reminder eligibility.
+- [ ] After adding an injectable fetch seam, test that a failed full refresh preserves cached events and reminder eligibility.
 
-- [ ] Test that a failed targeted refresh preserves cached events and records its error.
+- [ ] After adding an injectable fetch seam, test that a failed targeted refresh preserves cached events and records its error.
 
 - [ ] After adding an injectable fetch seam, test removal, disabling, and URL editing while requests are in flight.
 
@@ -148,23 +148,23 @@ Static review performed without building, launching, or running tests, then revi
 
 - [ ] Test that unsupported or malformed recurrence frequencies never become daily recurrences.
 
-- [ ] Test unknown `TZID`, common Windows/Outlook time zones, and feed-defined `VTIMEZONE` behavior.
+- [ ] Test unknown `TZID`, common Windows/Outlook mappings, parse-time inheritance for TZID-less recurrence exceptions, and safe rejection of unimplemented `VTIMEZONE` definitions.
 
 - [ ] After adding an injectable clock, test wake, delayed launch, and delayed refresh after the current 45-second cutoff.
 
-- [ ] Test a newly due meeting while another reminder is already open.
+- [ ] After extracting reminder scheduling into a clock-driven pure helper, test a newly due meeting while another reminder is already open; use the existing injectable `onAlert` closure to capture delivery.
 
-- [ ] Test focused Join, Snooze, and Close buttons against global Return handling.
+- [ ] After extracting alert key-event classification into a pure function, test focused Join, Snooze, and Close buttons against global Return handling.
 
-- [ ] Test plain versus modified Return, Escape, `s`, Command-W, and Command-M.
+- [ ] After extracting alert key-event classification into a pure function, test plain versus modified Return, Escape, `s`, Command-W, and Command-M.
 
-- [ ] Test two identical consecutive missing snapshots and bookkeeping pruning.
+- [ ] After extracting event commit and pruning decisions into a pure function, test two identical consecutive missing snapshots and bookkeeping pruning without constructing `AppStore` or `EKEventStore`.
 
-- [ ] Test cancellation, removal, disabling, and rescheduling while an alert is open.
+- [ ] After extracting event-to-open-alert reconciliation behind a pure decision or alert-controller seam, test cancellation, removal, disabling, and rescheduling while an alert is open.
 
-- [ ] Test duplicate event IDs in store state and alert rendering inputs.
+- [ ] After extracting event normalization from `commitEvents`, test duplicate event IDs without constructing `AppStore` or `EKEventStore`.
 
-- [ ] Test “tomorrow 09:00” across both daylight-saving transitions.
+- [ ] After extracting the next-morning date calculation into a pure helper, test “tomorrow 09:00” across both daylight-saving transitions.
 
 - [ ] Test persisted-state migration and malformed or out-of-range settings, colors, subscriptions, and native calendars.
 
@@ -232,7 +232,7 @@ Static review performed without building, launching, or running tests, then revi
 
 - [ ] Hold the status menu open across a reminder deadline and verify reminder delivery after the timer scheduling change.
 
-- [ ] Open, minimize, reopen, and close Settings with the red button and Command-W; verify `.regular` to `.accessory` transitions and immediate Dock-icon removal.
+- [ ] Open, minimize, reopen, and close Settings with the red button, Command-W, and the Quit dialog's “Close Settings” action; verify `.regular` to `.accessory` transitions and immediate Dock-icon removal.
 
 - [ ] Show a large multi-event alert on a small display and verify all cards and controls remain reachable.
 
