@@ -38,6 +38,15 @@ done
 
 is_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] }
 
+version_gt() {
+  local candidate="$1" current="$2" cmaj cmin cpat omaj omin opat
+  IFS='.' read -r cmaj cmin cpat <<< "$candidate"
+  IFS='.' read -r omaj omin opat <<< "$current"
+  (( cmaj > omaj ||
+     (cmaj == omaj && cmin > omin) ||
+     (cmaj == omaj && cmin == omin && cpat > opat) ))
+}
+
 bump() {
   local type="$1" current="$2"
   IFS='.' read -r MAJ MIN PAT <<< "$current"
@@ -52,6 +61,22 @@ bump() {
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repository"
 command -v gh >/dev/null 2>&1 || die "gh CLI missing (brew install gh)"
 gh auth status >/dev/null 2>&1 || die "gh not authenticated (gh auth login)"
+[[ "$(git branch --show-current)" == main ]] || die "releases must be run from main"
+[[ -z "$(git status --porcelain)" ]] || die "working tree not clean — commit first"
+[[ "$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)" == origin/main ]] ||
+  die "main must track origin/main"
+LOCAL_HEAD=$(git rev-parse HEAD)
+TRACKING_HEAD=$(git rev-parse refs/remotes/origin/main 2>/dev/null) || die "origin/main tracking ref missing; fetch it first"
+[[ "$LOCAL_HEAD" == "$TRACKING_HEAD" ]] || die "main is not synchronized with the local origin/main ref"
+REMOTE_HEAD=$(git ls-remote --exit-code origin refs/heads/main 2>/dev/null | awk 'NR == 1 { print $1 }') ||
+  die "could not read origin/main"
+[[ "$LOCAL_HEAD" == "$REMOTE_HEAD" ]] || die "main is not synchronized with the live origin/main; fetch/reconcile first"
+
+SIGNING_IDENTITY_SHA1="${NOW_SIGNING_IDENTITY_SHA1:-A505B08900C56A28709479297A049525A2A187C6}"
+[[ "$SIGNING_IDENTITY_SHA1" =~ '^[[:xdigit:]]{40}$' ]] || die "NOW_SIGNING_IDENTITY_SHA1 must be a 40-digit SHA-1 fingerprint"
+SIGNING_IDENTITY_SHA1="${(U)SIGNING_IDENTITY_SHA1}"
+AVAILABLE_IDENTITIES=$(security find-identity -v -p codesigning)
+[[ "$AVAILABLE_IDENTITIES" == *"$SIGNING_IDENTITY_SHA1"* ]] || die "required signing identity $SIGNING_IDENTITY_SHA1 not found"
 
 CURRENT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
 if [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+$ ]]; then CURRENT="$CURRENT.0"; fi
@@ -59,6 +84,7 @@ is_version "$CURRENT" || die "bad version in Info.plist: $CURRENT"
 
 if [[ -n "$VERSION_SPEC" ]]; then
   if is_version "$VERSION_SPEC"; then
+    version_gt "$VERSION_SPEC" "$CURRENT" || die "explicit version must be greater than $CURRENT"
     VERSION="$VERSION_SPEC"
   else
     case "$VERSION_SPEC" in
@@ -71,6 +97,12 @@ elif [[ -z "$(git tag --list 'v*')" ]]; then
 else
   VERSION="$(bump patch "$CURRENT")"
 fi
+
+TAG="v$VERSION"
+git show-ref --verify --quiet "refs/tags/$TAG" && die "local tag $TAG already exists"
+REMOTE_TAGS=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}") ||
+  die "could not check remote tag $TAG"
+[[ -z "$REMOTE_TAGS" ]] || die "remote tag $TAG already exists"
 
 if [[ -z "$NOTES" && "$DRY_RUN" == false && -t 0 ]]; then
   print -n "Changelog notes for v$VERSION (single line, empty to skip): "
@@ -93,7 +125,6 @@ fi
 
 BUILD=$(( $(git rev-list --count HEAD) + 1 ))
 DATE=$(date +%Y-%m-%d)
-TAG="v$VERSION"
 PREV_TAG=$(git tag --list 'v*' --sort=-v:refname | head -n 1)
 if [[ -n "$PREV_TAG" ]]; then
   CHANGE_URL="https://github.com/$REPO_SLUG/compare/$PREV_TAG...$TAG"
@@ -119,8 +150,6 @@ if [[ "$DRY_RUN" == true ]]; then
   print "Dry run — prerequisites OK, nothing was changed."
   exit 0
 fi
-
-[[ -z "$(git status --porcelain)" ]] || die "working tree not clean — commit first"
 
 if [[ "$ASSUME_YES" != true ]]; then
   read -r "REPLY?Proceed with release? [y/N] "
@@ -165,11 +194,6 @@ git commit -m "Release $TAG" --quiet
 git tag "$TAG"
 
 print "• Publishing"
-if ! git remote get-url origin >/dev/null 2>&1; then
-  gh repo create "$REPO_SLUG" --public --source=. --remote=origin \
-    --description "Native macOS menu bar meeting reminders — fullscreen alert with one-click join" \
-    || die "could not create $REPO_SLUG (already exists? add the remote manually)"
-fi
 git push -u origin HEAD
 git push origin "$TAG"
 

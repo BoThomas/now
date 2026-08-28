@@ -334,14 +334,18 @@ final class AppStore: ObservableObject {
             guard let subscription = liveByID[event.calendarID] else { return false }
             return subscription.isEnabled
         }
-        var errors = previousErrors
-        var warnings = previousWarnings
+        let enabledIDs = Set(live.filter(\.isEnabled).map(\.id))
+        var errors = previousErrors.filter { enabledIDs.contains($0.key) }
+        var warnings = previousWarnings.filter { enabledIDs.contains($0.key) }
         var allSucceeded = true
         for result in results {
             guard let subscription = liveByID[result.subscription.id],
                   subscription.isEnabled,
                   subscription.url == result.subscription.url,
-                  latestRequestIDs[result.subscription.id, default: result.requestID] == result.requestID else { continue }
+                  latestRequestIDs[result.subscription.id, default: result.requestID] == result.requestID else {
+                allSucceeded = false
+                continue
+            }
             if let error = result.error {
                 errors[subscription.id] = error
                 allSucceeded = false
@@ -462,7 +466,7 @@ final class AppStore: ObservableObject {
     }
 
     private func apply(results: [FetchResult], fetched: [CalendarSubscription]) {
-        let merged = Self.mergeICS(current: currentICSEvents, results: results, live: subscriptions, previousErrors: [:], previousWarnings: [:], latestRequestIDs: fetchTracker.latestPerSubscription)
+        let merged = Self.mergeICS(current: currentICSEvents, results: results, live: subscriptions, previousErrors: errors, previousWarnings: warnings, latestRequestIDs: fetchTracker.latestPerSubscription)
         commitEvents(merged.events + coloredNativeSnapshot())
         errors = merged.errors
         warnings = merged.warnings
@@ -553,12 +557,12 @@ final class AppStore: ObservableObject {
     /// until the meeting **ends** — late delivery (wake from sleep, delayed
     /// launch, delayed refresh, blocked UI) still alerts instead of being
     /// silently dropped by the old 45-second deadline. A snoozed reminder
-    /// re-fires when its snooze expires, again only while `now <= event.end`.
+    /// re-fires when its snooze expires, again only while `now < event.end`.
     nonisolated static func dueForAlert(events: [MeetingEvent], alerted: Set<String>, snoozed: [String: Date], leadSeconds: Int, now: Date) -> [MeetingEvent] {
         let lead = TimeInterval(leadSeconds)
         return events.filter { event in
             if alerted.contains(event.id) {
-                if let fireAt = snoozed[event.id], now >= fireAt, now <= event.end { return true }
+                if let fireAt = snoozed[event.id], now >= fireAt, now < event.end { return true }
                 return false
             }
             return now >= event.start.addingTimeInterval(-lead) && now < event.end
@@ -645,7 +649,7 @@ final class AppStore: ObservableObject {
     /// - System enabled → `.enabled` (even if intent is off — external wins).
     /// - Intent on + requiresApproval → `.requiresApproval`.
     /// - Intent on but not registered (register failed or externally disabled)
-    ///   or an unregister failure → `.failed`.
+    ///   → `.failed`.
     /// - Otherwise → `.disabled`.
     nonisolated static func resolvedLoginItemState(desired: Bool, failed: Bool, status: LoginItemStatus) -> LoginItemState {
         if failed { return .failed }
@@ -654,6 +658,13 @@ final class AppStore: ObservableObject {
             return status == .requiresApproval ? .requiresApproval : .failed
         }
         return .disabled
+    }
+
+    /// Restores intent to the unchanged system state after an operation fails.
+    nonisolated static func resolvedLoginItemOutcome(desired: Bool, operationFailed: Bool, status: LoginItemStatus) -> (desired: Bool, state: LoginItemState) {
+        let effectiveDesired = operationFailed ? !desired : desired
+        let registrationFailed = operationFailed && desired
+        return (effectiveDesired, resolvedLoginItemState(desired: effectiveDesired, failed: registrationFailed, status: status))
     }
 
     private func syncLoginItem(_ desired: Bool) {
@@ -673,12 +684,13 @@ final class AppStore: ObservableObject {
                 break
             }
         }
-        if failed {
+        let outcome = Self.resolvedLoginItemOutcome(desired: desired, operationFailed: failed, status: loginItem.currentStatus)
+        if outcome.desired != desired {
             syncingLoginItem = true
-            settings.launchAtLogin = false
+            settings.launchAtLogin = outcome.desired
             syncingLoginItem = false
         }
-        loginItemState = Self.resolvedLoginItemState(desired: settings.launchAtLogin, failed: failed, status: loginItem.currentStatus)
+        loginItemState = outcome.state
     }
 
     private func persist() {

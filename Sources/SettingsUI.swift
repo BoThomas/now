@@ -42,7 +42,7 @@ final class CommandHoldTracker: ObservableObject {
     @Published private(set) var showHints = false
     private var monitor: Any?
     private var holding = false
-    private var revealTask: Task<Void, Never>?
+    private var revealWorkItem: DispatchWorkItem?
 
     func install() {
         guard monitor == nil else { return }
@@ -55,8 +55,8 @@ final class CommandHoldTracker: ObservableObject {
     func remove() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
-        revealTask?.cancel()
-        revealTask = nil
+        revealWorkItem?.cancel()
+        revealWorkItem = nil
         holding = false
         showHints = false
     }
@@ -65,15 +65,16 @@ final class CommandHoldTracker: ObservableObject {
         if held {
             guard !holding else { return }
             holding = true
-            revealTask?.cancel()
-            revealTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 350_000_000)
-                guard !Task.isCancelled, let self, self.holding else { return }
+            revealWorkItem?.cancel()
+            let reveal = DispatchWorkItem { [weak self] in
+                guard let self, self.holding else { return }
                 withAnimation(.easeOut(duration: 0.15)) { self.showHints = true }
             }
+            revealWorkItem = reveal
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: reveal)
         } else {
             holding = false
-            revealTask?.cancel()
+            revealWorkItem?.cancel()
             if showHints { withAnimation(.easeOut(duration: 0.12)) { showHints = false } }
         }
     }
@@ -349,6 +350,7 @@ struct UpcomingEventList: View {
 
     @Environment(\.colorScheme) private var colorScheme
     private static let collapsedLimit = 8
+    @State private var availableWidth: CGFloat = 600
 
     /// Local expand state — the list is unmounted when the calendar row collapses,
     /// so this resets by itself; the parent never tracks it.
@@ -360,6 +362,16 @@ struct UpcomingEventList: View {
 
     private var overflowCount: Int {
         max(0, events.count - Self.collapsedLimit)
+    }
+
+    /// Switch the whole list together. Per-row ViewThatFits made mixed rows
+    /// look accidental when only one long host wrapped beneath its title.
+    private var compactLinks: Bool {
+        let longestHostWidth = shown.compactMap(\.link).map { link in
+            (hostText(link) as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 10)]).width
+        }.max() ?? 0
+        // time + spacing + minimum useful title + spacer + icon/label padding
+        return longestHostWidth > 0 && availableWidth < 60 + 8 + 80 + 4 + longestHostWidth + 26
     }
 
     private struct DayGroup: Identifiable {
@@ -394,32 +406,21 @@ struct UpcomingEventList: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
                         ForEach(group.events) { event in
-                            // One consistent row shape at every width: time and
-                            // the join link stay put; ONLY the title wraps
-                            // (making the row taller) instead of truncating away.
-                            HStack(alignment: .top, spacing: 8) {
-                                Text(Fmt.time.string(from: event.start))
-                                    .font(.system(size: 11, weight: .medium).monospacedDigit())
-                                    .frame(width: 60, alignment: .leading)
-                                Text(event.title.isEmpty ? "Untitled" : event.title)
-                                    .font(.system(size: 11))
-                                    .lineLimit(2)
-                                    .truncationMode(.tail)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Spacer(minLength: 4)
-                                if let link = event.link {
-                                    Button {
-                                        NSWorkspace.shared.open(link)
-                                    } label: {
-                                        Label(hostText(link), systemImage: "video.fill")
-                                            .font(.system(size: 10))
-                                            .foregroundStyle(linkColor)
-                                            .lineLimit(1)
-                                            .fixedSize(horizontal: true, vertical: false)
+                            if compactLinks {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    eventSummary(event)
+                                    if let link = event.link {
+                                        joinButton(link, compact: true)
+                                            .padding(.leading, 68)
                                     }
-                                    .buttonStyle(.link)
-                                    .cursor(.pointingHand)
-                                    .help("Open \(link.absoluteString)")
+                                }
+                            } else {
+                                HStack(alignment: .top, spacing: 8) {
+                                    eventSummary(event)
+                                    Spacer(minLength: 4)
+                                    if let link = event.link {
+                                        joinButton(link, compact: false)
+                                    }
                                 }
                             }
                         }
@@ -438,10 +439,45 @@ struct UpcomingEventList: View {
             }
         }
         .padding(.top, 2)
+        .background(
+            GeometryReader { geo in
+                Color.clear.preference(key: UpcomingEventListWidthKey.self, value: geo.size.width)
+            }
+        )
+        .onPreferenceChange(UpcomingEventListWidthKey.self) { availableWidth = $0 }
     }
 
     private func hostText(_ link: URL) -> String {
         (link.host ?? "").replacingOccurrences(of: "www.", with: "")
+    }
+
+    private func eventSummary(_ event: MeetingEvent) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(Fmt.time.string(from: event.start))
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .frame(width: 60, alignment: .leading)
+            Text(event.title.isEmpty ? "Untitled" : event.title)
+                .font(.system(size: 11))
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(minWidth: 80, alignment: .leading)
+        }
+    }
+
+    private func joinButton(_ link: URL, compact: Bool) -> some View {
+        Button {
+            NSWorkspace.shared.open(link)
+        } label: {
+            Label(hostText(link), systemImage: "video.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(linkColor)
+                .lineLimit(compact ? 2 : 1)
+                .fixedSize(horizontal: !compact, vertical: compact)
+        }
+        .buttonStyle(.link)
+        .cursor(.pointingHand)
+        .help("Open \(link.absoluteString)")
     }
 
     /// Contrast-safe tint for link text: user-picked near-background colors
@@ -450,6 +486,11 @@ struct UpcomingEventList: View {
         let target: Palette.ContrastTarget = colorScheme == .dark ? .onBlack : .onWhite
         return Color(nsColor: Palette.readable(Palette.nsColor(hex: colorHex), on: target))
     }
+}
+
+private struct UpcomingEventListWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 600
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 struct SubscriptionRow: View {
@@ -684,12 +725,17 @@ enum CalendarURL {
         if trimmed.lowercased().hasPrefix("webcal://") {
             trimmed = "https://" + String(trimmed.dropFirst("webcal://".count))
         }
-        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https", let host = url.host?.lowercased(), !host.isEmpty else { return nil }
-        var path = url.path
+        guard let components = URLComponents(string: trimmed),
+              let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = components.host?.lowercased(), !host.isEmpty,
+              components.user == nil, components.password == nil else { return nil }
+        var path = components.percentEncodedPath
         while path.count > 1, path.hasSuffix("/") { path.removeLast() }
-        var normalized = "\(scheme)://\(host)\(path)"
-        if let components = URLComponents(url: url, resolvingAgainstBaseURL: false), let query = components.query {
+        let renderedHost = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+        var normalized = "\(scheme)://\(renderedHost)"
+        if let port = components.port { normalized += ":\(port)" }
+        normalized += path
+        if let query = components.percentEncodedQuery {
             normalized += "?" + query
         }
         return normalized
@@ -767,10 +813,9 @@ struct EditCalendarView: View {
             return
         }
         guard CalendarURL.confirmInsecureHTTP(normalized) else { return }
-        let raw = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         subscription.name = name.trimmingCharacters(in: .whitespaces).isEmpty ? subscription.name : name.trimmingCharacters(in: .whitespaces)
-        if raw != subscription.url {
-            subscription.url = raw
+        if normalized != subscription.url {
+            subscription.url = normalized
         }
         dismiss()
         onSave()
@@ -831,9 +876,8 @@ struct AddCalendarView: View {
             return
         }
         guard CalendarURL.confirmInsecureHTTP(normalized) else { return }
-        let raw = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        onAdd(trimmedName.isEmpty ? "Calendar" : trimmedName, raw)
+        onAdd(trimmedName.isEmpty ? "Calendar" : trimmedName, normalized)
         dismiss()
     }
 }
@@ -930,6 +974,8 @@ struct SectionTopKey: PreferenceKey {
         value.merge(nextValue(), uniquingKeysWith: { current, _ in current })
     }
 }
+
+private let settingsContentBottomKey = "__contentBottom"
 
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
@@ -1034,22 +1080,35 @@ struct SettingsView: View {
     // MARK: - Scroll content
 
     private var scrollContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                trackedSection(.calendars) { calendarsSection }
-                trackedSection(.native) { nativeSection }
-                trackedSection(.reminder) { reminderSection }
-                trackedSection(.general) { generalSection }
-                trackedSection(.about) { aboutSection }
+        GeometryReader { viewport in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    trackedSection(.calendars) { calendarsSection }
+                    trackedSection(.native) { nativeSection }
+                    trackedSection(.reminder) { reminderSection }
+                    trackedSection(.general) { generalSection }
+                    trackedSection(.about) { aboutSection }
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: SectionTopKey.self,
+                            value: [settingsContentBottomKey: geo.frame(in: .named("settingsScroll")).maxY]
+                        )
+                    }
+                    .frame(height: 0)
+                }
+                .padding(24)
+                .frame(maxWidth: 640)
+                .frame(maxWidth: .infinity)
             }
-            .padding(24)
-            .frame(maxWidth: 640)
-            .frame(maxWidth: .infinity)
-        }
-        .coordinateSpace(name: "settingsScroll")
-        .onPreferenceChange(SectionTopKey.self) { tops in
-            guard !suppressSelectionTracking else { return }
-            selectedSection = Self.activeSection(from: tops)
+            .coordinateSpace(name: "settingsScroll")
+            .onPreferenceChange(SectionTopKey.self) { tops in
+                guard !suppressSelectionTracking else { return }
+                selectedSection = Self.activeSection(
+                    from: tops,
+                    viewportHeight: viewport.size.height,
+                    contentBottom: tops[settingsContentBottomKey]
+                )
+            }
         }
     }
 
@@ -1079,14 +1138,24 @@ struct SettingsView: View {
             )
     }
 
-    /// The section whose header has scrolled closest past the top edge.
+    /// The section whose header is nearest the reading line below the top edge.
     static func activeSection(from tops: [String: CGFloat]) -> SettingsSection {
         let present = SettingsSection.allCases.filter { tops[$0.rawValue] != nil }
-        var current = present.first ?? .calendars
-        for section in present where (tops[section.rawValue] ?? 0) <= 140 {
-            current = section
+        return present.min {
+            abs((tops[$0.rawValue] ?? 0) - 140) < abs((tops[$1.rawValue] ?? 0) - 140)
+        } ?? .calendars
+    }
+
+    static func activeSection(from tops: [String: CGFloat], viewportHeight: CGFloat, contentBottom: CGFloat?) -> SettingsSection {
+        // The final card cannot normally reach the top threshold. At the exact
+        // bottom of the scroll view, select it rather than leaving General active.
+        if let bottom = contentBottom,
+           let firstTop = tops[SettingsSection.calendars.rawValue],
+           firstTop < 0,
+           bottom <= viewportHeight + 1 {
+            return .about
         }
-        return current
+        return activeSection(from: tops)
     }
 
     private var addButton: some View {

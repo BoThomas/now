@@ -10,6 +10,13 @@ ICONSET=".build/AppIcon.iconset"
 SDK_PATH="${SDK_PATH:-$(xcrun --show-sdk-path)}"
 MODULE_CACHE="$(pwd)/.build/ModuleCache"
 REQUIRE_IDENTITY=false
+SIGNING_IDENTITY_SHA1="${NOW_SIGNING_IDENTITY_SHA1:-A505B08900C56A28709479297A049525A2A187C6}"
+
+[[ "$SIGNING_IDENTITY_SHA1" =~ '^[[:xdigit:]]{40}$' ]] || {
+  echo "error: NOW_SIGNING_IDENTITY_SHA1 must be a 40-digit SHA-1 fingerprint" >&2
+  exit 1
+}
+SIGNING_IDENTITY_SHA1="${(U)SIGNING_IDENTITY_SHA1}"
 
 for arg in "$@"; do
   case "$arg" in
@@ -35,21 +42,53 @@ cp "$ICONSET/icon_512x512@2x.png" "$APP/Contents/Resources/AppIcon.png"
 
 cp Info.plist "$APP/Contents/Info.plist"
 
-# Sign with the stable self-signed "now Developer" identity when present — its
+# Sign with the exact stable self-signed identity when present — its
 # certificate hash anchors the code signature's designated requirement, so TCC
 # (Calendar permission) grants survive rebuilds and release updates. Without the
 # identity, fall back to ad-hoc signing (cdhash-anchored → permission re-asked
 # per build) — but only for local development builds: releases must never ship
 # ad-hoc (an update signed differently silently invalidates Calendar grants).
 # The key lives in the login keychain; never commit it (see AGENTS.md).
-if ! codesign --force --deep --sign "now Developer" --entitlements now.entitlements "$APP"; then
+STABLE_SIGNATURE=false
+AVAILABLE_IDENTITIES=$(security find-identity -v -p codesigning)
+if [[ "$AVAILABLE_IDENTITIES" == *"$SIGNING_IDENTITY_SHA1"* ]]; then
+  codesign --force --deep --sign "$SIGNING_IDENTITY_SHA1" --entitlements now.entitlements "$APP"
+  STABLE_SIGNATURE=true
+else
   if [[ "$REQUIRE_IDENTITY" == true ]]; then
-    echo "error: 'now Developer' identity not found, but stable signing is required" >&2
+    echo "error: signing identity $SIGNING_IDENTITY_SHA1 not found, but stable signing is required" >&2
     echo "       (releases must not fall back to ad-hoc — see AGENTS.md → Code signing)" >&2
     exit 1
   fi
-  echo "warning: 'now Developer' identity not found — signing ad-hoc (Calendar permission will be re-asked per build)"
+  echo "warning: signing identity $SIGNING_IDENTITY_SHA1 not found — signing ad-hoc (Calendar permission will be re-asked per build)"
   codesign --force --deep --sign - --entitlements now.entitlements "$APP"
+fi
+
+codesign --verify --deep --strict --verbose=2 "$APP"
+DESIGNATED_REQUIREMENT=$(codesign -d -r- "$APP" 2>&1) || {
+  echo "error: could not read the app's designated requirement" >&2
+  exit 1
+}
+[[ "$DESIGNATED_REQUIREMENT" == *"designated =>"* ]] || {
+  echo "error: signed app has no designated requirement" >&2
+  exit 1
+}
+
+if [[ "$STABLE_SIGNATURE" == true ]]; then
+  CERT_PREFIX=".build/signature-cert"
+  codesign -d --extract-certificates="$CERT_PREFIX" "$APP" >/dev/null 2>&1
+  ACTUAL_SHA1=$(openssl x509 -inform DER -in "${CERT_PREFIX}0" -noout -fingerprint -sha1 |
+    sed 's/^.*=//; s/://g' | tr '[:lower:]' '[:upper:]')
+  rm -f "${CERT_PREFIX}"*
+  [[ "$ACTUAL_SHA1" == "$SIGNING_IDENTITY_SHA1" ]] || {
+    echo "error: app was signed by unexpected identity $ACTUAL_SHA1" >&2
+    exit 1
+  }
+  EXPECTED_ROOT="certificate root = H\"${(L)SIGNING_IDENTITY_SHA1}\""
+  [[ "$DESIGNATED_REQUIREMENT" == *"$EXPECTED_ROOT"* ]] || {
+    echo "error: designated requirement is not anchored to $SIGNING_IDENTITY_SHA1" >&2
+    exit 1
+  }
 fi
 ditto -c -k --sequesterRsrc --keepParent "$APP" "outputs/${APP_NAME}.zip"
 

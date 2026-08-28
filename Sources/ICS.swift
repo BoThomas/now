@@ -37,6 +37,17 @@ struct RRULE: Equatable {
 
     static let weekdayMap: [String: Int] = ["SU": 1, "MO": 2, "TU": 3, "WE": 4, "TH": 5, "FR": 6, "SA": 7]
 
+    private static func parseIntegerList(_ value: String) -> [Int]? {
+        let parts = value.split(separator: ",", omittingEmptySubsequences: false)
+        guard !parts.isEmpty else { return nil }
+        var result: [Int] = []
+        for part in parts {
+            guard !part.isEmpty, let number = Int(part) else { return nil }
+            result.append(number)
+        }
+        return result
+    }
+
     /// Strict parser: anything this app cannot expand *correctly* returns nil
     /// (the event then falls back to a single occurrence and the feed gets a
     /// visible warning) instead of being silently approximated as something
@@ -78,14 +89,17 @@ struct RRULE: Equatable {
                 }
                 guard !byday.isEmpty else { return nil }
             case "BYMONTHDAY":
-                bymonthday = value.split(separator: ",").compactMap { Int($0) }
-                guard !bymonthday.isEmpty, bymonthday.allSatisfy({ $0 != 0 && (1...31).contains(abs($0)) }) else { return nil }
+                guard let parsed = parseIntegerList(value) else { return nil }
+                bymonthday = parsed
+                guard !bymonthday.isEmpty, bymonthday.allSatisfy({ $0 != 0 && $0 >= -31 && $0 <= 31 }) else { return nil }
             case "BYMONTH":
-                bymonth = value.split(separator: ",").compactMap { Int($0) }
+                guard let parsed = parseIntegerList(value) else { return nil }
+                bymonth = parsed
                 guard !bymonth.isEmpty, bymonth.allSatisfy({ (1...12).contains($0) }) else { return nil }
             case "BYSETPOS":
-                bysetpos = value.split(separator: ",").compactMap { Int($0) }
-                guard !bysetpos.isEmpty, bysetpos.allSatisfy({ $0 != 0 && (1...366).contains(abs($0)) }) else { return nil }
+                guard let parsed = parseIntegerList(value) else { return nil }
+                bysetpos = parsed
+                guard !bysetpos.isEmpty, bysetpos.allSatisfy({ $0 != 0 && $0 >= -366 && $0 <= 366 }) else { return nil }
             case "WKST":
                 guard let parsed = weekdayMap[value.uppercased()] else { return nil }
                 wkst = parsed
@@ -117,7 +131,7 @@ struct RRULE: Equatable {
         guard let weekday = weekdayMap[dayPart] else { return nil }
         let prefix = String(text.dropLast(2))
         if prefix.isEmpty { return ByDay(ordinal: nil, weekday: weekday) }
-        guard let ordinal = Int(prefix), ordinal != 0, (1...53).contains(abs(ordinal)) else { return nil }
+        guard let ordinal = Int(prefix), ordinal != 0, ordinal >= -53, ordinal <= 53 else { return nil }
         return ByDay(ordinal: ordinal, weekday: weekday)
     }
 
@@ -213,6 +227,7 @@ struct ParsedEvent {
 enum ICSParser {
     static let maxLines = 200_000
     static let maxLineLength = 10_000
+    private static let consumedDateProperties: Set<String> = ["DTSTART", "DTEND", "DTSTAMP", "EXDATE", "RDATE", "RECURRENCE-ID"]
 
     static func parse(_ text: String) -> (events: [ParsedEvent], warnings: [String]) {
         var events: [ParsedEvent] = []
@@ -352,7 +367,7 @@ enum ICSParser {
         var dtstamp: Date?
         var unsupportedRRULE: String?
         for property in properties {
-            if hasUnknownZone(property) {
+            if consumedDateProperties.contains(property.name), hasUnknownZone(property) {
                 warnings.append("Event \(uid.isEmpty ? "without UID" : "“\(uid)”") skipped: unknown time zone \(property.params["TZID"] ?? "?")")
                 return nil
             }
@@ -618,7 +633,7 @@ enum ICSParser {
         return TimeZone(abbreviation: tzid)
     }
 
-    /// RFC 5545 duration (`[+|-]P[nW][nD][T[nH][nM][nS]]`). Months are not part
+    /// RFC 5545 duration (`[+|-]P[nW]` or `[+|-]P[nD][T[nH][nM][nS]]`). Months are not part
     /// of the format — `P1M` is invalid. Returns nil for malformed input and
     /// for anything with a non-positive total (callers treat that as invalid).
     static func parseDuration(_ value: String) -> TimeInterval? {
@@ -633,6 +648,9 @@ enum ICSParser {
         var sawComponent = false
         var sawTimeComponent = false
         var inTime = false
+        var sawWeek = false
+        var sawDay = false
+        var lastTimeRank = 0
         var number = ""
         for ch in body {
             if ch.isNumber {
@@ -640,17 +658,27 @@ enum ICSParser {
                 continue
             }
             if ch == "T" {
-                guard !inTime, number.isEmpty else { return nil }
+                guard !inTime, !sawWeek, number.isEmpty else { return nil }
                 inTime = true
                 continue
             }
             guard !number.isEmpty, let n = Double(number) else { return nil }
             switch ch {
-            case "W": guard !inTime else { return nil }; total += n * 604800
-            case "D": guard !inTime else { return nil }; total += n * 86400
-            case "H": guard inTime else { return nil }; total += n * 3600; sawTimeComponent = true
-            case "M": guard inTime else { return nil }; total += n * 60; sawTimeComponent = true // no months in RFC durations
-            case "S": guard inTime else { return nil }; total += n; sawTimeComponent = true
+            case "W":
+                guard !inTime, !sawWeek, !sawDay, !sawComponent else { return nil }
+                sawWeek = true; total += n * 604800
+            case "D":
+                guard !inTime, !sawWeek, !sawDay else { return nil }
+                sawDay = true; total += n * 86400
+            case "H":
+                guard inTime, lastTimeRank < 1 else { return nil }
+                lastTimeRank = 1; total += n * 3600; sawTimeComponent = true
+            case "M":
+                guard inTime, lastTimeRank < 2 else { return nil }
+                lastTimeRank = 2; total += n * 60; sawTimeComponent = true // no months in RFC durations
+            case "S":
+                guard inTime, lastTimeRank < 3 else { return nil }
+                lastTimeRank = 3; total += n; sawTimeComponent = true
             default: return nil
             }
             sawComponent = true
@@ -690,14 +718,6 @@ enum ICSParser {
 }
 
 extension ParsedEvent {
-    /// True when a COUNT-limited rule is anchored so far before the window
-    /// (~55 years) that the expansion budget cannot reach the window — used to
-    /// warn instead of silently dropping the event's occurrences.
-    func countAnchoredFarInPast(windowStart: Date) -> Bool {
-        guard let rule = rrule, rule.count != nil, let start = dtStart else { return false }
-        return windowStart.timeIntervalSince(start) > TimeInterval(RRULEExpander.maxIterationsPerEvent) * 86400
-    }
-
     /// Attaches raw recurrence properties + parser diagnostics (kept out of the
     /// memberwise init used by the native-calendar path, which has none of them).
     func withRawRecurrence(exdateProperties: [ICSProperty], rdateProperties: [ICSProperty], recurrenceIDProperty: ICSProperty?, recurrenceRange: String?, unsupportedRRULE: String?) -> ParsedEvent {
@@ -760,6 +780,10 @@ enum RRULEExpander {
             return true
         }
 
+        // DTSTART is always the first recurrence-set member, even when it does
+        // not satisfy a BYxxx filter. COUNT includes it.
+        consider(anchor)
+
         switch rule.freq {
         case .daily, .weekly:
             var day = firstDay
@@ -768,7 +792,13 @@ enum RRULEExpander {
                     ? matchesDaily(day, cal: cal, rule: rule, anchor: anchor, interval: interval)
                     : matchesWeekly(day, cal: cal, rule: rule, anchor: anchor, anchorWeekday: cal.component(.weekday, from: anchor), interval: interval)
                 if matches {
-                    consider(day)
+                    if let occurrence = cal.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: time.second ?? 0, of: day), occurrence != dtStart {
+                        consider(day)
+                    }
+                } else if budget > 0 {
+                    budget -= 1
+                } else {
+                    exhausted = true
                 }
                 guard budget > 0, let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
                 day = next
@@ -783,7 +813,9 @@ enum RRULEExpander {
                 if monthsAlign(month, cal: cal, rule: rule, anchorComps: anchorComps, interval: interval) {
                     for day in matchingDays(ofMonth: month, cal: cal, rule: rule, anchorComps: anchorComps) {
                         guard day >= firstDay, day <= lastDay else { continue }
-                        consider(day)
+                        if let occurrence = cal.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: time.second ?? 0, of: day), occurrence != dtStart {
+                            consider(day)
+                        }
                         if exhausted { break }
                     }
                 }
@@ -832,7 +864,8 @@ enum RRULEExpander {
             return rule.bymonth.isEmpty || rule.bymonth.contains(monthNumber)
         case .yearly:
             guard (year - anchorYear) % interval == 0 else { return false }
-            return rule.bymonth.isEmpty ? monthNumber == anchorMonth : rule.bymonth.contains(monthNumber)
+            if !rule.bymonth.isEmpty { return rule.bymonth.contains(monthNumber) }
+            return rule.bymonthday.isEmpty ? monthNumber == anchorMonth : true
         default:
             return false
         }
@@ -871,20 +904,25 @@ enum RRULEExpander {
             }
             return doms
         }
+        let monthDays = rule.bymonthday.isEmpty ? nil : monthDayMatches(rule.bymonthday)
+        let weekDays = rule.byday.isEmpty ? nil : bydayMatches(rule.byday)
+        let candidates: Set<Int>
+        if let monthDays, let weekDays {
+            candidates = monthDays.intersection(weekDays)
+        } else {
+            candidates = monthDays ?? weekDays ?? []
+        }
         var doms: Set<Int>
         if !rule.bysetpos.isEmpty {
-            let base = rule.bymonthday.isEmpty ? bydayMatches(rule.byday) : monthDayMatches(rule.bymonthday)
-            let sorted = base.sorted()
+            let sorted = candidates.sorted()
             var selected = Set<Int>()
             for position in rule.bysetpos {
                 let index = position > 0 ? position - 1 : sorted.count + position
                 if index >= 0, index < sorted.count { selected.insert(sorted[index]) }
             }
             doms = selected
-        } else if !rule.bymonthday.isEmpty {
-            doms = monthDayMatches(rule.bymonthday)
-        } else if !rule.byday.isEmpty {
-            doms = bydayMatches(rule.byday)
+        } else if monthDays != nil || weekDays != nil {
+            doms = candidates
         } else if let anchorDay = anchorComps.day, anchorDay <= daysInMonth {
             doms = [anchorDay]
         } else {
@@ -1080,10 +1118,15 @@ enum ICSBuilder {
         var result: [MeetingEvent] = []
         var feedBudget = maxFeedRecurrenceBudget
         var budgetWarned = false
-        let groups = Dictionary(grouping: parsed.events.filter { !$0.isAllDay }, by: { $0.uid })
+        var eventCapWarned = false
+        var seenEventKeys = Set<String>()
+        let groups = Dictionary(grouping: parsed.events, by: { $0.uid })
         for (_, events) in groups {
             guard result.count < maxEventsPerFeed else {
-                warnings.append("Feed has more than \(maxEventsPerFeed) events — truncated")
+                if !eventCapWarned {
+                    eventCapWarned = true
+                    warnings.append("Feed has more than \(maxEventsPerFeed) events — truncated")
+                }
                 break
             }
             let master = latestRevision(of: events.filter { $0.recurrenceIDProperty == nil && $0.dtStart != nil })
@@ -1095,27 +1138,36 @@ enum ICSBuilder {
                     warnings.append("Unsupported RRULE \"\(m.unsupportedRRULEText!)\" — “\(m.title)” shows only its first occurrence")
                 }
                 guard m.status != "CANCELLED" else { continue }
-                if m.rrule != nil {
-                    var eventBudget = min(feedBudget, RRULEExpander.maxIterationsPerEvent)
+                if m.rrule != nil, !m.isAllDay {
+                    let initialBudget = min(feedBudget, RRULEExpander.maxIterationsPerEvent)
+                    var eventBudget = initialBudget
                     let dates = RRULEExpander.occurrences(of: m, windowStart: windowStart, windowEnd: windowEnd, budget: &eventBudget)
-                    feedBudget -= RRULEExpander.maxIterationsPerEvent - eventBudget
+                    feedBudget -= initialBudget - eventBudget
                     if feedBudget <= 0, !budgetWarned {
                         budgetWarned = true
                         warnings.append("Recurrence workload limit reached — some events may be missing")
                     }
-                    if eventBudget <= 0, dates.isEmpty, m.countAnchoredFarInPast(windowStart: windowStart) {
-                        warnings.append("“\(m.title)” repeats too far back to expand completely — some occurrences may be missing")
+                    if eventBudget <= 0 {
+                        warnings.append("“\(m.title)” reached its recurrence workload limit — some occurrences may be missing")
                     }
                     for date in dates { occurrences.append((date, m)) }
-                } else if let start = m.dtStart, start >= windowStart, start <= windowEnd {
+                } else if !m.isAllDay, let start = m.dtStart, start >= windowStart, start <= windowEnd {
                     occurrences.append((start, m))
                 }
                 // RDATE: extra occurrence dates beyond the rule.
-                for rdate in Self.resolvedDates(m.rdateProperties, masterTz: m.tz) {
-                    guard rdate >= windowStart, rdate <= windowEnd, rdate >= (m.dtStart ?? rdate),
-                          !m.exdates.contains(rdate),
-                          !occurrences.contains(where: { $0.start == rdate }) else { continue }
-                    occurrences.append((rdate, m))
+                if !m.isAllDay {
+                    let resolvedRDates = Self.resolvedDates(m.rdateProperties, masterTz: m.tz, limit: maxEventsPerFeed + 1)
+                    if resolvedRDates.count > maxEventsPerFeed, !eventCapWarned {
+                        eventCapWarned = true
+                        warnings.append("Feed has more than \(maxEventsPerFeed) events — recurrence dates truncated")
+                    }
+                    var occurrenceStarts = Set(occurrences.map(\.start))
+                    for rdate in resolvedRDates.prefix(maxEventsPerFeed) {
+                        guard rdate >= windowStart, rdate <= windowEnd, rdate >= (m.dtStart ?? rdate),
+                              !m.exdates.contains(rdate),
+                              occurrenceStarts.insert(rdate).inserted else { continue }
+                        occurrences.append((rdate, m))
+                    }
                 }
             }
             // Detached recurrence overrides.
@@ -1133,11 +1185,21 @@ enum ICSBuilder {
                     occurrences.remove(at: index)
                 }
                 guard override.status != "CANCELLED" else { continue }
+                guard !override.isAllDay else { continue }
                 let start = override.dtStart ?? rid
                 guard start >= windowStart, start <= windowEnd else { continue }
                 occurrences.append((start, Self.inheriting(override, from: master)))
             }
             for occurrence in occurrences {
+                let eventKey = "\(occurrence.event.uid)|\(Int(occurrence.start.timeIntervalSince1970))"
+                guard seenEventKeys.insert(eventKey).inserted else { continue }
+                guard result.count < maxEventsPerFeed else {
+                    if !eventCapWarned {
+                        eventCapWarned = true
+                        warnings.append("Feed has more than \(maxEventsPerFeed) events — truncated")
+                    }
+                    break
+                }
                 let end = occurrence.start.addingTimeInterval(occurrence.event.durationSeconds)
                 result.append(MeetingEvent(
                     uid: occurrence.event.uid,
@@ -1154,8 +1216,7 @@ enum ICSBuilder {
                 ))
             }
         }
-        let deduped = dedupe(result)
-        let events = deduped
+        let events = result
             .filter { $0.end > windowStart }
             .sorted { ($0.start, $0.title, $0.uid) < ($1.start, $1.title, $1.uid) }
         return (events, warnings)
@@ -1171,28 +1232,16 @@ enum ICSBuilder {
         (event.sequence, event.dtstamp ?? .distantPast)
     }
 
-    /// One entry per (uid, start) — duplicate revisions or an RDATE duplicating a
-    /// generated occurrence must not produce two identical cards.
-    private static func dedupe(_ events: [MeetingEvent]) -> [MeetingEvent] {
-        var seen = Set<String>()
-        var unique: [MeetingEvent] = []
-        for event in events {
-            if seen.insert("\(event.uid)|\(Int(event.start.timeIntervalSince1970))").inserted {
-                unique.append(event)
-            }
-        }
-        return unique
-    }
-
     /// Resolves EXDATE/RDATE values: their own TZID/`Z` when present, otherwise
     /// the master's DTSTART zone (never the local zone).
-    private static func resolvedDates(_ properties: [ICSProperty], masterTz: TimeZone?) -> [Date] {
+    private static func resolvedDates(_ properties: [ICSProperty], masterTz: TimeZone?, limit: Int? = nil) -> [Date] {
         var dates: [Date] = []
         for property in properties {
             for part in property.value.split(separator: ",") {
                 let piece = ICSProperty(name: property.name, params: property.params, value: String(part))
                 if let date = ICSParser.parseDate(piece, fallbackTimeZone: masterTz).date {
                     dates.append(date)
+                    if let limit, dates.count >= limit { return dates }
                 }
             }
         }

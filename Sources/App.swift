@@ -158,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // appear (form-only layout) — by design. The user's chosen frame is
             // remembered across launches via the autosave name.
             let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: min(940, screen.width), height: min(720, screen.height)), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 940, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "now · Settings"
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: SettingsView().environmentObject(store).environmentObject(alertController))
@@ -168,6 +168,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !window.setFrameUsingName("now-settings") {
                 window.center()
             }
+            // Clamp the titled outer frame, not just its content rectangle. This
+            // keeps the default 940×720 content size on normal displays while
+            // fitting the title bar and borders on smaller visible screens.
+            var frame = window.frame
+            let visibleScreen = NSScreen.screens.max {
+                $0.visibleFrame.intersection(frame).width * $0.visibleFrame.intersection(frame).height <
+                $1.visibleFrame.intersection(frame).width * $1.visibleFrame.intersection(frame).height
+            }?.visibleFrame ?? screen
+            frame.size.width = min(frame.width, visibleScreen.width)
+            frame.size.height = min(frame.height, visibleScreen.height)
+            frame.origin.x = min(max(frame.minX, visibleScreen.minX), visibleScreen.maxX - frame.width)
+            frame.origin.y = min(max(frame.minY, visibleScreen.minY), visibleScreen.maxY - frame.height)
+            window.setFrame(frame, display: false)
             settingsWindow = window
         }
         settingsWindow?.makeKeyAndOrderFront(nil)

@@ -255,7 +255,8 @@ enum SelfTest {
         c.expect(ICSParser.parseDuration("-PT15M") == -900, "-PT15M parses signed")
         // Zero / negative / malformed / unsupported values are invalid.
         c.expect(ICSParser.parseDuration("PT0S") == 0, "PT0S parses to zero (rejected at event level)")
-        for bad in ["P1M", "P", "PT", "garbage", "", "P1D3H", "PT1D", "P0.5D", "PT10", "P1DT"] {
+        for bad in ["P1M", "P", "PT", "garbage", "", "P1D3H", "PT1D", "P0.5D", "PT10", "P1DT",
+                    "P1W1D", "P1WT1H", "P1D1D", "PT1H1H", "PT1S1M", "PT1M1H"] {
             c.expect(ICSParser.parseDuration(bad) == nil, "invalid duration \(bad.isEmpty ? "(empty)" : bad) rejected")
         }
         let utc = TimeZone(identifier: "UTC")!
@@ -468,6 +469,37 @@ enum SelfTest {
         let setposDays = setposDates.map { (cal.component(.month, from: $0), cal.component(.day, from: $0)) }
         c.expect(setposDays.contains(where: { $0 == (8, 31) }) && setposDays.contains(where: { $0 == (9, 2) }) && setposDays.count == 2, "BYSETPOS 1/-1 (got \(setposDays))")
 
+        // Multiple BYxxx parts intersect before BYSETPOS is applied. In August
+        // 2026 the second of {24 MO, 26 WE} is the 26th, not the unfiltered 25th.
+        let intersected = build("""
+        BEGIN:VEVENT
+        UID:intersect@test
+        DTSTART:20260803T100000Z
+        SUMMARY:Intersected filters
+        RRULE:FREQ=MONTHLY;BYMONTHDAY=24,25,26;BYDAY=MO,WE;BYSETPOS=2
+        END:VEVENT
+        """)
+        c.expect(dates(intersected.events, uid: "intersect@test").map { cal.component(.day, from: $0) } == [26], "BYMONTHDAY/BYDAY intersect before BYSETPOS")
+
+        // DTSTART is always recurrence occurrence one, regardless of filters.
+        let mismatchedStart = build("""
+        BEGIN:VEVENT
+        UID:first@test
+        DTSTART:20260826T100000Z
+        SUMMARY:First despite filter
+        RRULE:FREQ=MONTHLY;BYMONTHDAY=27;COUNT=2
+        END:VEVENT
+        BEGIN:VEVENT
+        UID:firstexcluded@test
+        DTSTART:20260826T110000Z
+        SUMMARY:Excluded first
+        RRULE:FREQ=MONTHLY;BYMONTHDAY=27;COUNT=2
+        EXDATE:20260826T110000Z
+        END:VEVENT
+        """)
+        c.expect(dates(mismatchedStart.events, uid: "first@test").map { cal.component(.day, from: $0) } == [26, 27], "DTSTART included when filters mismatch")
+        c.expect(dates(mismatchedStart.events, uid: "firstexcluded@test").map { cal.component(.day, from: $0) } == [27], "EXDATE can remove mismatched DTSTART")
+
         // YEARLY with BYMONTH + ordinal BYDAY (2nd Tuesday of March) — view
         // the window from March 1.
         let marchNow = cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 3, day: 1, hour: 12))!
@@ -481,6 +513,42 @@ enum SelfTest {
         """, now: marchNow)
         let yearlyDates = dates(yearly.events, uid: "secondTueMar@test")
         c.expect(yearlyDates.map { cal.component(.day, from: $0) } == [10], "yearly BYMONTH=3 BYDAY=2TU → Mar 10 (got \(yearlyDates.map { cal.component(.day, from: $0) }))")
+
+        // YEARLY BYMONTHDAY without BYMONTH applies in every month, rather than
+        // being implicitly restricted to DTSTART's month.
+        let yearlyMonthDay = build("""
+        BEGIN:VEVENT
+        UID:yearmonthday@test
+        DTSTART:20260127T100000Z
+        SUMMARY:Every month in matching years
+        RRULE:FREQ=YEARLY;BYMONTHDAY=27
+        END:VEVENT
+        """)
+        let yearlyMonthDayParts = dates(yearlyMonthDay.events, uid: "yearmonthday@test").map { (cal.component(.month, from: $0), cal.component(.day, from: $0)) }
+        c.expect(yearlyMonthDayParts.count == 1 && yearlyMonthDayParts.first.map { $0 == (8, 27) } == true, "YEARLY BYMONTHDAY applies outside DTSTART month (got \(yearlyMonthDayParts))")
+
+        // Every scanned day consumes recurrence budget, including sparse
+        // COUNT rules whose BYDAY rarely matches.
+        if let sparse = ICSParser.makeEvent([
+            ICSProperty(name: "UID", params: [:], value: "sparse@test"),
+            ICSProperty(name: "DTSTART", params: [:], value: "20260801T100000Z"),
+            ICSProperty(name: "RRULE", params: [:], value: "FREQ=DAILY;BYDAY=MO;COUNT=100"),
+        ]) {
+            var sparseBudget = 3
+            _ = RRULEExpander.occurrences(of: sparse,
+                windowStart: cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 8, day: 1))!,
+                windowEnd: cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 9, day: 30))!,
+                budget: &sparseBudget)
+            c.expect(sparseBudget == 0, "sparse recurrence scanning exhausts work budget")
+        } else {
+            c.expect(false, "sparse recurrence fixture parsed")
+        }
+
+        // A malformed numeric list invalidates the whole RRULE; valid elements
+        // must not survive via compactMap.
+        for text in ["FREQ=MONTHLY;BYMONTHDAY=1,x", "FREQ=MONTHLY;BYMONTHDAY=1,-9223372036854775808", "FREQ=YEARLY;BYMONTH=8,x", "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=1,x"] {
+            c.expect(RRULE.parse(text, eventTz: utc) == nil, "malformed numeric RRULE list rejected: \(text)")
+        }
 
         // Leap-day yearly: only leap years produce occurrences (2028 is next).
         let leap = build("""
@@ -536,6 +604,44 @@ enum SelfTest {
         """)
         let oldDates = dates(old.events, uid: "oldweekly@test")
         c.expect(!oldDates.isEmpty, "1995-anchored weekly still expands into the window")
+
+        // Partial output must still warn when a COUNT rule exhausts its own
+        // iteration budget before reaching the end of the fetch window.
+        let limitedAnchor = now.addingTimeInterval(-19_995 * 86400)
+        let partiallyLimited = build("""
+        BEGIN:VEVENT
+        UID:partialbudget@test
+        DTSTART:\(Self.icsStamp(limitedAnchor, tz: utc))
+        SUMMARY:Partially expanded
+        RRULE:FREQ=DAILY;COUNT=30000
+        END:VEVENT
+        """)
+        c.expect(!dates(partiallyLimited.events, uid: "partialbudget@test").isEmpty, "budget-limited recurrence can produce partial output")
+        c.expect(partiallyLimited.warnings.contains { $0.contains("recurrence workload limit") }, "partial recurrence budget exhaustion warns")
+
+        // The feed cap is enforced while emitting one large UID group, not
+        // only between groups. Generate compact RDATE lines to avoid a fixture.
+        var cappedBody = """
+        BEGIN:VEVENT
+        UID:capped@test
+        DTSTART:20260826T000000Z
+        SUMMARY:Large recurrence set
+
+        """
+        var stamps: [String] = []
+        let capStart = cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 8, day: 26))!
+        for minute in 1...10_001 {
+            stamps.append(Self.icsStamp(capStart.addingTimeInterval(TimeInterval(minute * 60)), tz: utc))
+            if stamps.count == 400 {
+                cappedBody += "RDATE:" + stamps.joined(separator: ",") + "\n"
+                stamps.removeAll(keepingCapacity: true)
+            }
+        }
+        if !stamps.isEmpty { cappedBody += "RDATE:" + stamps.joined(separator: ",") + "\n" }
+        cappedBody += "END:VEVENT"
+        let capped = build(cappedBody)
+        c.expect(dates(capped.events, uid: "capped@test").count == ICSBuilder.maxEventsPerFeed, "single UID group capped at \(ICSBuilder.maxEventsPerFeed)")
+        c.expect(capped.warnings.contains { $0.contains("more than \(ICSBuilder.maxEventsPerFeed) events") }, "single UID cap warns")
 
         // DST: a daily 02:30 Berlin meeting across the 2026-03-29 spring-forward
         // gap and the 2026-10-25 fall-back overlap yields exactly one occurrence
@@ -726,6 +832,24 @@ enum SelfTest {
         c.expect(!cancelled.events.contains { $0.start == cancelledDate }, "bare cancelled override removes occurrence")
         c.expect(cancelled.events.contains { $0.start == cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 8, day: 26, hour: 10))! }, "other occurrences survive bare cancellation")
 
+        // An all-day detached override still suppresses its timed master
+        // occurrence, but is not itself shown as a meeting.
+        let allDayOverride = build("""
+        BEGIN:VEVENT
+        UID:alldayov@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Timed master
+        RRULE:FREQ=DAILY
+        END:VEVENT
+        BEGIN:VEVENT
+        UID:alldayov@test
+        RECURRENCE-ID:20260827T100000Z
+        DTSTART;VALUE=DATE:20260827
+        SUMMARY:All-day replacement
+        END:VEVENT
+        """)
+        c.expect(!allDayOverride.events.contains { $0.uid == "alldayov@test" && cal.component(.day, from: $0.start) == 27 }, "all-day override suppresses timed occurrence and stays hidden")
+
         // Moved OUT of the window: the original occurrence disappears and the
         // override (outside) is not emitted.
         let movedOut = build("""
@@ -841,6 +965,25 @@ enum SelfTest {
         c.expect(range.warnings.contains { $0.contains("RANGE") }, "RANGE=THISANDFUTURE warns")
         c.expect(range.events.contains { $0.uid == "range@test" && $0.title == "Range master" && $0.start == cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 8, day: 27, hour: 10))! }, "RANGE override ignored, master occurrence kept")
         c.expect(!range.events.contains { $0.title == "Range override" }, "RANGE override not applied one-off")
+
+        // An override can replace DTSTART even when DTSTART did not satisfy the
+        // master's BYMONTHDAY filter.
+        let firstOverride = build("""
+        BEGIN:VEVENT
+        UID:firstov@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Filtered master
+        RRULE:FREQ=MONTHLY;BYMONTHDAY=27;COUNT=2
+        END:VEVENT
+        BEGIN:VEVENT
+        UID:firstov@test
+        RECURRENCE-ID:20260826T100000Z
+        DTSTART:20260826T140000Z
+        SUMMARY:Moved first
+        END:VEVENT
+        """)
+        c.expect(!firstOverride.events.contains { $0.uid == "firstov@test" && $0.start == cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 8, day: 26, hour: 10))! }, "override suppresses mismatched DTSTART")
+        c.expect(firstOverride.events.contains { $0.uid == "firstov@test" && $0.title == "Moved first" }, "override replaces mismatched DTSTART")
     }
 
     // MARK: - Parser compliance
@@ -904,6 +1047,18 @@ enum SelfTest {
         c.expect(!statusFeed.contains { $0.uid == "spacedcancel@test" }, "padded CANCELLED skips event")
         c.expect(!statusFeed.contains { $0.uid == "lowercancel@test" }, "lowercase cancelled skips event")
         c.expect(statusFeed.contains { $0.uid == "tentative@test" }, "TENTATIVE stays")
+
+        // TZID parameters on ignored/non-date properties are inert. Only date
+        // properties whose values are consumed can make an event unsafe.
+        let ignoredTZID = ICSBuilder.meetings(fromICS: wrap("""
+        BEGIN:VEVENT
+        UID:ignoredtz@test
+        DTSTART:20260826T130000Z
+        SUMMARY;TZID=Mars/Olympus:TZID is irrelevant here
+        END:VEVENT
+        """), subscription: CalendarSubscription(name: "T", url: "https://t.example.com/cal.ics", colorIndex: 0), now: now)
+        c.expect(ignoredTZID.events.contains { $0.uid == "ignoredtz@test" }, "unknown TZID on non-date property ignored")
+        c.expect(!ignoredTZID.warnings.contains { $0.contains("unknown time zone") }, "irrelevant TZID does not warn")
 
         // Multiple conference properties: a garbage first value must not hide a
         // valid later one; ATTACH behaves the same.
@@ -986,12 +1141,12 @@ enum SelfTest {
 
     static func reminderTests(_ c: inout Checker) {
         let cal = UUID()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
         func event(_ uid: String, startIn: TimeInterval, duration: TimeInterval) -> MeetingEvent {
-            let start = Date().addingTimeInterval(startIn)
+            let start = now.addingTimeInterval(startIn)
             return MeetingEvent(uid: uid, title: uid, start: start, end: start.addingTimeInterval(duration),
                                 location: nil, notes: nil, link: nil, calendarID: cal, calendarName: "Cal", colorIndex: 0)
         }
-        let now = Date()
 
         // Normal delivery: inside the lead window, before start.
         let imminent = event("imminent", startIn: 120, duration: 1800)
@@ -1008,9 +1163,10 @@ enum SelfTest {
         // … an ENDED meeting never does.
         let ended = event("ended", startIn: -3600, duration: 1800)
         c.expect(AppStore.dueForAlert(events: [ended], alerted: [], snoozed: [:], leadSeconds: 300, now: now).isEmpty, "ended meeting never fires")
-        // Exactly at end: not before it started+0? start == end-edge: now == end is allowed by <=
+        // The end boundary is exclusive for both first delivery and snooze.
         let atEnd = event("atend", startIn: -1800, duration: 1800)
-        c.expect(AppStore.dueForAlert(events: [atEnd], alerted: [], snoozed: [:], leadSeconds: 300, now: now).map(\.uid) == ["atend"], "meeting at its end instant still counts as running")
+        c.expect(AppStore.dueForAlert(events: [atEnd], alerted: [], snoozed: [:], leadSeconds: 300, now: now).isEmpty, "meeting at its end instant is over")
+        c.expect(AppStore.dueForAlert(events: [atEnd], alerted: [atEnd.id], snoozed: [atEnd.id: now.addingTimeInterval(-5)], leadSeconds: 300, now: now).isEmpty, "snooze does not re-fire at meeting end")
 
         // Already alerted stays quiet; snooze re-fires on expiry while running.
         c.expect(AppStore.dueForAlert(events: [imminent], alerted: [imminent.id], snoozed: [:], leadSeconds: 300, now: now).isEmpty, "alerted event quiet")
@@ -1092,6 +1248,8 @@ enum SelfTest {
         c.expect(upper?.leadSeconds == 7200, "oversized lead clamps to 7200")
         c.expect(upper?.refreshMinutes == 30 || upper?.refreshMinutes == 60, "45 min snaps to a picker value (got \(String(describing: upper?.refreshMinutes)))")
         c.expect(upper?.lateMinutes == -1, "-3 snaps to -1 (got \(String(describing: upper?.lateMinutes)))")
+        let extremes = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"refreshMinutes\":-9223372036854775808,\"lateMinutes\":-9223372036854775808}".utf8))
+        c.expect(extremes?.refreshMinutes == 5 && extremes?.lateMinutes == -1, "Int.min settings normalize without overflow")
 
         // Palette positive modulo: any index (incl. extremes) maps without trapping.
         c.expect(Palette.nsColor(Int.min) == Palette.nsColor(Int.min % 10 + 10), "Int.min palette index safe")
@@ -1108,14 +1266,35 @@ enum SelfTest {
         c.expect(AppStore.resolvedLoginItemState(desired: true, failed: false, status: .requiresApproval) == .requiresApproval, "requires approval")
         c.expect(AppStore.resolvedLoginItemState(desired: true, failed: true, status: .notRegistered) == .failed, "registration failure")
         c.expect(AppStore.resolvedLoginItemState(desired: false, failed: true, status: .enabled) == .failed, "unregistration failure")
+        let failedRegister = AppStore.resolvedLoginItemOutcome(desired: true, operationFailed: true, status: .notRegistered)
+        c.expect(!failedRegister.desired && failedRegister.state == .failed, "failed registration restores disabled intent and reports failure")
+        let failedUnregister = AppStore.resolvedLoginItemOutcome(desired: false, operationFailed: true, status: .enabled)
+        c.expect(failedUnregister.desired && failedUnregister.state == .enabled, "failed unregister restores enabled intent and state")
 
         // URL normalization for duplicate prevention.
         c.expect(CalendarURL.normalize("webcal://calendar.google.com/calendar/ical/x/basic.ics") == "https://calendar.google.com/calendar/ical/x/basic.ics", "webcal normalized to https")
         c.expect(CalendarURL.normalize("HTTPS://Example.COM/path/") == "https://example.com/path", "case + trailing slash normalized")
         c.expect(CalendarURL.normalize("https://example.com/path?token=ABC") == "https://example.com/path?token=ABC", "token query preserved")
         c.expect(CalendarURL.normalize("https://a.com/x?token=ABC") != CalendarURL.normalize("https://a.com/x?token=abc"), "token stays case-sensitive (different feeds)")
+        c.expect(CalendarURL.normalize("webcal://EXAMPLE.com:8443/a%2Fb?q=x%2Fy&x=1&x=2") == "https://example.com:8443/a%2Fb?q=x%2Fy&x=1&x=2", "webcal normalization preserves port and encoded/repeated query values")
+        c.expect(CalendarURL.normalize("https://example.com/a%2Fb") != CalendarURL.normalize("https://example.com/a/b"), "encoded slash stays distinct from path separator")
         c.expect(CalendarURL.normalize("not a url") == nil, "garbage rejected")
         c.expect(CalendarURL.normalize("ftp://example.com/cal.ics") == nil, "non-http scheme rejected")
+
+        let sectionTops: [String: CGFloat] = [
+            SettingsSection.calendars.rawValue: -900,
+            SettingsSection.native.rawValue: -500,
+            SettingsSection.reminder.rawValue: -100,
+            SettingsSection.general.rawValue: 170,
+            SettingsSection.about.rawValue: 620,
+        ]
+        c.expect(SettingsView.activeSection(from: sectionTops) == .general, "scroll tracking selects General when it is nearest the reading line")
+        c.expect(SettingsView.activeSection(from: sectionTops, viewportHeight: 720, contentBottom: 720) == .about, "scroll tracking selects About at document bottom")
+
+        let windowStart = Date(timeIntervalSince1970: 1_800_000_000)
+        let windowEnd = windowStart.addingTimeInterval(3600)
+        c.expect(NativeCalendarSource.isWithinFetchWindow(start: windowEnd, end: windowEnd.addingTimeInterval(60), windowStart: windowStart, windowEnd: windowEnd), "native fetch includes a start exactly at window end")
+        c.expect(!NativeCalendarSource.isWithinFetchWindow(start: windowEnd.addingTimeInterval(0.001), end: windowEnd.addingTimeInterval(60), windowStart: windowStart, windowEnd: windowEnd), "native fetch excludes starts after window end")
 
         // Tooltip wrapping: overlong tokens (URLs) get chunked.
         let longToken = "https://example.com/very/long/path/with/a/secret/token/that/keeps/going/on"
@@ -1207,8 +1386,9 @@ enum SelfTest {
         disabledB.isEnabled = false
         let disabled = AppStore.mergeICS(current: current, results: [
             FetchResult(subscription: subB, events: [event("b2", cal: subB.id, minutesFromNow: 1)], error: nil),
-        ], live: [subA, disabledB], previousErrors: [:])
+        ], live: [subA, disabledB], previousErrors: [subB.id: "stale error"], previousWarnings: [subB.id: "stale warning"])
         c.expect(disabled.events.map(\.id) == [cachedA.id], "disabled subscription's late result dropped with its events")
+        c.expect(disabled.errors[subB.id] == nil && disabled.warnings[subB.id] == nil, "disabled subscription diagnostics are pruned")
 
         // URL edited mid-flight: old-URL result is stale and dropped; cached events kept.
         subA.url = "https://a.example.com/edited.ics"
@@ -1245,8 +1425,10 @@ enum SelfTest {
         let resyncID = tracker.begin(subscriptionID: subC.id)
         let supersededFull = AppStore.mergeICS(current: [cachedC], results: [
             FetchResult(subscription: subC, events: [event("c4", cal: subC.id, minutesFromNow: 5)], error: nil, requestID: fullID),
-        ], live: [subC, subD], previousErrors: [:], latestRequestIDs: tracker.latestPerSubscription)
+        ], live: [subC, subD], previousErrors: [subC.id: "new targeted failure"], previousWarnings: [subC.id: "new targeted warning"], latestRequestIDs: tracker.latestPerSubscription)
         c.expect(supersededFull.events.map(\.id) == [cachedC.id], "full refresh result superseded by newer targeted resync")
+        c.expect(supersededFull.errors[subC.id] == "new targeted failure" && supersededFull.warnings[subC.id] == "new targeted warning", "superseded full refresh preserves newer targeted diagnostics")
+        c.expect(!supersededFull.allSucceeded, "superseded full refresh cannot advance last successful sync")
         let currentResync = AppStore.mergeICS(current: [cachedC], results: [
             FetchResult(subscription: subC, events: [event("c5", cal: subC.id, minutesFromNow: 5)], error: nil, requestID: resyncID),
         ], live: [subC, subD], previousErrors: [:], latestRequestIDs: tracker.latestPerSubscription)

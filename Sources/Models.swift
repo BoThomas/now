@@ -53,19 +53,26 @@ struct AppSettings: Codable, Equatable {
 
     init() {}
 
+    private static func nearest(_ value: Int, in allowed: [Int], default fallback: Int) -> Int {
+        guard let first = allowed.first, let last = allowed.last else { return fallback }
+        if value <= first { return first }
+        if value >= last { return last }
+        return allowed.min(by: { abs($0 - value) < abs($1 - value) }) ?? fallback
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let lead = try c.decodeIfPresent(Int.self, forKey: .leadSeconds) ?? 300
         leadSeconds = min(max(lead, Self.leadSecondsRange.lowerBound), Self.leadSecondsRange.upperBound)
         let refresh = try c.decodeIfPresent(Int.self, forKey: .refreshMinutes) ?? 15
-        refreshMinutes = Self.allowedRefreshMinutes.min(by: { abs($0 - refresh) < abs($1 - refresh) }) ?? 15
+        refreshMinutes = Self.nearest(refresh, in: Self.allowedRefreshMinutes, default: 15)
         soundEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? true
         let sound = try c.decodeIfPresent(String.self, forKey: .soundName) ?? "Hero"
         soundName = AppStore.soundNames.contains(sound) ? sound : "Hero"
         showMenuBarCountdown = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarCountdown) ?? true
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
         let late = try c.decodeIfPresent(Int.self, forKey: .lateMinutes) ?? 0
-        lateMinutes = Self.allowedLateMinutes.min(by: { abs($0 - late) < abs($1 - late) }) ?? 0
+        lateMinutes = Self.nearest(late, in: Self.allowedLateMinutes, default: 0)
         skipDeclined = try c.decodeIfPresent(Bool.self, forKey: .skipDeclined) ?? true
     }
 }

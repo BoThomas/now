@@ -99,7 +99,7 @@ final class NativeCalendarSource {
     /// windowStart (long-running events that began before the window are not
     /// resurrected from ICS either).
     ///
-    /// Latency budget (see review checklist): `events(matching:)` is synchronous
+    /// Latency budget: `events(matching:)` is synchronous
     /// on the main thread by design. Budget: < 50 ms warm, < 500 ms cold
     /// (right after launch or wake) for a representative multi-account store.
     /// `--native` prints per-calendar timings to check this.
@@ -109,16 +109,24 @@ final class NativeCalendarSource {
         let windowEnd = now.addingTimeInterval(14 * 86400)
         let ekCalendars = calendars.compactMap { store.calendar(withIdentifier: $0.ekIdentifier) }
         guard !ekCalendars.isEmpty else { return [] }
-        let predicate = store.predicateForEvents(withStart: windowStart, end: windowEnd, calendars: ekCalendars)
+        // EventKit treats the predicate end as exclusive, while this app's
+        // window includes an event starting exactly at windowEnd. Extend only
+        // enough to cross that boundary, then enforce the exact window below.
+        let predicateEnd = windowEnd.addingTimeInterval(0.001)
+        let predicate = store.predicateForEvents(withStart: windowStart, end: predicateEnd, calendars: ekCalendars)
         var result: [MeetingEvent] = []
         for ekEvent in store.events(matching: predicate) {
-            guard ekEvent.startDate >= windowStart, ekEvent.startDate <= windowEnd, ekEvent.endDate > windowStart else { continue }
+            guard Self.isWithinFetchWindow(start: ekEvent.startDate, end: ekEvent.endDate, windowStart: windowStart, windowEnd: windowEnd) else { continue }
             guard let ekCalendar = ekEvent.calendar else { continue }
             guard let native = calendars.first(where: { $0.ekIdentifier == ekCalendar.calendarIdentifier }) else { continue }
             guard let event = Self.meetingEvent(from: ekEvent, calendarTitle: ekCalendar.title, native: native, skipDeclined: skipDeclined) else { continue }
             result.append(event)
         }
         return result.sorted { ($0.start, $0.title, $0.uid) < ($1.start, $1.title, $1.uid) }
+    }
+
+    nonisolated static func isWithinFetchWindow(start: Date, end: Date, windowStart: Date, windowEnd: Date) -> Bool {
+        start >= windowStart && start <= windowEnd && end > windowStart
     }
 
     /// EKEvent has no public conference property — the join link lives in

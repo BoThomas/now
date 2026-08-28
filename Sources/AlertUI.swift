@@ -139,7 +139,7 @@ final class AlertController: ObservableObject {
         }
     }
 
-    /// Snooze re-fires while `now <= event.end` (AppStore.tick) — a running meeting can still be snoozed.
+    /// Snooze re-fires while `now < event.end` (AppStore.tick) — a running meeting can still be snoozed.
     private var isSnoozeable: Bool {
         let now = Date()
         return shownEvents.contains { now < $0.end }

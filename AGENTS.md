@@ -14,7 +14,7 @@ Native macOS menu bar app for meeting reminders (plain Swift files in `Sources/`
 - `Sources/SettingsUI.swift` — settings window views.
 - `Sources/App.swift` — `AppDelegate`, `@main` entry, `--parse` CLI.
 - `Sources/SelfTest.swift` — selftest.
-- `build-app.sh` — builds `outputs/now.app` with `swiftc` (compiles `Sources/*.swift`, Swift 5 mode, target `arm64-apple-macos13.0`, SDK `MacOSX15.4.sdk`), generates icons via `make-icon.swift` (root, separate tool — do NOT move it into Sources/), signs with the self-signed "now Developer" identity (ad-hoc fallback) + `now.entitlements`, zips.
+- `build-app.sh` — builds `outputs/now.app` with `swiftc` (compiles `Sources/*.swift`, Swift 5 mode, target `arm64-apple-macos13.0`, active SDK from `xcrun`, overridable with `SDK_PATH`), generates icons via `make-icon.swift` (root, separate tool — do NOT move it into Sources/), signs with the exact stable identity fingerprint (ad-hoc fallback) + `now.entitlements`, verifies the signature/designated requirement, then zips.
 - `release.sh` — release pipeline (see Releasing below). `CHANGELOG.md` is generated/maintained by it.
 - `Info.plist` — `LSUIElement=true` (menu bar only, no Dock icon), bundle ID `com.thomasboch.now`.
 - Persistence: UserDefaults key `local.tboch.now.state.v1` (custom key, versioned), JSON of subscriptions + settings. Legacy `local.tboch.now` domain is migrated on first read (old bundle ID).
@@ -36,7 +36,7 @@ Always run the build + selftest after changes. A GUI smoke test (launch, check i
 `./release.sh` is the agent-friendly release pipeline: version bump (patch/minor/major or explicit `X.Y.Z`), prepends a CHANGELOG.md entry, sets Info.plist version/build, builds + selftests, commits, tags `vX.Y.Z`, pushes, and creates a GitHub release with `now-vX.Y.Z.zip` attached.
 
 - `./release.sh patch --notes $'- Fixed X\n- Added Y' --yes`
-- Flags: `--dry-run` (plan only), `--repo owner/name` (default `BoThomas/now`), `--yes` (skip confirm). Requires a clean tree and an authenticated `gh`.
+- Flags: `--dry-run` (plan only), `--repo owner/name` (default `BoThomas/now`), `--yes` (skip confirm). A release, including a dry run, requires a clean `main` tracking and exactly synchronized with both the local and live `origin/main`, authenticated `gh`, the exact stable signing identity, and no matching local or remote tag; explicit versions must increase. Preflights never fetch or mutate the repository.
 - README's Download section links to `/releases/latest`, so it always points at the newest release — no README edits needed per release.
 - Repo topics are already set on `BoThomas/now` — nothing to do per release.
 
@@ -56,7 +56,7 @@ The EventKit counterpart of `--parse`: prints authorization status, every EKCale
 
 TCC grants (Calendar permission) are keyed to the code signature's *designated requirement*. Ad-hoc signing anchors the DR to the binary's cdhash → every rebuild = "a different app" = re-prompt. So release/dev builds are signed with a self-signed identity **"now Developer"** (RSA-2048, codeSigning EKU, valid to 2036) whose certificate hash anchors the DR instead — grants survive rebuilds and release updates.
 
-- The identity lives in the **login keychain** of the dev machine; `build-app.sh` uses it when present and falls back to ad-hoc with a warning.
+- The identity lives in the **login keychain** of the dev machine. Its expected SHA-1 fingerprint is `A505B08900C56A28709479297A049525A2A187C6`; `build-app.sh` signs by that exact fingerprint and falls back to ad-hoc with a warning unless `--require-identity` is set. `NOW_SIGNING_IDENTITY_SHA1` is the deliberate certificate-rotation override and must also be supplied to release preflights.
 - Backup: the `.p12` (with its password) lives **only** in the password manager (1Password/Bitwarden file attachment) — there is deliberately no on-disk copy. Key material must NEVER be committed (`.gitignore` blocks `*.p12/*.pem/*.key`).
 - Restore on a new machine:
   ```bash
@@ -81,7 +81,7 @@ TCC grants (Calendar permission) are keyed to the code signature's *designated r
 - **Feed line endings/folding**: RFC 5545 continuation lines (leading space/tab) are unfolded before parsing; text values are unescaped (`\n`, `\,`, `\;`, `\\`).
 - **Window**: events kept if start within −6h…+14d of fetch time; all-day and `STATUS:CANCELLED` events are always skipped. If a user's events "don't show up," check they're actually in the future.
 - **Late visibility**: started meetings stay in the menu bar/menu with a negative countdown (`-3m`) per setting `lateMinutes` (−1 = hide once started, 0 = until end, N = N min after start). Running events take precedence over future ones in the menu bar label.
-- **Snooze re-fire**: a snoozed alert re-fires when the snooze expires as long as `now <= event.end` — including after the meeting has started. Only a snooze ending after the meeting end stays dismissed.
+- **Snooze re-fire**: a snoozed alert re-fires when the snooze expires as long as `now < event.end` — including after the meeting has started. A snooze ending at or after the meeting end stays dismissed.
 - **Transient event omissions**: a fetch can briefly miss an event (`.EKEventStoreChanged` mid-CalDAV-sync, one bad/empty ICS response). `commitEvents` therefore prunes `alerted`/`snoozed` only for ids missing from **two consecutive commits** (`previousCommitIDs`) — a single miss keeps bookkeeping so a reappearing event doesn't re-alert or lose its snooze. Lagging bookkeeping is inert (`tick()` iterates `events` only).
 - **Auth revocation**: `appBecameActive` re-fetches on ANY EventKit status change — a deny must clear native events immediately (fetchNativeEvents' unauthorized branch wipes them), not at the next 15-min refresh.
 - **EventKit native calendars** (see `docs/plans/native-calendar-integration.md` for the full research):
