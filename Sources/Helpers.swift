@@ -100,6 +100,15 @@ enum Fmt {
         relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 
+    /// Uppercase day-section header ("TODAY", "TOMORROW", "FRI, AUG 28") shared by
+    /// the menu bar dropdown and the settings event lists.
+    static func dayHeader(for day: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(day) { return "Today".localizedUppercase }
+        if calendar.isDateInTomorrow(day) { return "Tomorrow".localizedUppercase }
+        return day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)).localizedUppercase
+    }
+
     /// Truncates to `limit` grapheme clusters and appends an ellipsis, like SwiftUI's
     /// `.lineLimit(1)` + `.truncationMode(.tail)` does in the settings event rows.
     static func ellipsized(_ text: String, limit: Int) -> String {

@@ -102,18 +102,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func dayHeaderItem(for day: Date) -> NSMenuItem {
         let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        item.attributedTitle = NSAttributedString(string: Self.dayHeaderText(for: day), attributes: [
+        item.attributedTitle = NSAttributedString(string: Fmt.dayHeader(for: day), attributes: [
             .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
             .foregroundColor: NSColor.secondaryLabelColor
         ])
         return item
-    }
-
-    private static func dayHeaderText(for day: Date) -> String {
-        let calendar = Calendar.current
-        if calendar.isDateInToday(day) { return "Today".localizedUppercase }
-        if calendar.isDateInTomorrow(day) { return "Tomorrow".localizedUppercase }
-        return day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)).localizedUppercase
     }
 
     /// Multi-line hover tooltip: title, when, location, notes. Values that are nothing

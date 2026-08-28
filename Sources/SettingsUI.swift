@@ -221,71 +221,99 @@ struct PresetButtonStyle: ButtonStyle {
     }
 }
 
-/// Expandable "upcoming events" list shared by ICS subscription rows and native
-/// Apple Calendar rows — same grammar in both places.
+/// Events grouped under one uppercase day header (same `Fmt.dayHeader` style as the
+/// menu bar dropdown), so each row is a single line: time + title.
 struct UpcomingEventList: View {
+    /// All visible events for the calendar; collapsed to `collapsedLimit` rows
+    /// until "+ N more" is used.
     let events: [MeetingEvent]
-    let hasMoreEvents: Bool
     let error: String?
     let colorHex: String
 
+    private static let collapsedLimit = 8
+
+    /// Local expand state — the list is unmounted when the calendar row collapses,
+    /// so this resets by itself; the parent never tracks it.
+    @State private var showAll = false
+
+    private var shown: [MeetingEvent] {
+        showAll ? events : Array(events.prefix(Self.collapsedLimit))
+    }
+
+    private var overflowCount: Int {
+        max(0, events.count - Self.collapsedLimit)
+    }
+
+    private struct DayGroup: Identifiable {
+        let day: Date
+        var events: [MeetingEvent]
+        var id: Date { day }
+    }
+
+    private func dayGroups(from events: [MeetingEvent]) -> [DayGroup] {
+        var groups: [DayGroup] = []
+        for event in events {
+            let day = Calendar.current.startOfDay(for: event.start)
+            if !groups.isEmpty, groups[groups.count - 1].day == day {
+                groups[groups.count - 1].events.append(event)
+            } else {
+                groups.append(DayGroup(day: day, events: [event]))
+            }
+        }
+        return groups
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             if events.isEmpty {
                 Text(error != nil ? "No events — fix the sync error above" : "No upcoming events in the next two weeks")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(events) { event in
-                    HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(dayText(event))
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                            Text(Fmt.time.string(from: event.start))
-                                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                        }
-                        .frame(width: 60, alignment: .leading)
-                        Text(event.title.isEmpty ? "Untitled" : event.title)
-                            .font(.system(size: 11))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer()
-                        if let link = event.link {
-                            Button {
-                                NSWorkspace.shared.open(link)
-                            } label: {
-                                Label(hostText(link), systemImage: "video.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Palette.color(hex: colorHex))
+                ForEach(dayGroups(from: shown)) { group in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(Fmt.dayHeader(for: group.day))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(group.events) { event in
+                            HStack(spacing: 8) {
+                                Text(Fmt.time.string(from: event.start))
+                                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                                    .frame(width: 60, alignment: .leading)
+                                Text(event.title.isEmpty ? "Untitled" : event.title)
+                                    .font(.system(size: 11))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Spacer()
+                                if let link = event.link {
+                                    Button {
+                                        NSWorkspace.shared.open(link)
+                                    } label: {
+                                        Label(hostText(link), systemImage: "video.fill")
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(Palette.color(hex: colorHex))
+                                    }
+                                    .buttonStyle(.link)
+                                    .cursor(.pointingHand)
+                                    .help("Open \(link.absoluteString)")
+                                }
                             }
-                            .buttonStyle(.link)
-                            .cursor(.pointingHand)
-                            .help("Open \(link.absoluteString)")
                         }
                     }
-                    .padding(.leading, 4)
                 }
-                if hasMoreEvents {
-                    Text("and more…")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 4)
+                if overflowCount > 0 {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { showAll.toggle() }
+                    } label: {
+                        Text(showAll ? "Show less" : "+ \(overflowCount) more")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.link)
+                    .cursor(.pointingHand)
                 }
             }
         }
         .padding(.top, 2)
-    }
-
-    private func dayText(_ event: MeetingEvent) -> String {
-        let calendar = Calendar.current
-        if calendar.isDateInToday(event.start) { return "Today" }
-        if calendar.isDate(event.start, inSameDayAs: Date().addingTimeInterval(86400)) { return "Tomorrow" }
-        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: Date()), to: calendar.startOfDay(for: event.start)).day ?? 0
-        if days < 7 {
-            return event.start.formatted(.dateTime.weekday(.abbreviated))
-        }
-        return event.start.formatted(.dateTime.day().month(.abbreviated))
     }
 
     private func hostText(_ link: URL) -> String {
@@ -296,7 +324,6 @@ struct UpcomingEventList: View {
 struct SubscriptionRow: View {
     @Binding var subscription: CalendarSubscription
     let events: [MeetingEvent]
-    let hasMoreEvents: Bool
     let error: String?
     let onDelete: () -> Void
     let onEdited: () -> Void
@@ -353,7 +380,7 @@ struct SubscriptionRow: View {
                 .help(subscription.isEnabled ? "Show upcoming events" : "Calendar disabled")
             }
             if expanded && subscription.isEnabled {
-                UpcomingEventList(events: events, hasMoreEvents: hasMoreEvents, error: error, colorHex: subscription.colorHex)
+                UpcomingEventList(events: events, error: error, colorHex: subscription.colorHex)
             }
         }
         .padding(10)
@@ -376,7 +403,6 @@ struct NativeCalendarRow: View {
     let isOn: Bool
     let colorHex: String
     let events: [MeetingEvent]
-    let hasMoreEvents: Bool
     let onToggle: (Bool) -> Void
     let onColor: (String) -> Void
     @State private var expanded = false
@@ -420,7 +446,7 @@ struct NativeCalendarRow: View {
                 .help(isOn ? "Show upcoming events" : "Calendar disabled")
             }
             if expanded && isOn {
-                UpcomingEventList(events: events, hasMoreEvents: hasMoreEvents, error: nil, colorHex: colorHex)
+                UpcomingEventList(events: events, error: nil, colorHex: colorHex)
             }
         }
         .padding(10)
@@ -589,13 +615,7 @@ struct SettingsView: View {
     private func upcomingEvents(for subscription: CalendarSubscription) -> [MeetingEvent] {
         guard subscription.isEnabled else { return [] }
         let now = Date()
-        return Array(store.events.filter { $0.calendarID == subscription.id && store.isVisible($0, at: now) }.prefix(8))
-    }
-
-    private func upcomingCount(for subscription: CalendarSubscription) -> Int {
-        guard subscription.isEnabled else { return 0 }
-        let now = Date()
-        return store.events.filter { $0.calendarID == subscription.id && store.isVisible($0, at: now) }.count
+        return store.events.filter { $0.calendarID == subscription.id && store.isVisible($0, at: now) }
     }
 
     private func sectionHeader(_ title: String, _ symbol: String) -> some View {
@@ -624,7 +644,6 @@ struct SettingsView: View {
                         SubscriptionRow(
                             subscription: $subscription,
                             events: upcomingEvents(for: subscription),
-                            hasMoreEvents: upcomingCount(for: subscription) > 8,
                             error: store.errors[subscription.id]
                         ) {
                             confirmDelete(subscription)
@@ -752,8 +771,7 @@ struct SettingsView: View {
             info: info,
             isOn: isOn,
             colorHex: persisted?.colorHex ?? info.colorHex,
-            events: Array(visible.prefix(8)),
-            hasMoreEvents: visible.count > 8,
+            events: visible,
             onToggle: { on in store.setNativeCalendarEnabled(info, enabled: on) },
             onColor: { hex in store.setNativeCalendarColor(info, hex: hex) }
         )
