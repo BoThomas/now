@@ -1,6 +1,6 @@
 # Static Review Fix Checklist
 
-Static review performed without building, launching, or running tests, then revised after the independent re-check in `docs/review-recheck-handover.md`. Items are grouped by priority. Check an item only after the implementation and its relevant regression coverage are complete.
+Static review performed without building, launching, or running tests, then independently re-checked. Items are grouped by priority. Check an item only after the implementation and its relevant regression coverage are complete.
 
 ## Must Fix
 
