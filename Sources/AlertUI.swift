@@ -5,10 +5,17 @@ final class AlertPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+@MainActor
 final class AlertController: ObservableObject {
     @Published private(set) var shownEvents: [MeetingEvent] = []
     private var panel: AlertPanel?
     private var monitor: Any?
+    /// Preview alerts (Settings → Preview Reminder) show fabricated events that
+    /// are not in the store — reconciliation must not close them.
+    private var isPreview = false
+    /// True while a system dialog (e.g. the quit-vs-dismiss confirm) runs above
+    /// the panel — the key monitor must let keystrokes through to it.
+    var modalAlertActive = false
     /// Set by AppDelegate: flips the app .regular/.accessory. A timer-fired panel
     /// can't take keyboard focus while we're a background .accessory app (macOS
     /// ignores activate() without user interaction) — being .regular is what makes
@@ -20,8 +27,16 @@ final class AlertController: ObservableObject {
 
     func present(_ events: [MeetingEvent], playSound: Bool = true) {
         guard !events.isEmpty else { return }
+        // A newly due reminder must never REPLACE a visible one (its events
+        // would be permanently discarded — they are already marked alerted) —
+        // merge into the open panel instead.
+        if isOpen {
+            shownEvents = Self.mergedShown(existing: shownEvents, new: events)
+            if playSound { store?.playSound() }
+            return
+        }
         shownEvents = events
-        closePanel()
+        isPreview = false
         let panel = AlertPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         panel.level = .screenSaver
         panel.backgroundColor = .black
@@ -64,7 +79,9 @@ final class AlertController: ObservableObject {
             calendarName: "Preview",
             colorIndex: 0
         )
+        isPreview = true
         present([event])
+        isPreview = true // present() resets it for real deliveries
     }
 
     func close() {
@@ -80,6 +97,36 @@ final class AlertController: ObservableObject {
     func join(_ url: URL) {
         NSWorkspace.shared.open(url)
         close()
+    }
+
+    /// Merges newly due events into the cards already on screen (deduped by
+    /// id, deterministically ordered). Pure — unit-testable without a panel.
+    nonisolated static func mergedShown(existing: [MeetingEvent], new: [MeetingEvent]) -> [MeetingEvent] {
+        var merged = existing
+        for event in new where !merged.contains(where: { $0.id == event.id }) {
+            merged.append(event)
+        }
+        return AppStore.normalizedEvents(merged)
+    }
+
+    /// Drops cards whose event vanished from the store (cancelled, calendar
+    /// removed/disabled, occurrence deleted) and picks up refreshed copies of
+    /// changed events. A rescheduled meeting gets a NEW id, so its old card
+    /// drops and the new time earns its own reminder when due again. Pure.
+    nonisolated static func reconciledShownEvents(shown: [MeetingEvent], current: [MeetingEvent]) -> [MeetingEvent] {
+        let byID = Dictionary(uniqueKeysWithValues: current.map { ($0.id, $0) })
+        return shown.compactMap { byID[$0.id] }
+    }
+
+    /// Called from `AppStore.commitEvents` so an open alert tracks reality.
+    func reconcile(withCurrent current: [MeetingEvent]) {
+        guard isOpen, !isPreview else { return }
+        let next = Self.reconciledShownEvents(shown: shownEvents, current: current)
+        if next.isEmpty {
+            close()
+        } else {
+            shownEvents = next
+        }
     }
 
     private func closePanel() {
@@ -98,36 +145,119 @@ final class AlertController: ObservableObject {
         return shownEvents.contains { now < $0.end }
     }
 
+    /// True when keyboard focus sits on a control inside the panel (a Join,
+    /// Snooze or Close button — e.g. via Full Keyboard Access) rather than on
+    /// the panel itself. Return must then go to that control, not the global
+    /// join shortcut.
+    private var hasFocusedControl: Bool {
+        guard let panel, let responder = panel.firstResponder else { return false }
+        return responder !== panel && responder !== panel.contentView
+    }
+
+    // MARK: - Key handling
+
+    /// Classification of a keyDown while the alert is open. Extracted as a
+    /// pure function so the keyboard contract is unit-testable.
+    enum KeyAction: Equatable {
+        case close            // Escape
+        case joinOrClose      // plain Return / Enter, nothing focused
+        case pressFocused     // plain Return with a focused control — activate it
+        case joinIndex(Int)   // plain digit 1-9 — join that shown event
+        case snooze           // plain "s"
+        case swallow          // ⌘W/⌘M — would only beep on the borderless panel
+        case passThrough      // everything else (incl. modified Return)
+    }
+
+    nonisolated static func keyAction(modifiers: NSEvent.ModifierFlags, keyCode: UInt16, characters: String?, snoozeable: Bool, hasFocusedControl: Bool) -> KeyAction {
+        let mods = modifiers.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+        if mods == .command,
+           let key = characters?.lowercased(),
+           key == "w" || key == "m" {
+            return .swallow
+        }
+        if mods.isEmpty, characters?.lowercased() == "s" {
+            return snoozeable ? .snooze : .swallow
+        }
+        if mods.isEmpty,
+           let digit = characters?.first,
+           digit.isNumber,
+           let number = digit.wholeNumberValue,
+           (1...9).contains(number) {
+            return .joinIndex(number)
+        }
+        switch keyCode {
+        case 53: // Escape
+            return .close
+        case 36, 76: // Return / keypad Enter
+            // Modified Return always passes through. Plain Return ACTIVATES the
+            // focused control (like Space does): with Full Keyboard Access on,
+            // something is always focused, so merely passing Return through
+            // would make the key completely dead — and a focused Join button
+            // must never be overridden by the global "join first meeting".
+            // With nothing focused, plain Return is the global join/close.
+            if !mods.isEmpty { return .passThrough }
+            return hasFocusedControl ? .pressFocused : .joinOrClose
+        default:
+            return .passThrough
+        }
+    }
+
     private func installMonitor() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self, self.isOpen else { return event }
-            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
-            // ⌘W/⌘M would only beep on the borderless panel — swallow them silently.
-            if modifiers == .command,
-               let key = event.charactersIgnoringModifiers?.lowercased(),
-               key == "w" || key == "m" {
-                return nil
-            }
-            // Plain "s" snoozes while any event is still running; consumed quietly otherwise.
-            if modifiers.isEmpty,
-               event.charactersIgnoringModifiers?.lowercased() == "s" {
-                if self.isSnoozeable {
-                    self.snoozeAll()
-                }
-                return nil
-            }
-            switch event.keyCode {
-            case 53:
+            guard let self = self, self.isOpen, !self.modalAlertActive else { return event }
+            let action = Self.keyAction(
+                modifiers: event.modifierFlags,
+                keyCode: event.keyCode,
+                characters: event.charactersIgnoringModifiers,
+                snoozeable: self.isSnoozeable,
+                hasFocusedControl: self.hasFocusedControl
+            )
+            switch action {
+            case .close:
                 self.close()
                 return nil
-            case 36, 76:
+            case .joinOrClose:
                 if let url = self.shownEvents.compactMap(\.link).first {
                     self.join(url)
                 } else {
                     self.close()
                 }
                 return nil
-            default:
+            case .joinIndex(let number):
+                // "3" joins the third card; out of range or link-less events
+                // are swallowed quietly.
+                if shownEvents.indices.contains(number - 1),
+                   let url = self.shownEvents[number - 1].link {
+                    self.join(url)
+                }
+                return nil
+            case .pressFocused:
+                // Translate Return into a Space keypress: macOS buttons activate
+                // via Space, and the responder chain routes Space to whatever
+                // FKA focused (SwiftUI buttons are NOT NSButton first responders,
+                // so performClick on firstResponder isn't available — that path
+                // beeps). Our own monitor passes keyCode 49 through untouched.
+                if self.hasFocusedControl {
+                    return NSEvent.keyEvent(
+                        with: .keyDown,
+                        location: .zero,
+                        modifierFlags: [],
+                        timestamp: event.timestamp,
+                        windowNumber: event.windowNumber,
+                        context: nil,
+                        characters: " ",
+                        charactersIgnoringModifiers: " ",
+                        isARepeat: false,
+                        keyCode: 49
+                    )
+                }
+                return event
+            case .snooze:
+                self.snoozeAll()
+                return nil
+            case .swallow:
+                return nil
+            case .passThrough:
                 return event
             }
         }
@@ -142,7 +272,7 @@ struct AlertView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let first = controller.shownEvents.first {
-                let accent = first.color
+                let accent = first.readableColorOnBlack
                 RadialGradient(colors: [accent.opacity(0.25), accent.opacity(0.06), .clear], center: UnitPoint(x: 0.5, y: 0.18), startRadius: 80, endRadius: 1100)
                     .ignoresSafeArea()
             }
@@ -175,6 +305,19 @@ struct AlertView: View {
     private func footer(events: [MeetingEvent]) -> some View {
         // Snooze stays available while any event is running (it re-fires until end).
         let snoozeable = events.contains { $0.end > Date() }
+        let joinable = events.contains { $0.link != nil }
+        var hints = ["esc close"]
+        if events.count > 1 {
+            if joinable {
+                hints.append("return join first")
+                hints.append("1-\(min(events.count, 9)) join")
+            } else {
+                hints.append("return close")
+            }
+        } else {
+            hints.append(joinable ? "return join" : "return close")
+        }
+        if snoozeable { hints.append("s snooze") }
         return VStack(spacing: 16) {
             HStack(spacing: 16) {
                 if snoozeable {
@@ -198,7 +341,7 @@ struct AlertView: View {
                 .controlSize(.large)
                 .keyboardShortcut(.escape, modifiers: [])
             }
-            Text(snoozeable ? "esc close · return join · s snooze" : "esc close · return join")
+            Text(hints.joined(separator: " · "))
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.35))
         }
@@ -210,8 +353,6 @@ struct SingleEventView: View {
     @EnvironmentObject var controller: AlertController
     let event: MeetingEvent
     let now: Date
-
-    var accent: Color { event.color }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -231,7 +372,7 @@ struct SingleEventView: View {
                 .padding(.horizontal, 40)
             Text(statusText)
                 .font(.system(size: 40, weight: .bold, design: .monospaced))
-                .foregroundStyle(accent)
+                .foregroundStyle(readableAccent)
             HStack(spacing: 20) {
                 Label(timeRangeText, systemImage: "clock")
                 Label(Fmt.duration(event.end.timeIntervalSince(event.start)), systemImage: "hourglass")
@@ -255,11 +396,16 @@ struct SingleEventView: View {
                         .padding(.vertical, 4)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(accent)
+                .tint(readableAccent)
                 .controlSize(.large)
             }
         }
     }
+
+    var accent: Color { event.color }
+    /// The countdown/prominent controls use a contrast-safe variant so a
+    /// user-picked near-black calendar color stays visible on the black panel.
+    var readableAccent: Color { event.readableColorOnBlack }
 
     var statusText: String {
         if now < event.start {
@@ -288,35 +434,49 @@ struct MultiEventView: View {
                 .font(.system(size: 15, weight: .bold))
                 .tracking(3)
                 .foregroundStyle(.white.opacity(0.6))
-            VStack(spacing: 14) {
-                ForEach(events) { event in
-                    HStack(spacing: 20) {
-                        Circle().fill(event.color).frame(width: 10, height: 10)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(event.title.isEmpty ? "Untitled event" : event.title)
-                                .font(.system(size: 26, weight: .bold))
-                                .foregroundStyle(.white)
-                                .lineLimit(2)
-                            Text("\(Fmt.time.string(from: event.start)) – \(Fmt.time.string(from: event.end)) · \(event.calendarName) · \(status(event))")
-                                .font(.system(size: 15))
-                                .foregroundStyle(.white.opacity(0.6))
-                        }
-                        Spacer()
-                        if let link = event.link {
-                            Button {
-                                controller.join(link)
-                            } label: {
-                                Label("Join", systemImage: "video.fill")
+            // Scrollable: on small displays / large accessibility text the last
+            // cards and the footer controls must stay reachable.
+            ScrollView {
+                VStack(spacing: 14) {
+                    ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
+                        HStack(spacing: 20) {
+                            // Numbered badge: keys 1-9 join that card, and the
+                            // number doubles as the calendar-color dot (contrast-
+                            // safe fill for dark calendar colors).
+                            ZStack {
+                                Circle().fill(Color(nsColor: event.readableNsColorOnBlack))
+                                Text("\(index + 1)")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.white)
                             }
-                            .buttonStyle(.borderedProminent)
-                            .tint(event.color)
-                            .controlSize(.large)
+                            .frame(width: 20, height: 20)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(event.title.isEmpty ? "Untitled event" : event.title)
+                                    .font(.system(size: 26, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(2)
+                                Text("\(Fmt.time.string(from: event.start)) – \(Fmt.time.string(from: event.end)) · \(event.calendarName) · \(status(event))")
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(.white.opacity(0.6))
+                            }
+                            Spacer()
+                            if let link = event.link {
+                                Button {
+                                    controller.join(link)
+                                } label: {
+                                    Label("Join", systemImage: "video.fill")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(event.readableColorOnBlack)
+                                .controlSize(.large)
+                            }
                         }
+                        .padding(20)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.07)))
+                        .frame(maxWidth: 860)
                     }
-                    .padding(20)
-                    .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.07)))
-                    .frame(maxWidth: 860)
                 }
+                .padding(.vertical, 8)
             }
         }
     }

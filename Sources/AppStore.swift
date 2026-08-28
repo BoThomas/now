@@ -3,10 +3,14 @@ import AppKit
 import EventKit
 import ServiceManagement
 
+/// All app state is main-actor (AppKit/MainActor by design — see AGENTS.md).
+/// Pure, unit-tested decision logic is `nonisolated` so the selftest can drive
+/// it without constructing an `AppStore` (and its `EKEventStore`).
+@MainActor
 final class AppStore: ObservableObject {
-    static let storageKey = "local.tboch.now.state.v1"
-    static let legacyDomain = "local.tboch.now"
-    static let soundNames = ["Basso", "Blow", "Bottle", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"]
+    nonisolated static let storageKey = "local.tboch.now.state.v1"
+    nonisolated static let legacyDomain = "local.tboch.now"
+    nonisolated static let soundNames = ["Basso", "Blow", "Bottle", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"]
 
     @Published var subscriptions: [CalendarSubscription] {
         didSet {
@@ -34,12 +38,24 @@ final class AppStore: ObservableObject {
     @Published private(set) var nativeCalendarInfos: [NativeCalendarInfo] = []
     @Published private(set) var events: [MeetingEvent] = []
     @Published private(set) var errors: [UUID: String] = [:]
+    /// Per-calendar feed warnings (events skipped or degraded — e.g. unknown
+    /// time zone, unsupported RRULE). Shown in orange in the settings rows.
+    @Published private(set) var warnings: [UUID: String] = [:]
     @Published private(set) var isRefreshing = false
+    /// Time of the last refresh where every fetched subscription succeeded — a
+    /// failed or partial attempt never updates this (it is what "Last synced"
+    /// in the UI means).
     @Published private(set) var lastRefresh: Date?
-    @Published private(set) var pausedUntil: Date?
+    @Published private(set) var pausedUntil: Date? {
+        didSet { persist() }
+    }
 
     var onAlert: (([MeetingEvent]) -> Void)?
     weak var alertController: AlertController?
+    /// Injectable clock — reminder scheduling reads time only through this, so
+    /// late-delivery semantics (wake, delayed launch, delayed refresh) are
+    /// testable without waiting.
+    var now: () -> Date = { Date() }
 
     /// Owns the single long-lived EKEventStore (see NativeCalendarSource docs).
     let nativeSource = NativeCalendarSource()
@@ -58,10 +74,12 @@ final class AppStore: ObservableObject {
     /// two consecutive misses before dropping alert/snooze bookkeeping.
     private var previousCommitIDs: Set<String> = []
     private var pendingRefresh = false
+    private var fetchTracker = FetchTracker()
     private var tickTimer: Timer?
     private var refreshTimer: Timer?
+    private var started = false
 
-    static let session: URLSession = {
+    nonisolated static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 25
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -73,13 +91,23 @@ final class AppStore: ObservableObject {
         subscriptions = state.subscriptions
         settings = state.settings
         nativeCalendars = state.nativeCalendars
+        pausedUntil = state.pausedUntil
         previousEnabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
         knownNativeCalendarIDs = Set(nativeCalendars.map(\.id))
         previousEnabledNativeIDs = Set(nativeCalendars.filter(\.isEnabled).map(\.id))
         previousSkipDeclined = settings.skipDeclined
     }
 
+    deinit {
+        tickTimer?.invalidate()
+        refreshTimer?.invalidate()
+        nativeChangeDebounce?.invalidate()
+        if let activeObserver { NotificationCenter.default.removeObserver(activeObserver) }
+    }
+
     func start() {
+        guard !started else { return }
+        started = true
         refreshNativeAuthorization()
         nativeSource.onStoreChange = { [weak self] in self?.scheduleNativeStoreRefresh() }
         activeObserver = NotificationCenter.default.addObserver(
@@ -87,14 +115,27 @@ final class AppStore: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.appBecameActive()
+            // Delivered on the main queue — hop into our MainActor context.
+            MainActor.assumeIsolated {
+                self?.appBecameActive()
+            }
         }
         scheduleRefreshTimer()
-        tickTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            self?.tick()
+        tickTimer = Self.commonTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            // Timer fires on the main run loop — hop into our MainActor context.
+            MainActor.assumeIsolated { self?.tick() }
         }
         syncLoginItem(settings.launchAtLogin)
         refresh()
+    }
+
+    /// Timers must fire in `.common` mode: `.default`-mode timers stall while a
+    /// menu is tracking (status menu open) or a modal loop runs — exactly when a
+    /// reminder deadline is most likely to pass unnoticed.
+    static func commonTimer(withTimeInterval interval: TimeInterval, repeats: Bool, block: @escaping @Sendable (Timer) -> Void) -> Timer {
+        let timer = Timer(timeInterval: interval, repeats: repeats, block: block)
+        RunLoop.main.add(timer, forMode: .common)
+        return timer
     }
 
     var isPaused: Bool {
@@ -155,12 +196,17 @@ final class AppStore: ObservableObject {
     }
 
     /// Fires the TCC prompt. Only ever called from the settings UI — never at launch.
+    /// Reentrant clicks while a request is in flight are ignored (one prompt, one fetch).
+    private var accessGate = AccessRequestGate()
+
     func requestNativeAccess() {
+        guard accessGate.shouldStart() else { return }
         let source = nativeSource
         Task { [weak self] in
             let granted = await source.requestAccess()
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
+                self.accessGate.finish()
                 self.refreshNativeAuthorization()
                 if granted { self.fetchNativeEvents() }
             }
@@ -189,10 +235,13 @@ final class AppStore: ObservableObject {
     }
 
     private func scheduleNativeStoreRefresh() {
-        guard nativeSource.isAuthorized, nativeCalendars.contains(where: \.isEnabled) else { return }
+        guard nativeSource.isAuthorized else { return }
         nativeChangeDebounce?.invalidate()
-        nativeChangeDebounce = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
-            self?.fetchNativeEvents()
+        // Always refresh the available-calendar list on store changes (color/
+        // title/visibility edits matter even with nothing enabled); events are
+        // only re-fetched when a native calendar is enabled.
+        nativeChangeDebounce = Self.commonTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.fetchNativeEvents() }
         }
     }
 
@@ -204,6 +253,12 @@ final class AppStore: ObservableObject {
         refreshNativeAuthorization()
         if nativeAuthorization != before {
             fetchNativeEvents()
+        }
+        // The user may have toggled us in System Settings → Login Items.
+        if loginItem.currentStatus == .enabled, !settings.launchAtLogin {
+            settings.launchAtLogin = true // adopt external enablement (didSet re-syncs state)
+        } else {
+            loginItemState = Self.resolvedLoginItemState(desired: settings.launchAtLogin, failed: false, status: loginItem.currentStatus)
         }
     }
 
@@ -220,8 +275,13 @@ final class AppStore: ObservableObject {
 
     /// Recombine the ICS half of `events` (untouched) with the current native snapshot.
     private func rebuildEvents() {
-        let icsEvents = events.filter { !knownNativeCalendarIDs.contains($0.calendarID) }
-        commitEvents(icsEvents + coloredNativeSnapshot())
+        commitEvents(currentICSEvents + coloredNativeSnapshot())
+    }
+
+    /// The ICS-fed half of the published event list (native events are tracked
+    /// by `knownNativeCalendarIDs` and merged in separately).
+    private var currentICSEvents: [MeetingEvent] {
+        events.filter { !knownNativeCalendarIDs.contains($0.calendarID) }
     }
 
     private func reconcileNativeEvents() {
@@ -233,8 +293,9 @@ final class AppStore: ObservableObject {
 
     func resync(subscriptionID: UUID) {
         guard let subscription = subscriptions.first(where: { $0.id == subscriptionID }) else { return }
+        let requestID = fetchTracker.begin(subscriptionID: subscriptionID)
         Task { [weak self] in
-            let results = await Self.performFetch(subscriptions: [subscription])
+            let results = await Self.performFetch(requests: [FetchRequest(subscription: subscription, requestID: requestID)])
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.merge(results: results)
@@ -243,24 +304,65 @@ final class AppStore: ObservableObject {
     }
 
     private func merge(results: [FetchResult]) {
-        var updated = events.filter { event in
-            !results.contains { $0.subscription.id == event.calendarID }
+        let merged = Self.mergeICS(current: currentICSEvents, results: results, live: subscriptions, previousErrors: errors, previousWarnings: warnings, latestRequestIDs: fetchTracker.latestPerSubscription)
+        errors = merged.errors
+        warnings = merged.warnings
+        commitEvents(merged.events + coloredNativeSnapshot())
+    }
+
+    /// Pure decision core for applying fetch results to the ICS half of the
+    /// event list — extracted so refresh semantics are unit-testable without an
+    /// `AppStore` (or EventKit). Rules:
+    /// - A failed subscription keeps its cached events and records the error:
+    ///   one bad/empty response must not delete that calendar's meetings.
+    /// - A result whose subscription was removed or disabled after the request
+    ///   started is dropped entirely (a late response must not resurrect a
+    ///   removed calendar), and the subscription's cached events are dropped too.
+    /// - A result whose subscription URL changed after the request started is
+    ///   stale and dropped, keeping the cached events.
+    /// - A result superseded by a newer request for the same subscription
+    ///   (`latestRequestIDs`) is stale and dropped, keeping the cached events —
+    ///   out-of-order completion must never overwrite newer data.
+    /// - Cached events of subscriptions that no longer exist or are disabled
+    ///   are dropped.
+    /// - Successful results carry feed warnings (degraded events) alongside
+    ///   events; failures keep the previous warning untouched.
+    nonisolated static func mergeICS(current: [MeetingEvent], results: [FetchResult], live: [CalendarSubscription], previousErrors: [UUID: String], previousWarnings: [UUID: String] = [:], latestRequestIDs: [UUID: Int] = [:]) -> (events: [MeetingEvent], errors: [UUID: String], warnings: [UUID: String], allSucceeded: Bool) {
+        let liveByID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0) })
+        let colorByID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
+        var events = current.filter { event in
+            guard let subscription = liveByID[event.calendarID] else { return false }
+            return subscription.isEnabled
         }
-        let byID = Dictionary(uniqueKeysWithValues: subscriptions.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
+        var errors = previousErrors
+        var warnings = previousWarnings
+        var allSucceeded = true
         for result in results {
+            guard let subscription = liveByID[result.subscription.id],
+                  subscription.isEnabled,
+                  subscription.url == result.subscription.url,
+                  latestRequestIDs[result.subscription.id, default: result.requestID] == result.requestID else { continue }
             if let error = result.error {
-                errors[result.subscription.id] = error
-                continue
+                errors[subscription.id] = error
+                allSucceeded = false
+                continue // failed fetch: keep the cached events
             }
-            errors.removeValue(forKey: result.subscription.id)
-            updated.append(contentsOf: result.events.map { event in
+            errors.removeValue(forKey: subscription.id)
+            if let warning = result.warning {
+                warnings[subscription.id] = warning
+            } else {
+                warnings.removeValue(forKey: subscription.id)
+            }
+            events.removeAll { $0.calendarID == subscription.id }
+            events.append(contentsOf: result.events.map { event in
                 var copy = event
-                if let hex = byID[event.calendarID] { copy.colorHex = hex }
+                if let hex = colorByID[event.calendarID] { copy.colorHex = hex }
                 return copy
             })
         }
-        commitEvents(updated)
+        return (events, errors, warnings, allSucceeded)
     }
+
 
     func snooze(_ ids: [String]) {
         let fireAt = Date().addingTimeInterval(60)
@@ -272,14 +374,15 @@ final class AppStore: ObservableObject {
     }
 
     func pauseUntilMorning() {
-        var calendar = Calendar.current
-        calendar.timeZone = .current
-        let now = Date()
-        var components = calendar.dateComponents([.year, .month, .day], from: now)
-        components.hour = 9
-        components.minute = 0
-        guard let target = calendar.date(from: components) else { return }
-        pausedUntil = target > now ? target : target.addingTimeInterval(86400)
+        pausedUntil = Self.nextMorning(after: Date())
+    }
+
+    /// Tomorrow at 09:00 via calendar arithmetic (start-of-day + set hour) — a
+    /// fixed +86,400 s lands an hour off across DST transitions.
+    nonisolated static func nextMorning(after date: Date, calendar: Calendar = .current) -> Date? {
+        let cal = calendar
+        guard let tomorrow = cal.date(byAdding: .day, value: 1, to: date) else { return nil }
+        return cal.date(bySettingHour: 9, minute: 0, second: 0, of: cal.startOfDay(for: tomorrow))
     }
 
     func pauseIndefinitely() {
@@ -303,8 +406,9 @@ final class AppStore: ObservableObject {
             return
         }
         isRefreshing = true
+        let requestID = fetchTracker.beginFull(subscriptionIDs: enabled.map(\.id))
         Task { [weak self] in
-            let results = await Self.performFetch(subscriptions: enabled)
+            let results = await Self.performFetch(requests: enabled.map { FetchRequest(subscription: $0, requestID: requestID) })
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.apply(results: results, fetched: enabled)
@@ -312,17 +416,22 @@ final class AppStore: ObservableObject {
         }
     }
 
-    static func performFetch(subscriptions: [CalendarSubscription]) async -> [FetchResult] {
+    nonisolated static func performFetch(requests: [FetchRequest]) async -> [FetchResult] {
         await withTaskGroup(of: FetchResult.self) { group in
-            for sub in subscriptions {
+            for request in requests {
                 group.addTask {
+                    let sub = request.subscription
                     let (data, fetchError) = await fetchData(sub.url)
-                    if let fetchError { return FetchResult(subscription: sub, events: [], error: fetchError) }
-                    guard let data else { return FetchResult(subscription: sub, events: [], error: "Empty response") }
+                    if let fetchError { return FetchResult(subscription: sub, events: [], error: fetchError, requestID: request.requestID) }
+                    guard let data else { return FetchResult(subscription: sub, events: [], error: "Empty response", requestID: request.requestID) }
+                    if data.count > Self.maxFeedBytes {
+                        return FetchResult(subscription: sub, events: [], error: "Feed larger than \(Self.maxFeedBytes / 1_000_000) MB", requestID: request.requestID)
+                    }
                     let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
-                    if !text.uppercased().contains("BEGIN:VCALENDAR") { return FetchResult(subscription: sub, events: [], error: "Not an iCal feed") }
-                    let events = ICSBuilder.meetings(fromICS: text, subscription: sub, now: Date())
-                    return FetchResult(subscription: sub, events: events, error: nil)
+                    if !text.uppercased().contains("BEGIN:VCALENDAR") { return FetchResult(subscription: sub, events: [], error: "Not an iCal feed", requestID: request.requestID) }
+                    let (events, warnings) = ICSBuilder.meetings(fromICS: text, subscription: sub, now: Date())
+                    let warning = warnings.isEmpty ? nil : warnings.prefix(5).joined(separator: " · ")
+                    return FetchResult(subscription: sub, events: events, error: nil, warning: warning, requestID: request.requestID)
                 }
             }
             var results: [FetchResult] = []
@@ -331,13 +440,13 @@ final class AppStore: ObservableObject {
         }
     }
 
-    struct FetchResult {
-        let subscription: CalendarSubscription
-        let events: [MeetingEvent]
-        let error: String?
-    }
 
-    static func fetchData(_ urlString: String) async -> (Data?, String?) {
+    /// Hard cap on downloaded feed size — a hostile feed must not be able to
+    /// balloon memory or parser workload. (The body is still downloaded before
+    /// the check; the 25 s request timeout bounds the transient spike.)
+    nonisolated static let maxFeedBytes = 5 * 1_000_000
+
+    nonisolated static func fetchData(_ urlString: String) async -> (Data?, String?) {
         guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             return (nil, "Invalid URL")
         }
@@ -353,47 +462,59 @@ final class AppStore: ObservableObject {
     }
 
     private func apply(results: [FetchResult], fetched: [CalendarSubscription]) {
-        var allEvents: [MeetingEvent] = []
-        var newErrors: [UUID: String] = [:]
-        for result in results {
-            allEvents.append(contentsOf: result.events)
-            if let error = result.error { newErrors[result.subscription.id] = error }
-        }
-        let byID = Dictionary(uniqueKeysWithValues: subscriptions.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
-        allEvents = allEvents.map { event in
-            var copy = event
-            if let hex = byID[event.calendarID] { copy.colorHex = hex }
-            return copy
-        }
-        let nowEnabled = Set(subscriptions.filter(\.isEnabled).map(\.id))
-        allEvents = allEvents.filter { nowEnabled.contains($0.calendarID) }
-        commitEvents(allEvents + coloredNativeSnapshot())
-        self.errors = newErrors
-        self.lastRefresh = Date()
-        self.isRefreshing = false
+        let merged = Self.mergeICS(current: currentICSEvents, results: results, live: subscriptions, previousErrors: [:], previousWarnings: [:], latestRequestIDs: fetchTracker.latestPerSubscription)
+        commitEvents(merged.events + coloredNativeSnapshot())
+        errors = merged.errors
+        warnings = merged.warnings
+        if merged.allSucceeded { lastRefresh = Date() }
+        isRefreshing = false
         if pendingRefresh || fetched.map(\.id) != subscriptions.filter(\.isEnabled).map(\.id) || fetched.map(\.url) != subscriptions.filter(\.isEnabled).map(\.url) {
             pendingRefresh = false
             refresh()
         }
     }
 
-    /// Single funnel for publishing the merged (ICS + native) event list: sorts, and
-    /// prunes alert/snooze bookkeeping for events that disappeared. An id is only
-    /// pruned once it's missing from **two consecutive commits**: a single miss is
-    /// treated as transient (a fetch racing a CalDAV sync, one bad/empty ICS
-    /// response) so a reappearing event neither re-alerts nor loses its snooze.
-    /// Bookkeeping for ids absent from `events` is inert — `tick()` only looks at
-    /// `events` — so the extra commit of lag is harmless.
+    /// Single funnel for publishing the merged (ICS + native) event list: sorts
+    /// with stable tie-breakers, dedupes by event id, and prunes alert/snooze
+    /// bookkeeping for events that disappeared. An id is only pruned once it's
+    /// missing from **two consecutive commits**: a single miss is treated as
+    /// transient (a fetch racing a CalDAV sync, one bad/empty ICS response) so a
+    /// reappearing event neither re-alerts nor loses its snooze. Bookkeeping for
+    /// ids absent from `events` is inert — `tick()` only looks at `events` — so
+    /// the extra commit of lag is harmless.
     private func commitEvents(_ newEvents: [MeetingEvent]) {
-        let sorted = newEvents.sorted { $0.start < $1.start }
+        let sorted = Self.normalizedEvents(newEvents)
         let active = Set(sorted.map(\.id))
-        if active != previousCommitIDs {
-            let prunable = alerted.union(snoozed.keys).filter { !active.contains($0) && !previousCommitIDs.contains($0) }
-            alerted.subtract(prunable)
-            snoozed = snoozed.filter { !prunable.contains($0.key) }
-            previousCommitIDs = active
-        }
+        let pruned = Self.prunedBookkeeping(alerted: alerted, snoozed: snoozed, activeIDs: active, previousIDs: previousCommitIDs)
+        alerted = pruned.alerted
+        snoozed = pruned.snoozed
+        previousCommitIDs = active
         events = sorted
+        // Keep an open alert in sync: cancelled/removed/disabled events drop
+        // off the cards, changed events update in place.
+        alertController?.reconcile(withCurrent: sorted)
+    }
+
+    /// Deterministic ordering + dedup for the published event list: stable
+    /// tie-breakers after `start` (calendar, title, id) so equal start times
+    /// don't shuffle between commits, and one entry per id so duplicate
+    /// reminder cards / ForEach ids can't appear.
+    nonisolated static func normalizedEvents(_ events: [MeetingEvent]) -> [MeetingEvent] {
+        var seen = Set<String>()
+        var unique: [MeetingEvent] = []
+        for event in events.sorted(by: { ($0.start, $0.calendarName, $0.title, $0.id) < ($1.start, $1.calendarName, $1.title, $1.id) }) {
+            if seen.insert(event.id).inserted { unique.append(event) }
+        }
+        return unique
+    }
+
+    /// Pure pruning decision for alert/snooze bookkeeping: an id is dropped
+    /// only when missing from both the new snapshot and the previous one (two
+    /// consecutive misses). Runs on every commit — the second identical missing
+    /// snapshot does prune, matching the documented behavior.
+    nonisolated static func prunedBookkeeping(alerted: Set<String>, snoozed: [String: Date], activeIDs: Set<String>, previousIDs: Set<String>) -> (alerted: Set<String>, snoozed: [String: Date]) {
+        let prunable = alerted.union(snoozed.keys).filter { !activeIDs.contains($0) && !previousIDs.contains($0) }
+        return (alerted.subtracting(prunable), snoozed.filter { !prunable.contains($0.key) })
     }
 
     private func reconcileEvents() {
@@ -410,7 +531,7 @@ final class AppStore: ObservableObject {
     }
 
     private func tick() {
-        let now = Date()
+        let now = self.now()
         if let until = pausedUntil, now >= until { pausedUntil = nil }
         if let alerts = alertController, alerts.isOpen {
             if alerts.shownEvents.allSatisfy({ now.timeIntervalSince($0.end) > 120 }) {
@@ -418,17 +539,7 @@ final class AppStore: ObservableObject {
             }
         }
         if isPaused { return }
-        let lead = TimeInterval(settings.leadSeconds)
-        var due: [MeetingEvent] = []
-        for event in events {
-            if alerted.contains(event.id) {
-                if let fireAt = snoozed[event.id], now >= fireAt, now <= event.end {
-                    due.append(event)
-                }
-            } else if now >= event.start.addingTimeInterval(-lead), now <= event.start.addingTimeInterval(45) {
-                due.append(event)
-            }
-        }
+        let due = Self.dueForAlert(events: events, alerted: alerted, snoozed: snoozed, leadSeconds: settings.leadSeconds, now: now)
         guard !due.isEmpty else { return }
         due.forEach {
             alerted.insert($0.id)
@@ -437,41 +548,141 @@ final class AppStore: ObservableObject {
         onAlert?(due)
     }
 
+    /// Pure, clock-driven reminder-scheduling decision: which events fire a
+    /// reminder at `now`? A reminder fires from the start of the lead window
+    /// until the meeting **ends** — late delivery (wake from sleep, delayed
+    /// launch, delayed refresh, blocked UI) still alerts instead of being
+    /// silently dropped by the old 45-second deadline. A snoozed reminder
+    /// re-fires when its snooze expires, again only while `now <= event.end`.
+    nonisolated static func dueForAlert(events: [MeetingEvent], alerted: Set<String>, snoozed: [String: Date], leadSeconds: Int, now: Date) -> [MeetingEvent] {
+        let lead = TimeInterval(leadSeconds)
+        return events.filter { event in
+            if alerted.contains(event.id) {
+                if let fireAt = snoozed[event.id], now >= fireAt, now <= event.end { return true }
+                return false
+            }
+            return now >= event.start.addingTimeInterval(-lead) && now < event.end
+        }
+    }
+
     private func scheduleRefreshTimer() {
         refreshTimer?.invalidate()
         let interval = TimeInterval(max(5, settings.refreshMinutes)) * 60
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.refresh()
+        refreshTimer = Self.commonTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
         }
     }
 
     private func settingsChanged() {
         persist()
         scheduleRefreshTimer()
-        syncLoginItem(settings.launchAtLogin)
+        if !syncingLoginItem {
+            syncLoginItem(settings.launchAtLogin)
+        }
         if settings.skipDeclined != previousSkipDeclined {
             previousSkipDeclined = settings.skipDeclined
             fetchNativeEvents()
         }
     }
 
-    private func syncLoginItem(_ desired: Bool) {
-        let service = SMAppService.mainApp
-        let registered = service.status == .enabled
-        guard desired != registered else { return }
-        do {
-            if desired {
-                try service.register()
-            } else {
-                try service.unregister()
+    // MARK: - Login item (Launch at Login)
+
+    /// What the UI shows for Launch at Login — actual state, distinct from the
+    /// persisted user intent (`settings.launchAtLogin`).
+    enum LoginItemState: Equatable {
+        case enabled
+        case disabled
+        case requiresApproval
+        case failed
+    }
+
+    /// Observable status mirror of `SMAppService.Status` (kept free of
+    /// ServiceManagement so the mapping logic is unit-testable).
+    enum LoginItemStatus: Equatable {
+        case enabled
+        case requiresApproval
+        case notRegistered
+        case notFound
+    }
+
+    /// Injectable seam over `SMAppService` — tests script this; the app uses
+    /// `SystemLoginItem`.
+    protocol LoginItemControlling: AnyObject {
+        var currentStatus: LoginItemStatus { get }
+        func register() throws
+        func unregister() throws
+    }
+
+    final class SystemLoginItem: LoginItemControlling {
+        var currentStatus: LoginItemStatus {
+            switch SMAppService.mainApp.status {
+            case .enabled: return .enabled
+            case .requiresApproval: return .requiresApproval
+            case .notRegistered: return .notRegistered
+            case .notFound: return .notFound
+            @unknown default: return .notRegistered
             }
-        } catch {
-            settings.launchAtLogin = registered
+        }
+
+        func register() throws {
+            try SMAppService.mainApp.register()
+        }
+
+        func unregister() throws {
+            try SMAppService.mainApp.unregister()
         }
     }
 
+    /// Injectable seam so the selftest can drive a scripted login item.
+    var loginItem: LoginItemControlling = SystemLoginItem()
+    @Published private(set) var loginItemState: LoginItemState = .disabled
+    /// Reentrancy guard: reverting `settings.launchAtLogin` on failure fires
+    /// `didSet` → `settingsChanged` → `syncLoginItem` again — that second run
+    /// would clobber the `.failed` state.
+    private var syncingLoginItem = false
+
+    /// Pure resolution of the observed login-item state.
+    /// - System enabled → `.enabled` (even if intent is off — external wins).
+    /// - Intent on + requiresApproval → `.requiresApproval`.
+    /// - Intent on but not registered (register failed or externally disabled)
+    ///   or an unregister failure → `.failed`.
+    /// - Otherwise → `.disabled`.
+    nonisolated static func resolvedLoginItemState(desired: Bool, failed: Bool, status: LoginItemStatus) -> LoginItemState {
+        if failed { return .failed }
+        if status == .enabled { return .enabled }
+        if desired {
+            return status == .requiresApproval ? .requiresApproval : .failed
+        }
+        return .disabled
+    }
+
+    private func syncLoginItem(_ desired: Bool) {
+        var failed = false
+        if desired {
+            switch loginItem.currentStatus {
+            case .enabled, .requiresApproval:
+                break
+            case .notRegistered, .notFound:
+                do { try loginItem.register() } catch { failed = true }
+            }
+        } else {
+            switch loginItem.currentStatus {
+            case .enabled:
+                do { try loginItem.unregister() } catch { failed = true }
+            case .requiresApproval, .notRegistered, .notFound:
+                break
+            }
+        }
+        if failed {
+            syncingLoginItem = true
+            settings.launchAtLogin = false
+            syncingLoginItem = false
+        }
+        loginItemState = Self.resolvedLoginItemState(desired: settings.launchAtLogin, failed: failed, status: loginItem.currentStatus)
+    }
+
     private func persist() {
-        if let data = try? JSONEncoder().encode(Persisted(subscriptions: subscriptions, settings: settings, nativeCalendars: nativeCalendars)) {
+        if let data = try? JSONEncoder().encode(Persisted(subscriptions: subscriptions, settings: settings, nativeCalendars: nativeCalendars, pausedUntil: pausedUntil)) {
             UserDefaults.standard.set(data, forKey: Self.storageKey)
         }
     }
@@ -488,5 +699,72 @@ final class AppStore: ObservableObject {
             return state
         }
         return Persisted(subscriptions: [], settings: AppSettings())
+    }
+}
+
+/// Pure single-flight gate for the EventKit permission request: repeated
+/// clicks must not stack prompts/fetches. Unit-testable without TCC.
+struct AccessRequestGate {
+    private var inFlight = false
+
+    mutating func shouldStart() -> Bool {
+        guard !inFlight else { return false }
+        inFlight = true
+        return true
+    }
+
+    mutating func finish() {
+        inFlight = false
+    }
+}
+
+/// Tracks the newest fetch request per subscription so late asynchronous
+/// results never overwrite newer data (pure — unit-testable without an
+/// AppStore). A full refresh supersedes every in-flight targeted resync for
+/// the subscriptions it fetches; a targeted resync supersedes the full
+/// refresh (and any older resync) for its one subscription.
+struct FetchTracker {
+    private var nextID = 1
+    private(set) var latestPerSubscription: [UUID: Int] = [:]
+
+    mutating func begin(subscriptionID: UUID) -> Int {
+        let id = nextID
+        nextID += 1
+        latestPerSubscription[subscriptionID] = id
+        return id
+    }
+
+    mutating func beginFull(subscriptionIDs: [UUID]) -> Int {
+        let id = nextID
+        nextID += 1
+        for subscriptionID in subscriptionIDs { latestPerSubscription[subscriptionID] = id }
+        return id
+    }
+}
+
+/// One in-flight fetch: the subscription snapshot the request was made against
+/// plus the generation token that decides whether the result is still current
+/// when it lands. (Top level — free of AppStore's MainActor isolation so the
+/// selftest can construct these directly.)
+struct FetchRequest {
+    let subscription: CalendarSubscription
+    let requestID: Int
+}
+
+/// A completed fetch for one subscription: parsed events, an error, an
+/// optional feed warning, and the request generation it belongs to.
+struct FetchResult {
+    let subscription: CalendarSubscription
+    let events: [MeetingEvent]
+    let error: String?
+    var warning: String?
+    var requestID = 0
+
+    init(subscription: CalendarSubscription, events: [MeetingEvent], error: String?, warning: String? = nil, requestID: Int = 0) {
+        self.subscription = subscription
+        self.events = events
+        self.error = error
+        self.warning = warning
+        self.requestID = requestID
     }
 }

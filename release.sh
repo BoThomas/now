@@ -153,7 +153,9 @@ print "• Updating Info.plist → $VERSION (build $BUILD)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" Info.plist
 
 print "• Building"
-./build-app.sh >/dev/null
+# Stable signing is mandatory for releases: an ad-hoc release zip would
+# invalidate existing Calendar (TCC) grants on every update.
+./build-app.sh --require-identity >/dev/null
 ./outputs/now.app/Contents/MacOS/now --selftest
 cp outputs/now.zip "outputs/now-$TAG.zip"
 

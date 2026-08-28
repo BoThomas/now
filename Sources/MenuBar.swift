@@ -1,24 +1,29 @@
 import AppKit
 
+@MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private unowned let store: AppStore
     private unowned let alerts: AlertController
     private let openSettingsHandler: () -> Void
+    private let quitHandler: () -> Void
     private var buttonTimer: Timer?
 
-    init(store: AppStore, alerts: AlertController, openSettings: @escaping () -> Void) {
+    init(store: AppStore, alerts: AlertController, openSettings: @escaping () -> Void, quit: @escaping () -> Void) {
         self.store = store
         self.alerts = alerts
         self.openSettingsHandler = openSettings
+        self.quitHandler = quit
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
         let menu = NSMenu()
         menu.delegate = self
         menu.minimumWidth = 280
         statusItem.menu = menu
-        buttonTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            self?.updateButton()
+        // .common mode: the countdown keeps updating while the dropdown is
+        // tracking (menu tracking runs a modal-ish run loop in .default mode).
+        buttonTimer = AppStore.commonTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateButton() }
         }
         updateButton()
     }
@@ -27,12 +32,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         if store.isPaused {
             button.attributedTitle = NSAttributedString(string: "")
-            button.image = NSImage(systemSymbolName: "moon.zzz.fill", accessibilityDescription: "Paused")
+            button.image = NSImage(systemSymbolName: "moon.zzz.fill", accessibilityDescription: "now — reminders paused")
+            button.setAccessibilityLabel("now — reminders paused")
             return
         }
         guard store.settings.showMenuBarCountdown, let next = store.nextEvent else {
             button.attributedTitle = NSAttributedString(string: "")
             button.image = NSImage(systemSymbolName: "alarm", accessibilityDescription: "now")
+            button.setAccessibilityLabel("now — no upcoming meetings")
             return
         }
         button.image = nil
@@ -47,6 +54,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             .foregroundColor: NSColor.labelColor
         ]))
         button.attributedTitle = text
+        let running = next.start <= Date()
+        button.setAccessibilityLabel(running
+            ? "now — \(next.title) is running, started \(Fmt.ago(next.start))"
+            : "now — next meeting \(next.title) at \(Fmt.time.string(from: next.start)), in \(Fmt.mmss(next.start.timeIntervalSince(Date())))")
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -86,7 +97,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
             pauseItem.submenu = submenu
         }
-        menu.addItem(withTitle: store.isRefreshing ? "Syncing…" : "Refresh Calendars", action: #selector(refreshAction), keyEquivalent: "r").target = self
+        let refreshItem = menu.addItem(withTitle: store.isRefreshing ? "Syncing…" : "Refresh Calendars", action: #selector(refreshAction), keyEquivalent: "r")
+        refreshItem.target = self
+        refreshItem.keyEquivalentModifierMask = .command
+        // No queuing a second full refresh behind the running one.
+        refreshItem.isEnabled = !store.isRefreshing
         if let last = store.lastRefresh {
             menu.addItem(withTitle: "Last synced \(Fmt.ago(last))", action: nil, keyEquivalent: "")
         }
@@ -95,7 +110,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(withTitle: "Settings…", action: #selector(settingsAction), keyEquivalent: ",").target = self
         let loginItem = menu.addItem(withTitle: "Launch at Login", action: #selector(toggleLoginAction), keyEquivalent: "")
         loginItem.target = self
-        loginItem.state = store.settings.launchAtLogin ? .on : .off
+        // Reflect the ACTUAL registration state, not just persisted intent.
+        loginItem.state = store.loginItemState == .enabled ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit now", action: #selector(quitAction), keyEquivalent: "q").target = self
     }
@@ -134,7 +150,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func eventMenuItem(for event: MeetingEvent, timeFont: NSFont, tabLocation: CGFloat) -> NSMenuItem {
-        let item = NSMenuItem(title: "", action: event.link == nil ? nil : #selector(joinAction), keyEquivalent: "")
+        // No-link events get an enabled, information-only row (a disabled item
+        // would wrongly suggest the event itself is unavailable).
+        let item = NSMenuItem(title: "", action: event.link == nil ? #selector(informationalAction) : #selector(joinAction), keyEquivalent: "")
         item.target = self
         item.representedObject = event.link
         item.image = Palette.dotImage(color: event.nsColor)
@@ -157,6 +175,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func joinAction(_ sender: NSMenuItem) {
         if let url = sender.representedObject as? URL { NSWorkspace.shared.open(url) }
     }
+
+    /// Enabled no-op for no-link rows: selecting them must not look like a
+    /// broken action, but there is nothing to open.
+    @objc private func informationalAction() {}
 
     @objc private func pauseAction(_ sender: NSMenuItem) {
         switch sender.tag {
@@ -189,6 +211,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func quitAction() {
-        NSApp.terminate(nil)
+        // Routes through the custom flow (confirm when Settings is key, close
+        // a showing alert) — never a bare terminate that would bypass both.
+        quitHandler()
     }
 }

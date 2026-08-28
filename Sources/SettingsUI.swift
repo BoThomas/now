@@ -7,6 +7,78 @@ enum Links {
     static let website = URL(string: "https://thomasboch.com")!
 }
 
+/// The settings sections, in display order — shared by the section headers and
+/// the sidebar navigation.
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case calendars, native, reminder, general, about
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .calendars: return "External Calendars"
+        case .native: return "Apple Calendars"
+        case .reminder: return "Reminder"
+        case .general: return "General"
+        case .about: return "About"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .calendars: return "calendar"
+        case .native: return "calendar.badge.clock"
+        case .reminder: return "bell.badge"
+        case .general: return "gearshape"
+        case .about: return "info.circle"
+        }
+    }
+}
+
+/// Reveals the ⌘-number shortcut hints after the user holds ⌘ for a moment
+/// (the macOS toolbar convention) — brief ⌘ taps (⌘C, ⌘Q…) stay invisible.
+/// Main-thread only, like the rest of the settings UI.
+final class CommandHoldTracker: ObservableObject {
+    @Published private(set) var showHints = false
+    private var monitor: Any?
+    private var holding = false
+    private var revealTask: Task<Void, Never>?
+
+    func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.setCommandHeld(event.modifierFlags.contains(.command))
+            return event
+        }
+    }
+
+    func remove() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        revealTask?.cancel()
+        revealTask = nil
+        holding = false
+        showHints = false
+    }
+
+    private func setCommandHeld(_ held: Bool) {
+        if held {
+            guard !holding else { return }
+            holding = true
+            revealTask?.cancel()
+            revealTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                guard !Task.isCancelled, let self, self.holding else { return }
+                withAnimation(.easeOut(duration: 0.15)) { self.showHints = true }
+            }
+        } else {
+            holding = false
+            revealTask?.cancel()
+            if showHints { withAnimation(.easeOut(duration: 0.12)) { showHints = false } }
+        }
+    }
+}
+
 struct CursorModifier: ViewModifier {
     let cursor: NSCursor
 
@@ -221,6 +293,51 @@ struct PresetButtonStyle: ButtonStyle {
     }
 }
 
+/// Left-aligned wrap layout (text-flow style): children keep their ideal size
+/// and wrap as WHOLE items to the next line when the width runs out. Used for
+/// the lead-time presets — equal-width grid slots made pills stretch or break.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var width: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                width = max(width, x - spacing)
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        width = max(width, x - spacing)
+        return CGSize(width: max(0, width), height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .unspecified)
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
 /// Events grouped under one uppercase day header (same `Fmt.dayHeader` style as the
 /// menu bar dropdown), so each row is a single line: time + title.
 struct UpcomingEventList: View {
@@ -230,6 +347,7 @@ struct UpcomingEventList: View {
     let error: String?
     let colorHex: String
 
+    @Environment(\.colorScheme) private var colorScheme
     private static let collapsedLimit = 8
 
     /// Local expand state — the list is unmounted when the calendar row collapses,
@@ -276,22 +394,28 @@ struct UpcomingEventList: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
                         ForEach(group.events) { event in
-                            HStack(spacing: 8) {
+                            // One consistent row shape at every width: time and
+                            // the join link stay put; ONLY the title wraps
+                            // (making the row taller) instead of truncating away.
+                            HStack(alignment: .top, spacing: 8) {
                                 Text(Fmt.time.string(from: event.start))
                                     .font(.system(size: 11, weight: .medium).monospacedDigit())
                                     .frame(width: 60, alignment: .leading)
                                 Text(event.title.isEmpty ? "Untitled" : event.title)
                                     .font(.system(size: 11))
-                                    .lineLimit(1)
+                                    .lineLimit(2)
                                     .truncationMode(.tail)
-                                Spacer()
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 4)
                                 if let link = event.link {
                                     Button {
                                         NSWorkspace.shared.open(link)
                                     } label: {
                                         Label(hostText(link), systemImage: "video.fill")
                                             .font(.system(size: 10))
-                                            .foregroundStyle(Palette.color(hex: colorHex))
+                                            .foregroundStyle(linkColor)
+                                            .lineLimit(1)
+                                            .fixedSize(horizontal: true, vertical: false)
                                     }
                                     .buttonStyle(.link)
                                     .cursor(.pointingHand)
@@ -319,12 +443,21 @@ struct UpcomingEventList: View {
     private func hostText(_ link: URL) -> String {
         (link.host ?? "").replacingOccurrences(of: "www.", with: "")
     }
+
+    /// Contrast-safe tint for link text: user-picked near-background colors
+    /// (near-black in dark mode, near-white in light mode) get nudged readable.
+    private var linkColor: Color {
+        let target: Palette.ContrastTarget = colorScheme == .dark ? .onBlack : .onWhite
+        return Color(nsColor: Palette.readable(Palette.nsColor(hex: colorHex), on: target))
+    }
 }
 
 struct SubscriptionRow: View {
     @Binding var subscription: CalendarSubscription
     let events: [MeetingEvent]
     let error: String?
+    let warning: String?
+    let existingURLs: [String]
     let onDelete: () -> Void
     let onEdited: () -> Void
     @State private var expanded = false
@@ -332,52 +465,26 @@ struct SubscriptionRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Toggle("", isOn: $subscription.isEnabled)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .help(subscription.isEnabled ? "Disable calendar (stops sync and reminders)" : "Enable calendar")
-                ColorPicker("", selection: Binding(
-                    get: { Palette.color(hex: subscription.colorHex) },
-                    set: { subscription.colorHex = Palette.hexString(from: NSColor($0)) }
-                ), supportsOpacity: false)
-                .labelsHidden()
-                .scaleEffect(x: 0.75, y: 0.75)
-                .frame(width: 24, height: 20)
-                .padding(.leading, 2)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(subscription.name).font(.system(size: 13, weight: .semibold))
-                    Text(subscription.url).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                    if let error = error {
-                        Text(error).font(.system(size: 11)).foregroundStyle(.red).lineLimit(2)
+            // One line when it fits; below ~560 pt the action buttons wrap to a
+            // second row instead of crushing the title/URL block.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    leadingControls
+                    titleBlock
+                    Spacer()
+                    rowButtons
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 12) {
+                        leadingControls
+                        titleBlock
+                        Spacer()
+                    }
+                    HStack(spacing: 12) {
+                        Spacer()
+                        rowButtons
                     }
                 }
-                .opacity(subscription.isEnabled ? 1 : 0.5)
-                Spacer()
-                Button {
-                    showEditSheet = true
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                }
-                .buttonStyle(.borderless)
-                .help("Edit name or URL")
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .help("Remove calendar")
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
-                } label: {
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 16)
-                }
-                .buttonStyle(.borderless)
-                .disabled(!subscription.isEnabled)
-                .help(subscription.isEnabled ? "Show upcoming events" : "Calendar disabled")
             }
             if expanded && subscription.isEnabled {
                 UpcomingEventList(events: events, error: error, colorHex: subscription.colorHex)
@@ -389,10 +496,87 @@ struct SubscriptionRow: View {
             if !enabled { expanded = false }
         }
         .sheet(isPresented: $showEditSheet) {
-            EditCalendarView(subscription: $subscription) {
+            EditCalendarView(subscription: $subscription, existingURLs: existingURLs) {
                 onEdited()
             }
         }
+    }
+
+    private var leadingControls: some View {
+        HStack(spacing: 12) {
+            Toggle("", isOn: $subscription.isEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .help(subscription.isEnabled ? "Disable calendar (stops sync and reminders)" : "Enable calendar")
+                .accessibilityLabel("\(subscription.isEnabled ? "Disable" : "Enable") calendar \(subscription.name)")
+            ColorPicker("", selection: Binding(
+                get: { Palette.color(hex: subscription.colorHex) },
+                set: { subscription.colorHex = Palette.hexString(from: NSColor($0)) }
+            ), supportsOpacity: false)
+            .labelsHidden()
+            .scaleEffect(x: 0.75, y: 0.75)
+            .frame(width: 24, height: 20)
+            .padding(.leading, 2)
+            .accessibilityLabel("Event color for \(subscription.name)")
+        }
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(subscription.name).font(.system(size: 13, weight: .semibold))
+            Text(Self.displayURL(subscription.url)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                .help("Full URL is visible in the edit sheet")
+            if let error = error {
+                Text(error).font(.system(size: 11)).foregroundStyle(.red).lineLimit(2)
+            } else if let warning = warning {
+                Text(warning).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2)
+            }
+        }
+        .opacity(subscription.isEnabled ? 1 : 0.5)
+    }
+
+    private var rowButtons: some View {
+        HStack(spacing: 12) {
+            Button {
+                showEditSheet = true
+            } label: {
+                Image(systemName: "square.and.pencil")
+            }
+            .buttonStyle(.borderless)
+            .help("Edit name or URL")
+            .accessibilityLabel("Edit calendar \(subscription.name)")
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove calendar")
+            .accessibilityLabel("Remove calendar \(subscription.name)")
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
+                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                    .padding(6)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .padding(-6)
+            .disabled(!subscription.isEnabled)
+            .help(subscription.isEnabled ? "Show upcoming events" : "Calendar disabled")
+            .accessibilityLabel(expanded ? "Hide events for \(subscription.name)" : "Show events for \(subscription.name)")
+        }
+    }
+
+    /// Sanitized feed URL for display outside the editor: shared iCal links
+    /// embed secret tokens in path/query, so rows show only the host. The full
+    /// URL remains visible (and editable) inside the edit sheet.
+    static func displayURL(_ urlString: String) -> String {
+        guard let url = URL(string: urlString), let host = url.host, !host.isEmpty else { return urlString }
+        let path = url.path
+        return path.isEmpty || path == "/" ? host : "\(host)/…"
     }
 }
 
@@ -409,41 +593,25 @@ struct NativeCalendarRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Toggle("", isOn: Binding(get: { isOn }, set: { onToggle($0) }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .help(isOn ? "Stop reminders for this calendar" : "Show reminders for this calendar")
-                ColorPicker("", selection: Binding(
-                    get: { Palette.color(hex: colorHex) },
-                    set: { onColor(Palette.hexString(from: NSColor($0))) }
-                ), supportsOpacity: false)
-                .labelsHidden()
-                .scaleEffect(x: 0.75, y: 0.75)
-                .frame(width: 24, height: 20)
-                .padding(.leading, 2)
-                .disabled(!isOn)
-                .help(isOn ? "Tint for this calendar's events" : "Enable the calendar to pick a color")
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(info.title).font(.system(size: 13, weight: .semibold))
-                    Text(info.sourceTitle.isEmpty ? "Apple Calendars" : "via \(info.sourceTitle)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+            // Wrap the chevron to a second row in narrow windows.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    leadingControls
+                    titleBlock
+                    Spacer()
+                    expandButton
                 }
-                .opacity(isOn ? 1 : 0.5)
-                Spacer()
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
-                } label: {
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 16)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 12) {
+                        leadingControls
+                        titleBlock
+                        Spacer()
+                    }
+                    HStack {
+                        Spacer()
+                        expandButton
+                    }
                 }
-                .buttonStyle(.borderless)
-                .disabled(!isOn)
-                .help(isOn ? "Show upcoming events" : "Calendar disabled")
             }
             if expanded && isOn {
                 UpcomingEventList(events: events, error: nil, colorHex: colorHex)
@@ -455,10 +623,95 @@ struct NativeCalendarRow: View {
             if !enabled { expanded = false }
         }
     }
+
+    private var leadingControls: some View {
+        HStack(spacing: 12) {
+            Toggle("", isOn: Binding(get: { isOn }, set: { onToggle($0) }))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .help(isOn ? "Stop reminders for this calendar" : "Show reminders for this calendar")
+                .accessibilityLabel("\(isOn ? "Stop reminders for" : "Show reminders for") \(info.title)")
+            ColorPicker("", selection: Binding(
+                get: { Palette.color(hex: colorHex) },
+                set: { onColor(Palette.hexString(from: NSColor($0))) }
+            ), supportsOpacity: false)
+            .labelsHidden()
+            .scaleEffect(x: 0.75, y: 0.75)
+            .frame(width: 24, height: 20)
+            .padding(.leading, 2)
+            .disabled(!isOn)
+            .help(isOn ? "Tint for this calendar's events" : "Enable the calendar to pick a color")
+            .accessibilityLabel("Event color for \(info.title)")
+        }
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(info.title).font(.system(size: 13, weight: .semibold))
+            Text(info.sourceTitle.isEmpty ? "Apple Calendars" : "via \(info.sourceTitle)")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .opacity(isOn ? 1 : 0.5)
+    }
+
+    private var expandButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+        } label: {
+            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+                .padding(6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .padding(-6)
+        .disabled(!isOn)
+        .help(isOn ? "Show upcoming events" : "Calendar disabled")
+        .accessibilityLabel(expanded ? "Hide events for \(info.title)" : "Show events for \(info.title)")
+    }
+}
+
+/// URL intake shared by Add/Edit: webcal→https, validation, normalization for
+/// duplicate detection (scheme/host lowercased, trailing slash dropped; path
+/// and query stay verbatim — they carry the secret token).
+enum CalendarURL {
+    static func normalize(_ raw: String) -> String? {
+        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("webcal://") {
+            trimmed = "https://" + String(trimmed.dropFirst("webcal://".count))
+        }
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https", let host = url.host?.lowercased(), !host.isEmpty else { return nil }
+        var path = url.path
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        var normalized = "\(scheme)://\(host)\(path)"
+        if let components = URLComponents(url: url, resolvingAgainstBaseURL: false), let query = components.query {
+            normalized += "?" + query
+        }
+        return normalized
+    }
+
+    /// Explicit consent before sending a private calendar token over plaintext.
+    static func confirmInsecureHTTP(_ urlString: String) -> Bool {
+        guard let url = URL(string: urlString), url.scheme?.lowercased() == "http" else { return true }
+        let alert = NSAlert()
+        alert.messageText = "Use an unencrypted HTTP link?"
+        alert.informativeText = "Calendar links usually contain a private token. HTTP sends it in plain text — anyone on your network could read your calendar. HTTPS is strongly recommended."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Use HTTP Anyway")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
 }
 
 struct EditCalendarView: View {
     @Binding var subscription: CalendarSubscription
+    let existingURLs: [String]
     let onSave: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
@@ -466,8 +719,9 @@ struct EditCalendarView: View {
     @State private var errorText: String?
     @State private var didChangeURL = false
 
-    init(subscription: Binding<CalendarSubscription>, onSave: @escaping () -> Void) {
+    init(subscription: Binding<CalendarSubscription>, existingURLs: [String], onSave: @escaping () -> Void) {
         _subscription = subscription
+        self.existingURLs = existingURLs
         self.onSave = onSave
         _name = State(initialValue: subscription.wrappedValue.name)
         _urlString = State(initialValue: subscription.wrappedValue.url)
@@ -502,22 +756,29 @@ struct EditCalendarView: View {
     }
 
     private func submit() {
-        var trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.lowercased().hasPrefix("webcal://") {
-            trimmed = "https://" + String(trimmed.dropFirst("webcal://".count))
-        }
-        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https", url.host != nil else {
+        guard let normalized = CalendarURL.normalize(urlString) else {
             errorText = "That doesn't look like a valid calendar URL."
             return
         }
+        if didChangeURL,
+           let own = CalendarURL.normalize(subscription.url), own != normalized,
+           existingURLs.compactMap(CalendarURL.normalize).contains(normalized) {
+            errorText = "That calendar link is already added."
+            return
+        }
+        guard CalendarURL.confirmInsecureHTTP(normalized) else { return }
+        let raw = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         subscription.name = name.trimmingCharacters(in: .whitespaces).isEmpty ? subscription.name : name.trimmingCharacters(in: .whitespaces)
-        subscription.url = trimmed
+        if raw != subscription.url {
+            subscription.url = raw
+        }
         dismiss()
         onSave()
     }
 }
 
 struct AddCalendarView: View {
+    var existingURLs: [String]
     var onAdd: (String, String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
@@ -561,17 +822,112 @@ struct AddCalendarView: View {
     }
 
     private func submit() {
-        var trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.lowercased().hasPrefix("webcal://") {
-            trimmed = "https://" + String(trimmed.dropFirst("webcal://".count))
-        }
-        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https", url.host != nil else {
+        guard let normalized = CalendarURL.normalize(urlString) else {
             errorText = "That doesn't look like a valid calendar URL."
             return
         }
+        if existingURLs.compactMap(CalendarURL.normalize).contains(normalized) {
+            errorText = "That calendar link is already added."
+            return
+        }
+        guard CalendarURL.confirmInsecureHTTP(normalized) else { return }
+        let raw = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        onAdd(trimmedName.isEmpty ? "Calendar" : trimmedName, trimmed)
+        onAdd(trimmedName.isEmpty ? "Calendar" : trimmedName, raw)
         dismiss()
+    }
+}
+
+/// Small capsule badge that opens a URL — friendlier than a bare blue link.
+struct BadgeLink<Content: View>: View {
+    let url: URL
+    let label: Content
+    @State private var hovering = false
+
+    init(url: URL, @ViewBuilder label: () -> Content) {
+        self.url = url
+        self.label = label()
+    }
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(url)
+        } label: {
+            label
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(Color.primary.opacity(hovering ? 0.14 : 0.07)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .cursor(.pointingHand)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// One sidebar navigation entry: icon + title, fixed-width trailing slot for
+/// the ⌘N shortcut hint (revealing it never shifts anything), selection +
+/// hover backgrounds. ⌘N is bound via `keyboardShortcut`.
+private struct SidebarRow: View {
+    let section: SettingsSection
+    let shortcutNumber: Int
+    let isSelected: Bool
+    let showShortcut: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: section.symbol)
+                    .font(.system(size: 12))
+                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                    .frame(width: 16)
+                // Constant font: no width change on selection, so titles never
+                // wobble or suddenly truncate when the row becomes active.
+                Text(section.title)
+                    .font(.system(size: 13))
+                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                // Reserved-width slot: the hint only fades in/out, so no other
+                // element ever moves when it appears.
+                Text("⌘\(shortcutNumber)")
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Color.secondary)
+                    .opacity(showShortcut ? 1 : 0)
+                    .frame(width: 24, alignment: .trailing)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 7).fill(rowBackground))
+            .contentShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(KeyEquivalent(Character("\(shortcutNumber)")), modifiers: .command)
+        .onHover { hovering = $0 }
+        // VoiceOver reads the plain title — the ⌘N hint is a visual power-user
+        // affordance and would only be noise in the label.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(section.title) section")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    private var rowBackground: Color {
+        if isSelected { return Color.primary.opacity(0.09) }
+        if hovering { return Color.primary.opacity(0.05) }
+        return Color.primary.opacity(0)
+    }
+}
+
+/// Reports each settings section's top edge within the scroll view, so the
+/// sidebar selection can follow manual scrolling.
+struct SectionTopKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { current, _ in current })
     }
 }
 
@@ -579,23 +935,180 @@ struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var alerts: AlertController
     @State private var showAddSheet = false
+    @StateObject private var commandHints = CommandHoldTracker()
+    @State private var selectedSection: SettingsSection = .calendars
+    /// While a sidebar jump animates, the scroll-position tracker is paused —
+    /// otherwise intermediate positions overwrite the just-selected entry
+    /// (selection visibly bounces back and forth).
+    @State private var suppressSelectionTracking = false
+    @State private var selectionResumeWorkItem: DispatchWorkItem?
+    /// Section card currently emphasized by a sidebar jump — brief accent
+    /// flash so jumps are visible even when no scrolling happens.
+    @State private var highlightedSection: SettingsSection?
+    @State private var highlightDismissWorkItem: DispatchWorkItem?
+
+    /// Below this width the sidebar disappears and the form takes the full window.
+    static let sidebarThreshold: CGFloat = 880
 
     var body: some View {
+        GeometryReader { geo in
+            let sidebarVisible = geo.size.width >= Self.sidebarThreshold
+            ScrollViewReader { proxy in
+                HStack(alignment: .top, spacing: 0) {
+                    if sidebarVisible {
+                        sidebar(proxy: proxy, hintsVisible: commandHints.showHints)
+                            .padding(EdgeInsets(top: 24, leading: 16, bottom: 24, trailing: 10))
+                            .frame(width: 224, alignment: .topLeading)
+                            .transition(.opacity)
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.12))
+                            .frame(width: 1)
+                            .padding(.vertical, 24)
+                            .frame(maxHeight: .infinity)
+                    }
+                    scrollContent
+                }
+                .animation(.easeInOut(duration: 0.18), value: sidebarVisible)
+            }
+        }
+        .onAppear { commandHints.install() }
+        .onDisappear { commandHints.remove() }
+        .sheet(isPresented: $showAddSheet) {
+            AddCalendarView(existingURLs: store.subscriptions.map(\.url)) { name, url in
+                store.addSubscription(name: name, urlString: url)
+            }
+        }
+    }
+
+    // MARK: - Sidebar navigation
+
+    private func sidebar(proxy: ScrollViewProxy, hintsVisible: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(SettingsSection.allCases.enumerated()), id: \.element) { index, section in
+                SidebarRow(
+                    section: section,
+                    shortcutNumber: index + 1,
+                    isSelected: selectedSection == section,
+                    showShortcut: hintsVisible
+                ) {
+                    jump(to: section, proxy: proxy)
+                }
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: selectedSection)
+    }
+
+    private func jump(to section: SettingsSection, proxy: ScrollViewProxy) {
+        selectedSection = section
+        // Pause scroll-following until the animated jump settles.
+        suppressSelectionTracking = true
+        selectionResumeWorkItem?.cancel()
+        let resume = DispatchWorkItem { suppressSelectionTracking = false }
+        selectionResumeWorkItem = resume
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: resume)
+        withAnimation(.easeInOut(duration: 0.25)) {
+            proxy.scrollTo(section.rawValue, anchor: .top)
+        }
+        flash(section)
+    }
+
+    /// Brief accent flash of the target card — feedback for jumps that land on
+    /// an already-visible section (where no scrolling would show anything).
+    private func flash(_ section: SettingsSection) {
+        highlightDismissWorkItem?.cancel()
+        // Reset without animation, re-apply on the next runloop tick, so
+        // re-jumping to the same section still animates.
+        var reset = Transaction()
+        reset.disablesAnimations = true
+        withTransaction(reset) { highlightedSection = nil }
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.18)) { highlightedSection = section }
+        }
+        let dismiss = DispatchWorkItem {
+            withAnimation(.easeInOut(duration: 0.45)) { highlightedSection = nil }
+        }
+        highlightDismissWorkItem = dismiss
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: dismiss)
+    }
+
+    // MARK: - Scroll content
+
+    private var scrollContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                calendarsSection
-                nativeSection
-                reminderSection
-                generalSection
+                trackedSection(.calendars) { calendarsSection }
+                trackedSection(.native) { nativeSection }
+                trackedSection(.reminder) { reminderSection }
+                trackedSection(.general) { generalSection }
+                trackedSection(.about) { aboutSection }
             }
             .padding(24)
             .frame(maxWidth: 640)
             .frame(maxWidth: .infinity)
         }
-        .sheet(isPresented: $showAddSheet) {
-            AddCalendarView { name, url in
-                store.addSubscription(name: name, urlString: url)
-            }
+        .coordinateSpace(name: "settingsScroll")
+        .onPreferenceChange(SectionTopKey.self) { tops in
+            guard !suppressSelectionTracking else { return }
+            selectedSection = Self.activeSection(from: tops)
+        }
+    }
+
+    /// Tags a section for `scrollTo`, reports its vertical position so the
+    /// sidebar selection can follow manual scrolling, and carries the jump
+    /// emphasis flash.
+    private func trackedSection(_ section: SettingsSection, content: () -> some View) -> some View {
+        content()
+            .id(section.rawValue)
+            .overlay(
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.primary.opacity(0.05))
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(Color.accentColor.opacity(0.75), lineWidth: 1.5)
+                }
+                .opacity(highlightedSection == section ? 1 : 0)
+                .allowsHitTesting(false)
+            )
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: SectionTopKey.self,
+                        value: [section.rawValue: geo.frame(in: .named("settingsScroll")).minY]
+                    )
+                }
+            )
+    }
+
+    /// The section whose header has scrolled closest past the top edge.
+    static func activeSection(from tops: [String: CGFloat]) -> SettingsSection {
+        let present = SettingsSection.allCases.filter { tops[$0.rawValue] != nil }
+        var current = present.first ?? .calendars
+        for section in present where (tops[section.rawValue] ?? 0) <= 140 {
+            current = section
+        }
+        return current
+    }
+
+    private var addButton: some View {
+        Button {
+            showAddSheet = true
+        } label: {
+            Label("Add Calendar…", systemImage: "plus")
+        }
+    }
+
+    private var refreshButton: some View {
+        Button {
+            store.refresh()
+        } label: {
+            Label(store.isRefreshing ? "Syncing…" : "Refresh", systemImage: "arrow.clockwise")
+        }
+        .disabled(store.isRefreshing)
+    }
+
+    @ViewBuilder private var lastSyncedText: some View {
+        if let last = store.lastRefresh {
+            Text("Last synced \(Fmt.ago(last))").font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -626,7 +1139,7 @@ struct SettingsView: View {
 
     private var calendarsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("External Calendars", "calendar")
+            sectionHeader(SettingsSection.calendars.title, SettingsSection.calendars.symbol)
             Text("Paste the shared iCal (ICS) links of the calendars you want reminders for.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -644,7 +1157,9 @@ struct SettingsView: View {
                         SubscriptionRow(
                             subscription: $subscription,
                             events: upcomingEvents(for: subscription),
-                            error: store.errors[subscription.id]
+                            error: store.errors[subscription.id],
+                            warning: store.warnings[subscription.id],
+                            existingURLs: store.subscriptions.map(\.url)
                         ) {
                             confirmDelete(subscription)
                         } onEdited: {
@@ -654,21 +1169,22 @@ struct SettingsView: View {
                 }
             }
             HStack {
-                Button {
-                    showAddSheet = true
-                } label: {
-                    Label("Add Calendar…", systemImage: "plus")
+                // Wide: one row. Narrow: Add on top, Refresh + last-synced below.
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        addButton
+                        Spacer()
+                        lastSyncedText
+                        refreshButton
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        addButton
+                        VStack(alignment: .leading, spacing: 2) {
+                            refreshButton
+                            lastSyncedText
+                        }
+                    }
                 }
-                Spacer()
-                if let last = store.lastRefresh {
-                    Text("Last synced \(Fmt.ago(last))").font(.caption).foregroundStyle(.secondary)
-                }
-                Button {
-                    store.refresh()
-                } label: {
-                    Label(store.isRefreshing ? "Syncing…" : "Refresh", systemImage: "arrow.clockwise")
-                }
-                .disabled(store.isRefreshing)
             }
         }
         .padding(16)
@@ -679,7 +1195,7 @@ struct SettingsView: View {
 
     private var nativeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Apple Calendars", "calendar.badge.clock")
+            sectionHeader(SettingsSection.native.title, SettingsSection.native.symbol)
             Text("Or use your Apple Calendars directly: iCloud, Google, Exchange, CalDAV and more, no links needed.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -697,24 +1213,27 @@ struct SettingsView: View {
     }
 
     @ViewBuilder private var nativeAuthorizedContent: some View {
-        if store.nativeCalendarInfos.isEmpty {
-            HStack(spacing: 10) {
-                Image(systemName: "calendar.badge.plus").font(.title2).foregroundStyle(.secondary)
-                Text("No calendars found. Add an account to your Apple Calendars first, then hit Refresh.")
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(16)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.06)))
-        } else {
-            VStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
+            if store.nativeCalendarInfos.isEmpty {
+                HStack(spacing: 10) {
+                    Image(systemName: "calendar.badge.plus").font(.title2).foregroundStyle(.secondary)
+                    Text("No calendars found. Add an account to your Apple Calendars first, then hit Refresh.")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(16)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.06)))
+            } else {
                 ForEach(store.nativeCalendarInfos) { info in
                     nativeRow(for: info)
                 }
-                staleNativeRows
+                Toggle("Hide events I've declined", isOn: $store.settings.skipDeclined)
+                    .font(.system(size: 12))
             }
-            Toggle("Hide events I've declined", isOn: $store.settings.skipDeclined)
-                .font(.system(size: 12))
+            // Stale rows render independently of `nativeCalendarInfos` — an
+            // enabled calendar whose EventKit counterpart vanished must stay
+            // forgettable even when NO calendars are currently available.
+            staleNativeRows
         }
     }
 
@@ -807,16 +1326,20 @@ struct SettingsView: View {
 
     private var reminderSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Reminder", "bell.badge")
+            sectionHeader(SettingsSection.reminder.title, SettingsSection.reminder.symbol)
             Text("The fullscreen reminder opens this long before an event starts.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
+            // Flow layout: pills hug their content (one compact row when the
+            // window is wide) and wrap as whole pills when it narrows —
+            // no stretching, no mid-pill line breaks.
+            FlowLayout(spacing: 6) {
                 ForEach([0, 10, 30, 60, 120, 300, 600, 900], id: \.self) { seconds in
                     Button {
                         store.settings.leadSeconds = seconds
                     } label: {
                         Text(Fmt.leadTime(seconds))
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(PresetButtonStyle(active: store.settings.leadSeconds == seconds))
                 }
@@ -854,7 +1377,7 @@ struct SettingsView: View {
 
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("General", "gearshape")
+            sectionHeader(SettingsSection.general.title, SettingsSection.general.symbol)
             Picker("Check calendars every", selection: $store.settings.refreshMinutes) {
                 Text("5 min").tag(5)
                 Text("15 min").tag(15)
@@ -875,27 +1398,77 @@ struct SettingsView: View {
             .pickerStyle(.menu)
             .frame(maxWidth: 300)
             Toggle("Launch at Login", isOn: $store.settings.launchAtLogin)
-            HStack(spacing: 14) {
-                Text("Version \(Self.version)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 5) {
-                    GitHubMark().fill(Color.secondary).frame(width: 12, height: 12)
-                    Link("GitHub", destination: Links.repo)
+            if case .requiresApproval = store.loginItemState {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text("Needs approval in System Settings → Login Items")
                         .font(.caption)
-                }
-                HStack(spacing: 5) {
-                    Image(systemName: "globe")
-                        .font(.system(size: 10))
                         .foregroundStyle(.secondary)
-                    Link("thomasboch.com", destination: Links.website)
-                        .font(.caption)
+                    Button("Open…") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+                    }
+                    .controlSize(.small)
+                }
+            } else if case .failed = store.loginItemState, store.settings.launchAtLogin {
+                Text("Couldn't keep Launch at Login active — check System Settings → Login Items.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.05)))
+    }
+
+    // MARK: - About
+
+    private var aboutSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader(SettingsSection.about.title, SettingsSection.about.symbol)
+            // Wide: one row. Narrow: version, GitHub and website stack.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    aboutItems
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    aboutItems
                 }
             }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.05)))
+    }
+
+    @ViewBuilder private var aboutItems: some View {
+        // Version badge → the changelog/release notes of exactly this version.
+        BadgeLink(url: Self.changelogURL ?? Links.releases) {
+            HStack(spacing: 5) {
+                Image(systemName: "tag")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Text("Version \(Self.version)").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        BadgeLink(url: Links.repo) {
+            HStack(spacing: 5) {
+                GitHubMark().fill(Color.secondary).frame(width: 11, height: 11)
+                Text("GitHub").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        BadgeLink(url: Links.website) {
+            HStack(spacing: 5) {
+                Image(systemName: "globe")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Text("thomasboch.com").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Release notes ("changelog") for the running version.
+    static var changelogURL: URL? {
+        URL(string: Links.repo.absoluteString + "/releases/tag/v" + version)
     }
 
     static var version: String {

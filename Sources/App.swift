@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import EventKit
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = AppStore()
     let alertController = AlertController()
@@ -29,11 +30,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.onAlert = { [weak alertController] events in
             alertController?.present(events)
         }
-        menuBarController = MenuBarController(store: store, alerts: alertController) { [weak self] in
+        menuBarController = MenuBarController(store: store, alerts: alertController, openSettings: { [weak self] in
             self?.openSettings()
-        }
+        }, quit: { [weak self] in
+            // Same flow as ⌘Q and the app menu: confirm when Settings is key,
+            // dismiss a showing alert, else terminate.
+            self?.handleQuitRequest()
+        })
         wakeObserver = NotificationCenter.default.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.store.refresh()
+            // Main queue delivery — hop into our MainActor context.
+            MainActor.assumeIsolated {
+                self?.store.refresh()
+            }
         }
         store.start()
         if store.subscriptions.isEmpty && !store.nativeCalendars.contains(where: \.isEnabled) {
@@ -46,8 +54,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupMainMenu() {
         let mainMenu = NSMenu()
 
-        // "now" app menu — Quit goes through the custom flow (confirm / close alert),
-        // same as the ⌘Q local monitor, which still takes precedence for the key combo.
+        // "now" app menu — Quit goes through the custom flow (confirm in Settings,
+        // dismiss-vs-quit while an alert shows), same as the ⌘Q local monitor,
+        // which still takes precedence for the key combo.
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu(title: "now")
         appMenu.addItem(withTitle: "Quit now", action: #selector(handleQuitRequest), keyEquivalent: "q").target = self
@@ -79,15 +88,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
     }
 
-    /// Shared quit behavior for ⌘Q and the "Quit now" menu item: confirm while
-    /// Settings is key, dismiss a showing alert, otherwise terminate.
-    @objc private func handleQuitRequest() {
+    /// Shared quit behavior for ⌘Q, the app menu item, and the status menu:
+    /// confirm while Settings is key, ask dismiss-vs-quit while a reminder is
+    /// showing, otherwise terminate. Every Quit entry point routes through here.
+    @objc func handleQuitRequest() {
         if let window = NSApp.keyWindow, window === settingsWindow {
             handleQuitFromSettings()
         } else if alertController.isOpen {
-            alertController.close()
+            handleQuitFromAlert()
         } else {
             NSApp.terminate(nil)
+        }
+    }
+
+    /// Quit request while the fullscreen reminder is showing: quitting silently
+    /// closing the reminder would be surprising — ask which one they meant.
+    private func handleQuitFromAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Quit now?"
+        alert.informativeText = "A reminder is showing. Quit stops all reminders until you launch now again; Dismiss closes just the reminder."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Quit now")
+        alert.addButton(withTitle: "Dismiss Reminder")
+        alert.addButton(withTitle: "Cancel")
+        // Sit above the .screenSaver-level reminder panel.
+        alert.window.level = NSWindow.Level(NSWindow.Level.screenSaver.rawValue + 1)
+        NSApp.activate(ignoringOtherApps: true)
+        // The reminder's own key monitor (esc/return/s) must not eat keystrokes
+        // while this dialog is up.
+        alertController.modalAlertActive = true
+        let result = alert.runModal()
+        alertController.modalAlertActive = false
+        switch result {
+        case .alertFirstButtonReturn:
+            NSApp.terminate(nil)
+        case .alertSecondButtonReturn:
+            alertController.close()
+        default:
+            break
         }
     }
 
@@ -113,12 +151,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func openSettings() {
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 720), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+            // Default 940×720 shows the section sidebar (threshold 880 — a bit
+            // of headroom so the first tiny resize doesn't drop it); clamped to
+            // the screen so small displays never get an overflowing window. On
+            // a screen narrower than the threshold the sidebar simply doesn't
+            // appear (form-only layout) — by design. The user's chosen frame is
+            // remembered across launches via the autosave name.
+            let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: min(940, screen.width), height: min(720, screen.height)), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "now · Settings"
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: SettingsView().environmentObject(store).environmentObject(alertController))
-            window.center()
+            window.minSize = NSSize(width: 520, height: 480)
             window.delegate = self
+            window.setFrameAutosaveName("now-settings")
+            if !window.setFrameUsingName("now-settings") {
+                window.center()
+            }
             settingsWindow = window
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
@@ -147,12 +196,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         syncActivationPolicy()
+        // Hardening: windowWillClose can run while `isVisible` is still true,
+        // which would leave the Dock icon behind. Re-evaluate once more after
+        // the close completes — `syncActivationPolicy()` is idempotent.
+        DispatchQueue.main.async { [weak self] in
+            self?.syncActivationPolicy()
+        }
     }
 }
 
 @main
 enum NowApp {
-    static let appDelegate = AppDelegate()
+    @MainActor static let appDelegate = AppDelegate()
 
     static func main() {
         let arguments = ProcessInfo.processInfo.arguments
@@ -169,10 +224,13 @@ enum NowApp {
             nativeCLI(subcommand)
             exit(0)
         }
-        let app = NSApplication.shared
-        app.delegate = appDelegate
-        app.setActivationPolicy(.accessory)
-        app.run()
+        // main() itself is nonisolated; everything below runs on the main thread.
+        MainActor.assumeIsolated {
+            let app = NSApplication.shared
+            app.delegate = appDelegate
+            app.setActivationPolicy(.accessory)
+            app.run()
+        }
     }
 
     /// EventKit counterpart of `--parse`: prints authorization status, every EKCalendar,
@@ -180,6 +238,12 @@ enum NowApp {
     /// Note: permission granted from a terminal run is attributed to the terminal app —
     /// for real testing launch now.app and grant there.
     static func nativeCLI(_ subcommand: String?) {
+        MainActor.assumeIsolated {
+            nativeCLIBody(subcommand)
+        }
+    }
+
+    @MainActor private static func nativeCLIBody(_ subcommand: String?) {
         let source = NativeCalendarSource()
         let status = source.authorizationStatus()
         print("NOTE: permission requested here is attributed to your terminal app —")
@@ -218,16 +282,21 @@ enum NowApp {
         let formatter = ISO8601DateFormatter()
         print("WINDOW \(formatter.string(from: now.addingTimeInterval(-6 * 3600))) … \(formatter.string(from: now.addingTimeInterval(14 * 86400)))")
         var kept = 0
+        var totalMS = 0.0
         for info in infos {
             let native = NativeCalendar(ekIdentifier: info.ekIdentifier, name: info.title, colorHex: info.colorHex, colorIndex: 0)
+            let fetchStart = Date()
             let events = source.fetchEvents(calendars: [native], skipDeclined: true, now: now)
-            print("CALENDAR \(info.title): keeping \(events.count)")
+            let ms = Date().timeIntervalSince(fetchStart) * 1000
+            totalMS += ms
+            print("CALENDAR \(info.title): keeping \(events.count) (\(String(format: "%.0f", ms)) ms)")
             for event in events {
                 kept += 1
                 print("  \(formatter.string(from: event.start)) → \(Fmt.time.string(from: event.end)) | \(event.title) | \(event.link?.absoluteString ?? "no link")")
             }
         }
         print("PARSED \(kept) EVENTS (all-day, cancelled and declined are skipped)")
+        print("QUERY TIME total \(String(format: "%.0f", totalMS)) ms — budget: <50 ms warm / <500 ms cold per store")
     }
 
     static func describeNativeStatus(_ status: EKAuthorizationStatus) -> String {
@@ -273,7 +342,10 @@ enum NowApp {
             return
         }
         let subscription = CalendarSubscription(name: "cli", url: target, colorIndex: 0)
-        let rawEvents = ICSParser.parse(text)
+        let (rawEvents, parseWarnings) = ICSParser.parse(text)
+        for warning in parseWarnings.prefix(10) {
+            print("WARNING: \(warning)")
+        }
         let withStart = rawEvents.filter { $0.dtStart != nil }
         print("RAW \(rawEvents.count) VEVENTs, \(withStart.count) with DTSTART, \(withStart.filter(\.isAllDay).count) all-day")
         let now = Date()
@@ -282,7 +354,10 @@ enum NowApp {
         for event in withStart {
             print("  \(event.uid.prefix(12)) start=\(event.dtStart.map(formatter.string(from:)) ?? "nil") allDay=\(event.isAllDay) rrule=\(event.rrule != nil) status=\(event.status)")
         }
-        let events = ICSBuilder.meetings(fromICS: text, subscription: subscription, now: Date())
+        let (events, buildWarnings) = ICSBuilder.meetings(fromICS: text, subscription: subscription, now: Date())
+        for warning in buildWarnings.prefix(10) {
+            print("WARNING: \(warning)")
+        }
         print("PARSED \(events.count) EVENTS")
         for event in events {
             print("\(formatter.string(from: event.start)) → \(formatter.string(from: event.end)) | \(event.title) | \(event.link?.absoluteString ?? "no link")")

@@ -22,7 +22,7 @@ Add the shared iCal (ICS) links of your calendars — or connect Apple Calendar 
 
 Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/releases/latest), unzip, and move `now.app` to /Applications.
 
-> The app is ad-hoc signed (not notarized), so macOS Gatekeeper shows a warning on first launch. Any one of these fixes it — only needed once:
+> Release builds are signed with a stable self-signed identity (not notarized with Apple), so macOS Gatekeeper shows a warning on first launch. Any one of these fixes it — only needed once:
 >
 > 1. Click **Done** in the warning dialog, then open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
 > 2. Right-click `now.app` → **Open** → **Open**.

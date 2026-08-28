@@ -6,47 +6,119 @@ struct ICSProperty {
     let value: String
 }
 
-struct RRULE {
-    var freq = ""
+// MARK: - Recurrence rules
+
+struct RRULE: Equatable {
+    enum Freq: String {
+        case daily = "DAILY"
+        case weekly = "WEEKLY"
+        case monthly = "MONTHLY"
+        case yearly = "YEARLY"
+    }
+
+    /// One `BYDAY` entry: a weekday (1=SU … 7=SA, matching `Calendar`'s
+    /// `.weekday`) with an optional ordinal (`1MO`, `-1FR`) — ordinals are only
+    /// valid for MONTHLY/YEARLY rules.
+    struct ByDay: Equatable {
+        var ordinal: Int?
+        var weekday: Int
+    }
+
+    var freq: Freq
     var interval = 1
     var count: Int?
     var until: Date?
-    var byday: [Int] = []
+    var byday: [ByDay] = []
     var bymonthday: [Int] = []
+    var bymonth: [Int] = []
+    var bysetpos: [Int] = []
+    /// Week start (1=SU … 7=SA); RFC default is MO.
+    var wkst: Int
 
     static let weekdayMap: [String: Int] = ["SU": 1, "MO": 2, "TU": 3, "WE": 4, "TH": 5, "FR": 6, "SA": 7]
 
+    /// Strict parser: anything this app cannot expand *correctly* returns nil
+    /// (the event then falls back to a single occurrence and the feed gets a
+    /// visible warning) instead of being silently approximated as something
+    /// else. Unsupported: non-day-based frequencies, ordinals on DAILY/WEEKLY,
+    /// BYWEEKNUM/BYYEARDAY/BYHOUR/BYMINUTE/BYSECOND, unknown fields, COUNT+UNTIL
+    /// together, plain YEARLY BYDAY without BYMONTH.
     static func parse(_ text: String, eventTz: TimeZone?) -> RRULE? {
-        var rule = RRULE()
+        var freq: Freq?
+        var interval = 1
+        var count: Int?
+        var until: Date?
+        var byday: [ByDay] = []
+        var bymonthday: [Int] = []
+        var bymonth: [Int] = []
+        var bysetpos: [Int] = []
+        var wkst: Int?
         for pair in text.split(separator: ";") {
             let keyValue = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            guard keyValue.count == 2 else { continue }
+            guard keyValue.count == 2 else { return nil }
             let key = String(keyValue[0]).uppercased()
             let value = String(keyValue[1])
             switch key {
             case "FREQ":
-                rule.freq = value.uppercased()
+                guard let parsed = Freq(rawValue: value.uppercased()) else { return nil }
+                freq = parsed
             case "INTERVAL":
-                rule.interval = max(1, Int(value) ?? 1)
+                guard let parsed = Int(value), parsed >= 1 else { return nil }
+                interval = parsed
             case "COUNT":
-                rule.count = Int(value)
+                guard let parsed = Int(value), parsed >= 1 else { return nil }
+                count = parsed
             case "UNTIL":
-                rule.until = parseUntil(value, eventTz: eventTz)
+                guard let parsed = parseUntil(value, eventTz: eventTz) else { return nil }
+                until = parsed
             case "BYDAY":
-                var days: [Int] = []
                 for token in value.split(separator: ",") {
-                    let name = String(token.suffix(2)).uppercased()
-                    if let day = weekdayMap[name] { days.append(day) }
+                    guard let entry = parseByDay(String(token)) else { return nil }
+                    byday.append(entry)
                 }
-                rule.byday = days
+                guard !byday.isEmpty else { return nil }
             case "BYMONTHDAY":
-                rule.bymonthday = value.split(separator: ",").compactMap { Int($0) }
+                bymonthday = value.split(separator: ",").compactMap { Int($0) }
+                guard !bymonthday.isEmpty, bymonthday.allSatisfy({ $0 != 0 && (1...31).contains(abs($0)) }) else { return nil }
+            case "BYMONTH":
+                bymonth = value.split(separator: ",").compactMap { Int($0) }
+                guard !bymonth.isEmpty, bymonth.allSatisfy({ (1...12).contains($0) }) else { return nil }
+            case "BYSETPOS":
+                bysetpos = value.split(separator: ",").compactMap { Int($0) }
+                guard !bysetpos.isEmpty, bysetpos.allSatisfy({ $0 != 0 && (1...366).contains(abs($0)) }) else { return nil }
+            case "WKST":
+                guard let parsed = weekdayMap[value.uppercased()] else { return nil }
+                wkst = parsed
+            case "BYWEEKNUM", "BYYEARDAY", "BYHOUR", "BYMINUTE", "BYSECOND":
+                return nil // explicitly unsupported — never approximate
             default:
-                break
+                return nil // unknown/extension field — reject instead of guessing
             }
         }
-        guard !rule.freq.isEmpty else { return nil }
-        return rule
+        guard let freq else { return nil }
+        if count != nil, until != nil { return nil } // RFC: mutually exclusive
+        switch freq {
+        case .daily, .weekly:
+            if byday.contains(where: { $0.ordinal != nil }) { return nil }
+            if !bymonthday.isEmpty || !bymonth.isEmpty || !bysetpos.isEmpty { return nil }
+        case .monthly:
+            if !bysetpos.isEmpty, byday.isEmpty, bymonthday.isEmpty { return nil }
+        case .yearly:
+            if !bysetpos.isEmpty { return nil }
+            if !byday.isEmpty, bymonth.isEmpty { return nil } // plain YEARLY BYDAY spans the whole year
+        }
+        return RRULE(freq: freq, interval: interval, count: count, until: until, byday: byday, bymonthday: bymonthday, bymonth: bymonth, bysetpos: bysetpos, wkst: wkst ?? weekdayMap["MO"]!)
+    }
+
+    static func parseByDay(_ token: String) -> ByDay? {
+        let text = token.trimmingCharacters(in: .whitespaces).uppercased()
+        guard text.count >= 2 else { return nil }
+        let dayPart = String(text.suffix(2))
+        guard let weekday = weekdayMap[dayPart] else { return nil }
+        let prefix = String(text.dropLast(2))
+        if prefix.isEmpty { return ByDay(ordinal: nil, weekday: weekday) }
+        guard let ordinal = Int(prefix), ordinal != 0, (1...53).contains(abs(ordinal)) else { return nil }
+        return ByDay(ordinal: ordinal, weekday: weekday)
     }
 
     static func parseUntil(_ value: String, eventTz: TimeZone?) -> Date? {
@@ -70,6 +142,8 @@ struct RRULE {
     }
 }
 
+// MARK: - Parsed event
+
 struct ParsedEvent {
     var uid: String
     var title: String
@@ -84,49 +158,118 @@ struct ParsedEvent {
     var dtStart: Date?
     var tz: TimeZone?
     var durationSeconds: TimeInterval
+    /// True when DTEND or a valid DURATION was present — detached recurrence
+    /// overrides without one inherit the master's duration.
+    var hasExplicitEnd: Bool
     var rrule: RRULE?
+    /// Recurrence exceptions, resolved against the master's zone (see
+    /// `ICSBuilder`); exact `Date` equality against occurrences.
     var exdates: [Date]
     var recurrenceID: Date?
+    /// Raw properties kept so zones can be resolved with the MASTER's zone:
+    /// TZID-less EXDATE / RECURRENCE-ID / RDATE values must inherit the
+    /// master's DTSTART zone, not the local zone.
+    var exdateProperties: [ICSProperty]
+    var rdateProperties: [ICSProperty]
+    var recurrenceIDProperty: ICSProperty?
+    var recurrenceIDHasExplicitZone = false
+    /// `RANGE=` parameter on RECURRENCE-ID (unsupported → override ignored).
+    var recurrenceRange: String?
+    /// Set when the VEVENT carried an RRULE this app rejects — surfaced as a
+    /// feed warning; the event falls back to its single first occurrence.
+    var unsupportedRRULEText: String?
+    /// Revision markers for resolving duplicate VEVENT revisions.
+    var sequence = 0
+    var dtstamp: Date?
+
+    init(uid: String, title: String, location: String?, description: String?, altDescription: String?, conference: String?, url: String?, attach: String?, status: String, isAllDay: Bool, dtStart: Date?, tz: TimeZone?, durationSeconds: TimeInterval, hasExplicitEnd: Bool = false, rrule: RRULE?, exdates: [Date], recurrenceID: Date?, sequence: Int = 0, dtstamp: Date? = nil) {
+        self.uid = uid
+        self.title = title
+        self.location = location
+        self.description = description
+        self.altDescription = altDescription
+        self.conference = conference
+        self.url = url
+        self.attach = attach
+        self.status = status
+        self.isAllDay = isAllDay
+        self.dtStart = dtStart
+        self.tz = tz
+        self.durationSeconds = durationSeconds
+        self.hasExplicitEnd = hasExplicitEnd
+        self.rrule = rrule
+        self.exdates = exdates
+        self.recurrenceID = recurrenceID
+        self.sequence = sequence
+        self.dtstamp = dtstamp
+        exdateProperties = []
+        rdateProperties = []
+        recurrenceIDProperty = nil
+    }
 }
 
+// MARK: - Parser
+
 enum ICSParser {
-    static func parse(_ text: String) -> [ParsedEvent] {
+    static let maxLines = 200_000
+    static let maxLineLength = 10_000
+
+    static func parse(_ text: String) -> (events: [ParsedEvent], warnings: [String]) {
         var events: [ParsedEvent] = []
+        var warnings: [String] = []
         var current: [ICSProperty] = []
         var inEvent = false
-        for line in unfolded(text) {
-            if line == "BEGIN:VEVENT" {
+        for line in unfolded(text, warnings: &warnings) {
+            let token = line.trimmingCharacters(in: .whitespaces).uppercased()
+            if token == "BEGIN:VEVENT" {
                 inEvent = true
                 current = []
-            } else if line == "END:VEVENT" {
-                if inEvent, let event = makeEvent(current) { events.append(event) }
+            } else if token == "END:VEVENT" {
+                if inEvent, let event = makeEvent(current, warnings: &warnings) { events.append(event) }
                 inEvent = false
                 current = []
             } else if inEvent, !line.isEmpty, let property = splitProperty(line) {
                 current.append(property)
             }
         }
-        return events
+        return (events, warnings)
     }
 
-    static func unfolded(_ text: String) -> [String] {
+    /// Normalizes CRLF/CR → LF (CR+LF is one grapheme cluster in Swift, so a
+    /// naive `split(separator: "\n")` sees one giant line), unfolds RFC 5545
+    /// continuation lines, and caps parser workload (line count + length).
+    static func unfolded(_ text: String, warnings: inout [String]) -> [String] {
         let normalized = text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
         var lines: [String] = []
+        var truncated = false
         for raw in normalized.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
             if line.hasPrefix(" ") || line.hasPrefix("\t") {
                 if !lines.isEmpty {
                     lines[lines.count - 1].append(contentsOf: line.dropFirst())
+                    if lines[lines.count - 1].count > maxLineLength, !truncated {
+                        truncated = true
+                        warnings.append("Feed line longer than \(maxLineLength) characters — feed truncated")
+                    }
                     continue
                 }
+            }
+            if lines.count >= maxLines {
+                if !truncated {
+                    truncated = true
+                    warnings.append("Feed longer than \(maxLines) lines — feed truncated")
+                }
+                break
             }
             lines.append(line)
         }
         return lines
     }
 
+    /// Splits `NAME;PARAM=VALUE:VALUE` — the first unquoted `:` separates the
+    /// value; parameter segments honor quotes so `TZID="Foo;Bar"` stays intact.
     static func splitProperty(_ line: String) -> ICSProperty? {
         var inQuotes = false
         var colonIndex: String.Index?
@@ -147,18 +290,45 @@ enum ICSParser {
         if let semicolon = head.firstIndex(of: ";") {
             name = head[head.startIndex..<semicolon]
             let rest = head[head.index(after: semicolon)...]
-            for pair in rest.split(separator: ";") {
+            for pair in splitRespectingQuotes(rest, separator: ";") {
                 let keyValue = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
                 guard keyValue.count == 2 else { continue }
                 let key = String(keyValue[0]).uppercased()
-                let rawValue = String(keyValue[1])
-                params[key] = rawValue.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                var rawValue = String(keyValue[1])
+                if rawValue.hasPrefix("\""), rawValue.hasSuffix("\""), rawValue.count >= 2 {
+                    rawValue = String(rawValue.dropFirst().dropLast())
+                }
+                params[key] = rawValue
             }
         }
         return ICSProperty(name: String(name).uppercased(), params: params, value: value)
     }
 
+    private static func splitRespectingQuotes(_ text: Substring, separator: Character) -> [String] {
+        var segments: [String] = []
+        var current = ""
+        var inQuotes = false
+        for ch in text {
+            if ch == "\"" {
+                inQuotes.toggle()
+                current.append(ch)
+            } else if ch == separator, !inQuotes {
+                segments.append(current)
+                current = ""
+            } else {
+                current.append(ch)
+            }
+        }
+        segments.append(current)
+        return segments
+    }
+
     static func makeEvent(_ properties: [ICSProperty]) -> ParsedEvent? {
+        var sink: [String] = []
+        return makeEvent(properties, warnings: &sink)
+    }
+
+    static func makeEvent(_ properties: [ICSProperty], warnings: inout [String]) -> ParsedEvent? {
         var uid = ""
         var title = ""
         var location = ""
@@ -174,9 +344,18 @@ enum ICSParser {
         var tz: TimeZone?
         var duration: TimeInterval?
         var rruleText = ""
-        var exdates: [Date] = []
-        var recurrenceID: Date?
+        var exdateProperties: [ICSProperty] = []
+        var rdateProperties: [ICSProperty] = []
+        var recurrenceIDProperty: ICSProperty?
+        var recurrenceRange: String?
+        var sequence = 0
+        var dtstamp: Date?
+        var unsupportedRRULE: String?
         for property in properties {
+            if hasUnknownZone(property) {
+                warnings.append("Event \(uid.isEmpty ? "without UID" : "“\(uid)”") skipped: unknown time zone \(property.params["TZID"] ?? "?")")
+                return nil
+            }
             switch property.name {
             case "UID":
                 uid = property.value
@@ -189,42 +368,69 @@ enum ICSParser {
             case "X-ALT-DESC":
                 if altDescription.isEmpty { altDescription = unescape(property.value) }
             case "ATTACH":
-                if attach.isEmpty, property.params["ENCODING"]?.uppercased() != "BASE64" {
-                    attach = property.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                let candidate = property.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if attach.isEmpty, property.params["ENCODING"]?.uppercased() != "BASE64",
+                   let parsed = URL(string: candidate), parsed.scheme?.lowercased() == "http" || parsed.scheme?.lowercased() == "https" {
+                    attach = candidate
                 }
             case "STATUS":
-                status = property.value.uppercased()
+                status = property.value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             case "DTSTART":
-                let parsed = parseDate(property)
+                let parsed = parseDate(property, fallbackTimeZone: tz)
                 dtStart = parsed.date
                 tz = parsed.tz
                 isAllDay = parsed.allDay
             case "DTEND":
-                dtEnd = parseDate(property).date
+                dtEnd = parseDate(property, fallbackTimeZone: tz).date
             case "DURATION":
                 duration = parseDuration(property.value)
             case "RRULE":
                 rruleText = property.value
             case "EXDATE":
-                for part in property.value.split(separator: ",") {
-                    if let date = parseDate(ICSProperty(name: "X", params: property.params, value: String(part))).date {
-                        exdates.append(date)
-                    }
-                }
+                exdateProperties.append(property)
+            case "RDATE":
+                rdateProperties.append(property)
             case "RECURRENCE-ID":
-                recurrenceID = parseDate(property).date
+                recurrenceIDProperty = property
+                recurrenceRange = property.params["RANGE"]
+            case "SEQUENCE":
+                sequence = Int(property.value.trimmingCharacters(in: .whitespaces)) ?? 0
+            case "DTSTAMP":
+                dtstamp = parseDate(property).date
             case "CONFERENCE", "X-GOOGLE-CONFERENCE", "X-MICROSOFT-SKYPETEAMSMEETINGURL", "X-MICROSOFT-ONLINEMEETINGURL":
-                if conference.isEmpty { conference = property.value.trimmingCharacters(in: .whitespacesAndNewlines) }
+                // First *valid* link wins — a garbage first property must not
+                // hide a usable later one.
+                let candidate = property.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if conference.isEmpty, LinkExtractor.joinURL(candidate) != nil {
+                    conference = candidate
+                }
             case "URL":
                 url = property.value.trimmingCharacters(in: .whitespacesAndNewlines)
             default:
                 break
             }
         }
-        guard let start = dtStart else { return nil }
-        if uid.isEmpty { uid = "\(title)-\(start.timeIntervalSince1970)" }
-        let computedDuration = duration ?? dtEnd.map { $0.timeIntervalSince(start) } ?? 3600
         let rule = rruleText.isEmpty ? nil : RRULE.parse(rruleText, eventTz: tz)
+        if !rruleText.isEmpty, rule == nil {
+            unsupportedRRULE = rruleText
+        }
+        // Events need a start unless they are recurrence overrides (a bare
+        // RECURRENCE-ID + STATUS:CANCELLED cancellation may omit DTSTART).
+        let ridBestEffort = recurrenceIDProperty.flatMap { parseDate($0, fallbackTimeZone: tz).date }
+        if dtStart == nil, recurrenceIDProperty == nil { return nil }
+        if uid.isEmpty {
+            let anchor = dtStart?.timeIntervalSince1970 ?? ridBestEffort?.timeIntervalSince1970 ?? 0
+            uid = "\(title)-\(Int(anchor))"
+        }
+        // Duration precedence: valid DURATION > positive DTEND-DTSTART > 1h.
+        // Invalid (negative/zero/malformed) values never shrink the event.
+        let explicit = duration.flatMap { $0 > 0 ? $0 : nil }
+        let fromEnd = dtEnd.flatMap { end -> TimeInterval? in
+            guard let start = dtStart else { return nil }
+            let delta = end.timeIntervalSince(start)
+            return delta > 0 ? delta : nil
+        }
+        let computedDuration = explicit ?? fromEnd ?? 3600
         return ParsedEvent(
             uid: uid,
             title: title,
@@ -236,16 +442,31 @@ enum ICSParser {
             attach: attach.isEmpty ? nil : attach,
             status: status,
             isAllDay: isAllDay,
-            dtStart: start,
+            dtStart: dtStart,
             tz: tz,
             durationSeconds: max(60, computedDuration),
+            hasExplicitEnd: explicit != nil || fromEnd != nil,
             rrule: rule,
-            exdates: exdates,
-            recurrenceID: recurrenceID
+            exdates: [],
+            recurrenceID: ridBestEffort,
+            sequence: sequence,
+            dtstamp: dtstamp
+        ).withRawRecurrence(
+            exdateProperties: exdateProperties,
+            rdateProperties: rdateProperties,
+            recurrenceIDProperty: recurrenceIDProperty,
+            recurrenceRange: recurrenceRange,
+            unsupportedRRULE: unsupportedRRULE
         )
     }
 
-    static func parseDate(_ property: ICSProperty) -> (date: Date?, tz: TimeZone?, allDay: Bool) {
+    /// True when the property carries a `TZID` parameter this app cannot resolve.
+    private static func hasUnknownZone(_ property: ICSProperty) -> Bool {
+        guard let tzid = property.params["TZID"] else { return false }
+        return timeZone(fromTZID: tzid) == nil
+    }
+
+    static func parseDate(_ property: ICSProperty, fallbackTimeZone: TimeZone? = nil) -> (date: Date?, tz: TimeZone?, allDay: Bool) {
         let value = property.value.trimmingCharacters(in: .whitespaces)
         if property.params["VALUE"] == "DATE" || (value.count == 8 && !value.contains("T")) {
             let formatter = DateFormatter()
@@ -264,13 +485,131 @@ enum ICSParser {
         }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = zone ?? .current
+        formatter.timeZone = zone ?? fallbackTimeZone ?? .current
         formatter.dateFormat = "yyyyMMdd'T'HHmmss"
         return (formatter.date(from: text), zone, false)
     }
 
+    /// Pragmatic Windows/Outlook TZID → IANA mapping (the names Outlook
+    /// publishes in feeds). Unknown TZIDs resolve to nil → the event is
+    /// skipped with a visible warning instead of being shown at the wrong time.
+    static let windowsTZIDMap: [String: String] = [
+        "Dateline Standard Time": "Etc/GMT+12",
+        "UTC-11": "Etc/GMT+11",
+        "Aleutian Standard Time": "America/Adak",
+        "Hawaiian Standard Time": "Pacific/Honolulu",
+        "Marquesas Standard Time": "Pacific/Marquesas",
+        "Alaskan Standard Time": "America/Anchorage",
+        "UTC-09": "Etc/GMT+9",
+        "Pacific Standard Time (Mexico)": "America/Tijuana",
+        "UTC-08": "Etc/GMT+8",
+        "Pacific Standard Time": "America/Los_Angeles",
+        "US Mountain Standard Time": "America/Phoenix",
+        "Mountain Standard Time (Mexico)": "America/Chihuahua",
+        "UTC-07": "Etc/GMT+7",
+        "Mountain Standard Time": "America/Denver",
+        "Central America Standard Time": "America/Guatemala",
+        "Central Standard Time": "America/Chicago",
+        "Easter Island Standard Time": "Pacific/Easter",
+        "Central Standard Time (Mexico)": "America/Mexico_City",
+        "Canada Central Standard Time": "America/Regina",
+        "SA Pacific Standard Time": "America/Bogota",
+        "Eastern Standard Time": "America/New_York",
+        "US Eastern Standard Time": "America/Indianapolis",
+        "Venezuela Standard Time": "America/Caracas",
+        "Paraguay Standard Time": "America/Asuncion",
+        "Atlantic Standard Time": "America/Halifax",
+        "Central Brazilian Standard Time": "America/Cuiaba",
+        "SA Western Standard Time": "America/La_Paz",
+        "Pacific SA Standard Time": "America/Santiago",
+        "Newfoundland Standard Time": "America/St_Johns",
+        "E. South America Standard Time": "America/Sao_Paulo",
+        "Argentina Standard Time": "America/Buenos_Aires",
+        "SA Eastern Standard Time": "America/Cayenne",
+        "Greenland Standard Time": "America/Nuuk",
+        "Montevideo Standard Time": "America/Montevideo",
+        "Bahia Standard Time": "America/Bahia",
+        "UTC-02": "Etc/GMT+2",
+        "Azores Standard Time": "Atlantic/Azores",
+        "Cape Verde Standard Time": "Atlantic/Cape_Verde",
+        "UTC": "UTC",
+        "Morocco Standard Time": "Africa/Casablanca",
+        "GMT Standard Time": "Europe/London",
+        "Greenwich Standard Time": "Atlantic/Reykjavik",
+        "W. Europe Standard Time": "Europe/Berlin",
+        "Central Europe Standard Time": "Europe/Prague",
+        "Romance Standard Time": "Europe/Paris",
+        "Central European Standard Time": "Europe/Warsaw",
+        "W. Central Africa Standard Time": "Africa/Lagos",
+        "Namibia Standard Time": "Africa/Windhoek",
+        "Jordan Standard Time": "Asia/Amman",
+        "GTB Standard Time": "Europe/Bucharest",
+        "Middle East Standard Time": "Asia/Beirut",
+        "Egypt Standard Time": "Africa/Cairo",
+        "E. Europe Standard Time": "Europe/Chisinau",
+        "Syria Standard Time": "Asia/Damascus",
+        "West Bank Standard Time": "Asia/Hebron",
+        "South Africa Standard Time": "Africa/Johannesburg",
+        "FLE Standard Time": "Europe/Kiev",
+        "Turkey Standard Time": "Europe/Istanbul",
+        "Israel Standard Time": "Asia/Jerusalem",
+        "Kaliningrad Standard Time": "Europe/Kaliningrad",
+        "Libya Standard Time": "Africa/Tripoli",
+        "Arabic Standard Time": "Asia/Baghdad",
+        "Arab Standard Time": "Asia/Riyadh",
+        "Belarus Standard Time": "Europe/Minsk",
+        "Russian Standard Time": "Europe/Moscow",
+        "E. Africa Standard Time": "Africa/Nairobi",
+        "Iran Standard Time": "Asia/Tehran",
+        "Arabian Standard Time": "Asia/Dubai",
+        "Azerbaijan Standard Time": "Asia/Baku",
+        "Russia Time Zone 3": "Europe/Samara",
+        "Mauritius Standard Time": "Indian/Mauritius",
+        "Georgian Standard Time": "Asia/Tbilisi",
+        "Caucasus Standard Time": "Asia/Yerevan",
+        "Afghanistan Standard Time": "Asia/Kabul",
+        "West Asia Standard Time": "Asia/Karachi",
+        "Ekaterinburg Standard Time": "Asia/Yekaterinburg",
+        "India Standard Time": "Asia/Calcutta",
+        "Sri Lanka Standard Time": "Asia/Colombo",
+        "Nepal Standard Time": "Asia/Katmandu",
+        "Central Asia Standard Time": "Asia/Almaty",
+        "Bangladesh Standard Time": "Asia/Dhaka",
+        "N. Central Asia Standard Time": "Asia/Novosibirsk",
+        "Myanmar Standard Time": "Asia/Rangoon",
+        "SE Asia Standard Time": "Asia/Bangkok",
+        "North Asia Standard Time": "Asia/Krasnoyarsk",
+        "China Standard Time": "Asia/Shanghai",
+        "North Asia East Standard Time": "Asia/Irkutsk",
+        "Singapore Standard Time": "Asia/Singapore",
+        "W. Australia Standard Time": "Australia/Perth",
+        "Taipei Standard Time": "Asia/Taipei",
+        "Ulaanbaatar Standard Time": "Asia/Ulaanbaatar",
+        "Tokyo Standard Time": "Asia/Tokyo",
+        "Korea Standard Time": "Asia/Seoul",
+        "Yakutsk Standard Time": "Asia/Yakutsk",
+        "Cen. Australia Standard Time": "Australia/Adelaide",
+        "AUS Central Standard Time": "Australia/Darwin",
+        "E. Australia Standard Time": "Australia/Brisbane",
+        "AUS Eastern Standard Time": "Australia/Sydney",
+        "West Pacific Standard Time": "Pacific/Port_Moresby",
+        "Tasmania Standard Time": "Australia/Hobart",
+        "Vladivostok Standard Time": "Asia/Vladivostok",
+        "Magadan Standard Time": "Asia/Magadan",
+        "Central Pacific Standard Time": "Pacific/Guadalcanal",
+        "New Zealand Standard Time": "Pacific/Auckland",
+        "Fiji Standard Time": "Pacific/Fiji",
+        "Kamchatka Standard Time": "Asia/Kamchatka",
+        "Tonga Standard Time": "Pacific/Tongatapu",
+    ]
+
     static func timeZone(fromTZID tzid: String) -> TimeZone? {
         if let tz = TimeZone(identifier: tzid) { return tz }
+        if let mapped = windowsTZIDMap[tzid], let tz = TimeZone(identifier: mapped) { return tz }
+        // Microsoft sometimes prefixes a GUID: "/microsoft.com/…/W. Europe Standard Time"
+        if let last = tzid.split(separator: "/").last, let tz = windowsTZIDMap[String(last)] {
+            return TimeZone(identifier: tz)
+        }
         let parts = tzid.split(separator: "/").map(String.init)
         if parts.count >= 2 {
             let candidate = parts.suffix(2).joined(separator: "/")
@@ -279,136 +618,337 @@ enum ICSParser {
         return TimeZone(abbreviation: tzid)
     }
 
+    /// RFC 5545 duration (`[+|-]P[nW][nD][T[nH][nM][nS]]`). Months are not part
+    /// of the format — `P1M` is invalid. Returns nil for malformed input and
+    /// for anything with a non-positive total (callers treat that as invalid).
     static func parseDuration(_ value: String) -> TimeInterval? {
-        guard value.hasPrefix("P") || value.hasPrefix("-P") || value.hasPrefix("+P") else { return nil }
+        let text = value.trimmingCharacters(in: .whitespaces)
         var sign = 1.0
-        var body = value
-        if body.hasPrefix("-") { sign = -1; body = String(body.dropFirst()) }
-        else if body.hasPrefix("+") { body = String(body.dropFirst()) }
+        var body = Substring(text)
+        if body.hasPrefix("-") { sign = -1; body = body.dropFirst() }
+        else if body.hasPrefix("+") { body = body.dropFirst() }
+        guard body.hasPrefix("P") else { return nil }
+        body = body.dropFirst()
         var total = 0.0
-        var number = ""
+        var sawComponent = false
+        var sawTimeComponent = false
         var inTime = false
-        for ch in body.dropFirst() {
-            if ch.isNumber { number.append(ch); continue }
-            guard let n = Double(number) else { return nil }
+        var number = ""
+        for ch in body {
+            if ch.isNumber {
+                number.append(ch)
+                continue
+            }
+            if ch == "T" {
+                guard !inTime, number.isEmpty else { return nil }
+                inTime = true
+                continue
+            }
+            guard !number.isEmpty, let n = Double(number) else { return nil }
             switch ch {
-            case "W": total += n * 604800
-            case "D": total += n * 86400
-            case "H": total += n * 3600
-            case "M": total += inTime ? n * 60 : n * 2592000
-            case "S": total += n
-            case "T": inTime = true
+            case "W": guard !inTime else { return nil }; total += n * 604800
+            case "D": guard !inTime else { return nil }; total += n * 86400
+            case "H": guard inTime else { return nil }; total += n * 3600; sawTimeComponent = true
+            case "M": guard inTime else { return nil }; total += n * 60; sawTimeComponent = true // no months in RFC durations
+            case "S": guard inTime else { return nil }; total += n; sawTimeComponent = true
             default: return nil
             }
+            sawComponent = true
             number = ""
         }
+        guard sawComponent, number.isEmpty, !inTime || sawTimeComponent else { return nil }
         return sign * total
     }
 
+    /// Single left-to-right pass — later replacements can never reinterpret an
+    /// escape produced by an earlier one (`\\n` stays backslash + n).
     static func unescape(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\\n", with: "\n")
-            .replacingOccurrences(of: "\\N", with: "\n")
-            .replacingOccurrences(of: "\\,", with: ",")
-            .replacingOccurrences(of: "\\;", with: ";")
-            .replacingOccurrences(of: "\\\\", with: "\\")
+        var out = ""
+        out.reserveCapacity(value.count)
+        var iterator = value.makeIterator()
+        while let ch = iterator.next() {
+            if ch != "\\" {
+                out.append(ch)
+                continue
+            }
+            guard let next = iterator.next() else {
+                out.append(ch) // trailing backslash → literal
+                break
+            }
+            switch next {
+            case "n", "N": out.append("\n")
+            case ",": out.append(",")
+            case ";": out.append(";")
+            case "\\": out.append("\\")
+            default:
+                out.append(ch)
+                out.append(next)
+            }
+        }
+        return out
     }
 }
 
+extension ParsedEvent {
+    /// True when a COUNT-limited rule is anchored so far before the window
+    /// (~55 years) that the expansion budget cannot reach the window — used to
+    /// warn instead of silently dropping the event's occurrences.
+    func countAnchoredFarInPast(windowStart: Date) -> Bool {
+        guard let rule = rrule, rule.count != nil, let start = dtStart else { return false }
+        return windowStart.timeIntervalSince(start) > TimeInterval(RRULEExpander.maxIterationsPerEvent) * 86400
+    }
+
+    /// Attaches raw recurrence properties + parser diagnostics (kept out of the
+    /// memberwise init used by the native-calendar path, which has none of them).
+    func withRawRecurrence(exdateProperties: [ICSProperty], rdateProperties: [ICSProperty], recurrenceIDProperty: ICSProperty?, recurrenceRange: String?, unsupportedRRULE: String?) -> ParsedEvent {
+        var copy = self
+        copy.exdateProperties = exdateProperties
+        copy.rdateProperties = rdateProperties
+        copy.recurrenceIDProperty = recurrenceIDProperty
+        copy.recurrenceIDHasExplicitZone = recurrenceIDProperty.map { $0.params["TZID"] != nil || $0.value.trimmingCharacters(in: .whitespaces).hasSuffix("Z") } ?? false
+        copy.recurrenceRange = recurrenceRange
+        copy.unsupportedRRULEText = unsupportedRRULE
+        return copy
+    }
+}
+
+// MARK: - Recurrence expansion
+
 enum RRULEExpander {
+    /// Hard per-event cap on calendar-day/month operations (a COUNT rule
+    /// anchored decades ago is the only way to hit it).
+    static let maxIterationsPerEvent = 20_000
+
     static func occurrences(of event: ParsedEvent, windowStart: Date, windowEnd: Date) -> [Date] {
+        var budget = maxIterationsPerEvent
+        return occurrences(of: event, windowStart: windowStart, windowEnd: windowEnd, budget: &budget)
+    }
+
+    /// All occurrences within `[windowStart, windowEnd]` (bounds inclusive and
+    /// enforced exactly). `budget` bounds the work spent per event and is
+    /// decremented by the iterations consumed — the caller pools it across the
+    /// whole feed.
+    static func occurrences(of event: ParsedEvent, windowStart: Date, windowEnd: Date, budget: inout Int) -> [Date] {
         guard let dtStart = event.dtStart else { return [] }
         guard let rule = event.rrule else { return [dtStart] }
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = event.tz ?? .current
-        let timeComps = cal.dateComponents([.hour, .minute, .second], from: dtStart)
+        cal.firstWeekday = rule.wkst
+        let time = cal.dateComponents([.hour, .minute, .second], from: dtStart)
         let anchor = cal.startOfDay(for: dtStart)
-        let anchorWeekday = cal.component(.weekday, from: dtStart)
-        let anchorDay = cal.component(.day, from: dtStart)
+        // Fast-forward: without COUNT, occurrences before the window are never
+        // emitted, so jump straight to the window instead of walking decades of
+        // days (which would also exhaust the budget and silently drop the event).
+        // With COUNT every occurrence must be counted from the anchor.
+        let firstDay = rule.count == nil ? max(anchor, cal.startOfDay(for: windowStart)) : anchor
+        let lastDay = cal.startOfDay(for: windowEnd)
         let interval = max(1, rule.interval)
         var result: [Date] = []
         var produced = 0
-        var day = anchor
-        let lastDay = cal.startOfDay(for: windowEnd)
-        var iter = 0
-        while day <= lastDay && iter < 20000 {
-            iter += 1
-            if matches(day: day, cal: cal, rule: rule, anchor: anchor, anchorWeekday: anchorWeekday, anchorDay: anchorDay, interval: interval) {
-                if let occ = cal.date(bySettingHour: timeComps.hour ?? 0, minute: timeComps.minute ?? 0, second: timeComps.second ?? 0, of: day), occ >= dtStart {
-                    if let until = rule.until, occ > until { break }
-                    produced += 1
-                    if occ >= windowStart, !event.exdates.contains(where: { abs($0.timeIntervalSince(occ)) < 60 }) {
-                        result.append(occ)
-                    }
-                    if let count = rule.count, produced >= count { break }
-                }
+        var exhausted = false
+
+        @discardableResult func consider(_ day: Date) -> Bool {
+            guard budget > 0 else { exhausted = true; return false }
+            budget -= 1
+            guard let occ = cal.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: time.second ?? 0, of: day), occ >= dtStart else { return true }
+            if let until = rule.until, occ > until { exhausted = true; return false }
+            produced += 1
+            if occ >= windowStart, occ <= windowEnd, !event.exdates.contains(occ) {
+                result.append(occ)
             }
-            guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
-            day = next
+            if let count = rule.count, produced >= count { exhausted = true; return false }
+            return true
+        }
+
+        switch rule.freq {
+        case .daily, .weekly:
+            var day = firstDay
+            while day <= lastDay, !exhausted {
+                let matches = rule.freq == .daily
+                    ? matchesDaily(day, cal: cal, rule: rule, anchor: anchor, interval: interval)
+                    : matchesWeekly(day, cal: cal, rule: rule, anchor: anchor, anchorWeekday: cal.component(.weekday, from: anchor), interval: interval)
+                if matches {
+                    consider(day)
+                }
+                guard budget > 0, let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
+            }
+        case .monthly, .yearly:
+            let anchorComps = cal.dateComponents([.year, .month, .day], from: anchor)
+            var month = startOfMonth(firstDay, cal: cal)
+            let lastMonth = startOfMonth(lastDay, cal: cal)
+            while month <= lastMonth, !exhausted {
+                guard budget > 0 else { break }
+                budget -= 1
+                if monthsAlign(month, cal: cal, rule: rule, anchorComps: anchorComps, interval: interval) {
+                    for day in matchingDays(ofMonth: month, cal: cal, rule: rule, anchorComps: anchorComps) {
+                        guard day >= firstDay, day <= lastDay else { continue }
+                        consider(day)
+                        if exhausted { break }
+                    }
+                }
+                guard let next = nextMonth(month, cal: cal) else { break }
+                month = next
+            }
         }
         return result
     }
 
-    static func matches(day: Date, cal: Calendar, rule: RRULE, anchor: Date, anchorWeekday: Int, anchorDay: Int, interval: Int) -> Bool {
+    private static func matchesDaily(_ day: Date, cal: Calendar, rule: RRULE, anchor: Date, interval: Int) -> Bool {
         let dayDiff = cal.dateComponents([.day], from: anchor, to: day).day ?? 0
+        guard dayDiff % interval == 0 else { return false }
+        if !rule.byday.isEmpty {
+            let weekday = cal.component(.weekday, from: day)
+            return rule.byday.contains { $0.weekday == weekday }
+        }
+        return true
+    }
+
+    private static func matchesWeekly(_ day: Date, cal: Calendar, rule: RRULE, anchor: Date, anchorWeekday: Int, interval: Int) -> Bool {
+        let anchorWeek = cal.dateInterval(of: .weekOfYear, for: anchor)?.start ?? anchor
+        let dayWeek = cal.dateInterval(of: .weekOfYear, for: day)?.start ?? day
+        let weeks = (cal.dateComponents([.day], from: anchorWeek, to: dayWeek).day ?? 0) / 7
+        guard weeks % interval == 0 else { return false }
+        let weekday = cal.component(.weekday, from: day)
+        return rule.byday.isEmpty ? weekday == anchorWeekday : rule.byday.contains { $0.weekday == weekday }
+    }
+
+    private static func startOfMonth(_ day: Date, cal: Calendar) -> Date {
+        cal.date(from: cal.dateComponents([.year, .month], from: day)) ?? day
+    }
+
+    private static func nextMonth(_ month: Date, cal: Calendar) -> Date? {
+        cal.date(byAdding: .month, value: 1, to: month)
+    }
+
+    private static func monthsAlign(_ month: Date, cal: Calendar, rule: RRULE, anchorComps: DateComponents, interval: Int) -> Bool {
+        let comps = cal.dateComponents([.year, .month], from: month)
+        guard let year = comps.year, let monthNumber = comps.month,
+              let anchorYear = anchorComps.year, let anchorMonth = anchorComps.month else { return false }
         switch rule.freq {
-        case "DAILY":
-            if dayDiff % interval != 0 { return false }
-            if !rule.byday.isEmpty {
-                let wd = cal.component(.weekday, from: day)
-                return rule.byday.contains(wd)
-            }
-            return true
-        case "WEEKLY":
-            let aWeek = cal.dateInterval(of: .weekOfYear, for: anchor)?.start ?? anchor
-            let dWeek = cal.dateInterval(of: .weekOfYear, for: day)?.start ?? day
-            let weeks = (cal.dateComponents([.day], from: aWeek, to: dWeek).day ?? 0) / 7
-            if weeks % interval != 0 { return false }
-            let wd = cal.component(.weekday, from: day)
-            return rule.byday.isEmpty ? wd == anchorWeekday : rule.byday.contains(wd)
-        case "MONTHLY":
-            let a = cal.dateComponents([.year, .month], from: anchor)
-            let d = cal.dateComponents([.year, .month], from: day)
-            let months = (d.year! * 12 + d.month!) - (a.year! * 12 + a.month!)
-            if months % interval != 0 { return false }
-            let dom = cal.component(.day, from: day)
-            return rule.bymonthday.isEmpty ? dom == anchorDay : rule.bymonthday.contains(dom)
-        case "YEARLY":
-            let a = cal.dateComponents([.year, .month, .day], from: anchor)
-            let d = cal.dateComponents([.year, .month, .day], from: day)
-            return (d.year! - a.year!) % interval == 0 && d.month == a.month && d.day == a.day
+        case .monthly:
+            let months = (year * 12 + monthNumber) - (anchorYear * 12 + anchorMonth)
+            guard months % interval == 0 else { return false }
+            return rule.bymonth.isEmpty || rule.bymonth.contains(monthNumber)
+        case .yearly:
+            guard (year - anchorYear) % interval == 0 else { return false }
+            return rule.bymonth.isEmpty ? monthNumber == anchorMonth : rule.bymonth.contains(monthNumber)
         default:
-            return dayDiff % interval == 0
+            return false
         }
     }
+
+    /// Sorted start-of-days of `month` matching the MONTHLY/YEARLY day selection:
+    /// BYMONTHDAY (incl. negative), ordinal/plain BYDAY, or the anchor day.
+    private static func matchingDays(ofMonth month: Date, cal: Calendar, rule: RRULE, anchorComps: DateComponents) -> [Date] {
+        guard let daysInMonth = cal.range(of: .day, in: .month, for: month)?.count else { return [] }
+        func day(_ dom: Int) -> Date? {
+            cal.date(byAdding: .day, value: dom - 1, to: month)
+        }
+        func monthDayMatches(_ values: [Int]) -> Set<Int> {
+            var doms = Set<Int>()
+            for dom in 1...daysInMonth {
+                let fromEnd = daysInMonth - dom + 1
+                if values.contains(dom) || values.contains(-fromEnd) { doms.insert(dom) }
+            }
+            return doms
+        }
+        func bydayMatches(_ entries: [RRULE.ByDay]) -> Set<Int> {
+            var byWeekday: [Int: [Int]] = [:]
+            for dom in 1...daysInMonth {
+                guard let date = day(dom) else { continue }
+                byWeekday[cal.component(.weekday, from: date), default: []].append(dom)
+            }
+            var doms = Set<Int>()
+            for entry in entries {
+                guard let list = byWeekday[entry.weekday] else { continue }
+                if let ordinal = entry.ordinal {
+                    let index = ordinal > 0 ? ordinal - 1 : list.count + ordinal
+                    if index >= 0, index < list.count { doms.insert(list[index]) }
+                } else {
+                    doms.formUnion(list)
+                }
+            }
+            return doms
+        }
+        var doms: Set<Int>
+        if !rule.bysetpos.isEmpty {
+            let base = rule.bymonthday.isEmpty ? bydayMatches(rule.byday) : monthDayMatches(rule.bymonthday)
+            let sorted = base.sorted()
+            var selected = Set<Int>()
+            for position in rule.bysetpos {
+                let index = position > 0 ? position - 1 : sorted.count + position
+                if index >= 0, index < sorted.count { selected.insert(sorted[index]) }
+            }
+            doms = selected
+        } else if !rule.bymonthday.isEmpty {
+            doms = monthDayMatches(rule.bymonthday)
+        } else if !rule.byday.isEmpty {
+            doms = bydayMatches(rule.byday)
+        } else if let anchorDay = anchorComps.day, anchorDay <= daysInMonth {
+            doms = [anchorDay]
+        } else {
+            doms = []
+        }
+        return doms.sorted().compactMap(day)
+    }
 }
+
+// MARK: - Meeting links
 
 enum LinkExtractor {
     static let meetingHosts = ["zoom.us", "zoom.com", "meet.google.com", "hangouts.google.com", "teams.microsoft.com", "teams.live.com", "webex.com", "gotomeet.me", "goto.com", "meet.jit.si", "whereby.com", "discord.gg", "discord.com", "slack.com", "chime.aws", "8x8.vc", "bluejeans.com", "facetime.apple.com", "ringcentral.com", "join.me", "dialpad.com", "uberconference.com", "freeconferencecall.com", "meeting.zoho.com"]
 
     /// Path/query fragments that mark a URL as a join link even on unknown hosts
-    /// (self-hosted Jitsi, internal Zoom-like gateways, …).
-    static let joinHints = ["/j/", "/join", "meetup-join", "confno=", "pwd=", "/meet/", "/w/"]
+    /// (self-hosted Jitsi, internal Zoom-like gateways, …). Includes
+    /// host-prefix forms for providers whose join pages are always at the root
+    /// (Google Meet links have no /join path segment at all).
+    static let joinHints = ["/j/", "/join", "meetup-join", "confno=", "pwd=", "/meet/", "/w/",
+                            "meet.google.com/", "hangouts.google.com/", "meet.jit.si/",
+                            "discord.gg/", "whereby.com/", "facetime.apple.com/"]
 
     static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
+    /// Picks the join link for an event. Priority: explicit CONFERENCE/URL
+    /// properties, then URLs found in LOCATION → DESCRIPTION → X-ALT-DESC →
+    /// SUMMARY → ATTACH. Among detected URLs, join-like URLs outrank unrelated
+    /// pages on known providers (a Zoom recording link never beats a real join
+    /// link); the field priority breaks ties within the same tier.
     static func link(from event: ParsedEvent) -> URL? {
         if let conference = event.conference, let url = joinURL(conference) { return url }
         if let urlValue = event.url, let url = joinURL(urlValue) { return url }
-        var urls: [URL] = []
-        if let attach = event.attach, let url = joinURL(attach) { urls.append(url) }
-        let texts = [event.location ?? "", event.description ?? "", event.altDescription.map(decodeHTMLEntities) ?? "", event.title]
-            .filter { !$0.isEmpty }
+        var candidates: [(url: URL, field: Int)] = []
+        let fields: [(String?, Int)] = [
+            (event.location, 0),
+            (event.description, 1),
+            (event.altDescription.map(decodeHTMLEntities), 2),
+            (event.title, 3),
+            (event.attach, 4),
+        ]
         if let detector = detector {
-            for text in texts {
+            for (text, rank) in fields {
+                guard let text, !text.isEmpty else { continue }
                 for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                    if let url = match.url { urls.append(url) }
+                    if let url = match.url { candidates.append((url, rank)) }
                 }
             }
         }
-        return urls.first(where: isKnownMeetingHost)
-            ?? urls.first(where: looksLikeJoin)
-            ?? urls.first { $0.scheme == "https" || $0.scheme == "http" }
+        func quality(_ url: URL) -> Int {
+            let known = isKnownMeetingHost(url)
+            let joinish = looksLikeJoin(url)
+            if known && joinish { return 3 }
+            if joinish { return 2 }
+            if known { return 1 }
+            return 0
+        }
+        return candidates
+            .sorted { lhs, rhs in
+                let lq = quality(lhs.url)
+                let rq = quality(rhs.url)
+                if lq != rq { return lq > rq }
+                return lhs.field < rhs.field
+            }
+            .first?.url
     }
 
     /// Accepts an http(s) URL and also converts common native-scheme meeting links
@@ -525,34 +1065,77 @@ enum LinkExtractor {
     }
 }
 
+// MARK: - Feed → meetings
+
 enum ICSBuilder {
-    static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date) -> [MeetingEvent] {
+    static let maxEventsPerFeed = 10_000
+    static let maxFeedRecurrenceBudget = 200_000
+
+    static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date) -> (events: [MeetingEvent], warnings: [String]) {
         let resolvedHex = subscription.colorHex.isEmpty ? Palette.hex(for: subscription.colorIndex) : subscription.colorHex
         let windowStart = now.addingTimeInterval(-6 * 3600)
         let windowEnd = now.addingTimeInterval(14 * 86400)
         let parsed = ICSParser.parse(text)
+        var warnings = parsed.warnings
         var result: [MeetingEvent] = []
-        let groups = Dictionary(grouping: parsed.filter { $0.dtStart != nil && !$0.isAllDay }, by: { $0.uid })
+        var feedBudget = maxFeedRecurrenceBudget
+        var budgetWarned = false
+        let groups = Dictionary(grouping: parsed.events.filter { !$0.isAllDay }, by: { $0.uid })
         for (_, events) in groups {
+            guard result.count < maxEventsPerFeed else {
+                warnings.append("Feed has more than \(maxEventsPerFeed) events — truncated")
+                break
+            }
+            let master = latestRevision(of: events.filter { $0.recurrenceIDProperty == nil && $0.dtStart != nil })
             var occurrences: [(start: Date, event: ParsedEvent)] = []
-            for master in events where master.recurrenceID == nil {
-                guard master.status != "CANCELLED" else { continue }
-                if master.rrule != nil {
-                    for date in RRULEExpander.occurrences(of: master, windowStart: windowStart, windowEnd: windowEnd) {
-                        occurrences.append((date, master))
+            if let originalMaster = master {
+                var m = originalMaster
+                m.exdates = Self.resolvedDates(m.exdateProperties, masterTz: m.tz)
+                if m.unsupportedRRULEText != nil {
+                    warnings.append("Unsupported RRULE \"\(m.unsupportedRRULEText!)\" — “\(m.title)” shows only its first occurrence")
+                }
+                guard m.status != "CANCELLED" else { continue }
+                if m.rrule != nil {
+                    var eventBudget = min(feedBudget, RRULEExpander.maxIterationsPerEvent)
+                    let dates = RRULEExpander.occurrences(of: m, windowStart: windowStart, windowEnd: windowEnd, budget: &eventBudget)
+                    feedBudget -= RRULEExpander.maxIterationsPerEvent - eventBudget
+                    if feedBudget <= 0, !budgetWarned {
+                        budgetWarned = true
+                        warnings.append("Recurrence workload limit reached — some events may be missing")
                     }
-                } else if let start = master.dtStart, start >= windowStart, start <= windowEnd {
-                    occurrences.append((start, master))
+                    if eventBudget <= 0, dates.isEmpty, m.countAnchoredFarInPast(windowStart: windowStart) {
+                        warnings.append("“\(m.title)” repeats too far back to expand completely — some occurrences may be missing")
+                    }
+                    for date in dates { occurrences.append((date, m)) }
+                } else if let start = m.dtStart, start >= windowStart, start <= windowEnd {
+                    occurrences.append((start, m))
+                }
+                // RDATE: extra occurrence dates beyond the rule.
+                for rdate in Self.resolvedDates(m.rdateProperties, masterTz: m.tz) {
+                    guard rdate >= windowStart, rdate <= windowEnd, rdate >= (m.dtStart ?? rdate),
+                          !m.exdates.contains(rdate),
+                          !occurrences.contains(where: { $0.start == rdate }) else { continue }
+                    occurrences.append((rdate, m))
                 }
             }
-            for override in events where override.recurrenceID != nil {
-                guard let rid = override.recurrenceID else { continue }
-                if let index = occurrences.firstIndex(where: { abs($0.start.timeIntervalSince(rid)) < 60 }) {
+            // Detached recurrence overrides.
+            var overrides = events.filter { $0.recurrenceIDProperty != nil }
+            overrides.sort { revisionKey($0) > revisionKey($1) }
+            var seenRids = Set<Date>()
+            for override in overrides {
+                if let range = override.recurrenceRange {
+                    warnings.append("RECURRENCE-ID RANGE=\(range) is not supported — override ignored")
+                    continue
+                }
+                guard let rid = Self.resolvedRecurrenceID(of: override, masterTz: master?.tz) else { continue }
+                guard seenRids.insert(rid).inserted else { continue } // duplicate revision
+                if let index = occurrences.firstIndex(where: { $0.start == rid }) {
                     occurrences.remove(at: index)
                 }
-                if override.status != "CANCELLED", let start = override.dtStart, start >= windowStart, start <= windowEnd {
-                    occurrences.append((start, override))
-                }
+                guard override.status != "CANCELLED" else { continue }
+                let start = override.dtStart ?? rid
+                guard start >= windowStart, start <= windowEnd else { continue }
+                occurrences.append((start, Self.inheriting(override, from: master)))
             }
             for occurrence in occurrences {
                 let end = occurrence.start.addingTimeInterval(occurrence.event.durationSeconds)
@@ -571,6 +1154,70 @@ enum ICSBuilder {
                 ))
             }
         }
-        return result.filter { $0.end > windowStart }.sorted { $0.start < $1.start }
+        let deduped = dedupe(result)
+        let events = deduped
+            .filter { $0.end > windowStart }
+            .sorted { ($0.start, $0.title, $0.uid) < ($1.start, $1.title, $1.uid) }
+        return (events, warnings)
+    }
+
+    /// Highest SEQUENCE / latest DTSTAMP wins — a stale VEVENT revision must not
+    /// override the current one (flaky servers sometimes emit both).
+    private static func latestRevision(of events: [ParsedEvent]) -> ParsedEvent? {
+        events.max(by: { revisionKey($0) < revisionKey($1) })
+    }
+
+    private static func revisionKey(_ event: ParsedEvent) -> (Int, Date) {
+        (event.sequence, event.dtstamp ?? .distantPast)
+    }
+
+    /// One entry per (uid, start) — duplicate revisions or an RDATE duplicating a
+    /// generated occurrence must not produce two identical cards.
+    private static func dedupe(_ events: [MeetingEvent]) -> [MeetingEvent] {
+        var seen = Set<String>()
+        var unique: [MeetingEvent] = []
+        for event in events {
+            if seen.insert("\(event.uid)|\(Int(event.start.timeIntervalSince1970))").inserted {
+                unique.append(event)
+            }
+        }
+        return unique
+    }
+
+    /// Resolves EXDATE/RDATE values: their own TZID/`Z` when present, otherwise
+    /// the master's DTSTART zone (never the local zone).
+    private static func resolvedDates(_ properties: [ICSProperty], masterTz: TimeZone?) -> [Date] {
+        var dates: [Date] = []
+        for property in properties {
+            for part in property.value.split(separator: ",") {
+                let piece = ICSProperty(name: property.name, params: property.params, value: String(part))
+                if let date = ICSParser.parseDate(piece, fallbackTimeZone: masterTz).date {
+                    dates.append(date)
+                }
+            }
+        }
+        return dates
+    }
+
+    private static func resolvedRecurrenceID(of override: ParsedEvent, masterTz: TimeZone?) -> Date? {
+        guard let property = override.recurrenceIDProperty else { return nil }
+        if override.recurrenceIDHasExplicitZone { return override.recurrenceID }
+        return ICSParser.parseDate(property, fallbackTimeZone: masterTz).date
+    }
+
+    /// A detached override inherits omitted fields from its master: title,
+    /// location, notes, link properties, and duration/end.
+    private static func inheriting(_ override: ParsedEvent, from master: ParsedEvent?) -> ParsedEvent {
+        guard let master else { return override }
+        var copy = override
+        if copy.title.isEmpty { copy.title = master.title }
+        if copy.location == nil { copy.location = master.location }
+        if copy.description == nil { copy.description = master.description }
+        if copy.altDescription == nil { copy.altDescription = master.altDescription }
+        if copy.conference == nil { copy.conference = master.conference }
+        if copy.url == nil { copy.url = master.url }
+        if copy.attach == nil { copy.attach = master.attach }
+        if !copy.hasExplicitEnd { copy.durationSeconds = master.durationSeconds }
+        return copy
     }
 }

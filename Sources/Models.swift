@@ -41,6 +41,12 @@ struct AppSettings: Codable, Equatable {
     var lateMinutes = 0
     var skipDeclined = true
 
+    /// The values the UI offers — persisted junk is snapped back into range on
+    /// decode instead of crashing pickers or producing absurd behavior.
+    static let allowedRefreshMinutes = [5, 15, 30, 60]
+    static let leadSecondsRange = 0...7200
+    static let allowedLateMinutes = [-1, 0, 5, 15, 30, 60]
+
     enum CodingKeys: String, CodingKey {
         case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, lateMinutes, skipDeclined
     }
@@ -49,13 +55,17 @@ struct AppSettings: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        leadSeconds = try c.decodeIfPresent(Int.self, forKey: .leadSeconds) ?? 300
-        refreshMinutes = try c.decodeIfPresent(Int.self, forKey: .refreshMinutes) ?? 15
+        let lead = try c.decodeIfPresent(Int.self, forKey: .leadSeconds) ?? 300
+        leadSeconds = min(max(lead, Self.leadSecondsRange.lowerBound), Self.leadSecondsRange.upperBound)
+        let refresh = try c.decodeIfPresent(Int.self, forKey: .refreshMinutes) ?? 15
+        refreshMinutes = Self.allowedRefreshMinutes.min(by: { abs($0 - refresh) < abs($1 - refresh) }) ?? 15
         soundEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? true
-        soundName = try c.decodeIfPresent(String.self, forKey: .soundName) ?? "Hero"
+        let sound = try c.decodeIfPresent(String.self, forKey: .soundName) ?? "Hero"
+        soundName = AppStore.soundNames.contains(sound) ? sound : "Hero"
         showMenuBarCountdown = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarCountdown) ?? true
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
-        lateMinutes = try c.decodeIfPresent(Int.self, forKey: .lateMinutes) ?? 0
+        let late = try c.decodeIfPresent(Int.self, forKey: .lateMinutes) ?? 0
+        lateMinutes = Self.allowedLateMinutes.min(by: { abs($0 - late) < abs($1 - late) }) ?? 0
         skipDeclined = try c.decodeIfPresent(Bool.self, forKey: .skipDeclined) ?? true
     }
 }
@@ -94,22 +104,37 @@ struct NativeCalendar: Codable, Identifiable, Equatable {
     }
 }
 
+/// Decodes `T?` — a malformed element yields nil instead of failing the whole
+/// array, so one bad subscription/calendar can't discard the entire state.
+struct FailableDecoded<T: Decodable>: Decodable {
+    let value: T?
+
+    init(from decoder: Decoder) throws {
+        value = try? T(from: decoder)
+    }
+}
+
 struct Persisted: Codable {
     var subscriptions: [CalendarSubscription]
     var settings: AppSettings
     var nativeCalendars: [NativeCalendar] = []
+    /// Pause survives relaunch (incl. indefinite); snoozes/alerted memory do
+    /// not — a delayed launch should still alert for a due meeting.
+    var pausedUntil: Date?
 
-    init(subscriptions: [CalendarSubscription] = [], settings: AppSettings = AppSettings(), nativeCalendars: [NativeCalendar] = []) {
+    init(subscriptions: [CalendarSubscription] = [], settings: AppSettings = AppSettings(), nativeCalendars: [NativeCalendar] = [], pausedUntil: Date? = nil) {
         self.subscriptions = subscriptions
         self.settings = settings
         self.nativeCalendars = nativeCalendars
+        self.pausedUntil = pausedUntil
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        subscriptions = try c.decodeIfPresent([CalendarSubscription].self, forKey: .subscriptions) ?? []
-        settings = try c.decodeIfPresent(AppSettings.self, forKey: .settings) ?? AppSettings()
-        nativeCalendars = try c.decodeIfPresent([NativeCalendar].self, forKey: .nativeCalendars) ?? []
+        subscriptions = (try? c.decode([FailableDecoded<CalendarSubscription>].self, forKey: .subscriptions).compactMap(\.value)) ?? []
+        settings = (try? c.decode(AppSettings.self, forKey: .settings)) ?? AppSettings()
+        nativeCalendars = (try? c.decode([FailableDecoded<NativeCalendar>].self, forKey: .nativeCalendars).compactMap(\.value)) ?? []
+        pausedUntil = try? c.decodeIfPresent(Date.self, forKey: .pausedUntil)
     }
 }
 
@@ -129,6 +154,10 @@ struct MeetingEvent: Identifiable {
 
     var nsColor: NSColor { Palette.nsColor(hex: colorHex) }
     var color: Color { Color(nsColor: nsColor) }
+    /// Contrast-safe variant for the fullscreen alert's black background —
+    /// user-picked near-black colors must not vanish.
+    var readableColorOnBlack: Color { Color(nsColor: Palette.readable(nsColor, on: .onBlack)) }
+    var readableNsColorOnBlack: NSColor { Palette.readable(nsColor, on: .onBlack) }
 
     init(uid: String, title: String, start: Date, end: Date, location: String?, notes: String?, link: URL?, calendarID: UUID, calendarName: String, colorIndex: Int, colorHex: String? = nil) {
         self.uid = uid
