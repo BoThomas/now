@@ -1,20 +1,18 @@
 # Static Review Fix Checklist
 
-Static review performed without building, launching, or running tests. Items are grouped by priority. Check an item only after the implementation and its relevant regression coverage are complete.
+Static review performed without building, launching, or running tests, then revised after the independent re-check in `docs/review-recheck-handover.md`. Items are grouped by priority. Check an item only after the implementation and its relevant regression coverage are complete.
 
 ## Must Fix
-
-- [ ] **Recognize modern Apple Calendar full access.** Treat `.fullAccess` as readable on macOS 14+ while retaining `.authorized` for older systems; do not treat `.writeOnly` as readable. Apply the same classification in the source, Settings, and CLI. (`Sources/NativeCalendars.swift:43-45`, `Sources/SettingsUI.swift:686-693`, `Sources/App.swift:188-205`)
 
 - [ ] **Preserve cached ICS events when a refresh fails.** Full and targeted refreshes must retain the previous snapshot for each failed subscription instead of deleting its meetings. (`Sources/AppStore.swift:245-262`, `Sources/AppStore.swift:355-370`)
 
 - [ ] **Reject stale asynchronous refresh results.** Track request generations or validate the current subscription ID, URL, and enabled state before applying a targeted or full result. Removed calendars must not be resurrected, and old requests must not overwrite newer data. (`Sources/AppStore.swift:234-262`, `Sources/AppStore.swift:355-377`)
 
-- [ ] **Fix RFC timed-duration parsing.** Correctly parse values such as `PT30M`, `PT1H`, and `P1DT2H` rather than silently falling back to one hour. (`Sources/ICS.swift:226`, `Sources/ICS.swift:282-305`)
+- [ ] **Fix RFC timed-duration parsing.** Every duration containing `T`, including `PT30M`, `PT1H`, `P1DT2H`, and `-PT15M`, currently fails. Correctly parse these values rather than silently falling back to one hour when a feed supplies `DURATION` without `DTEND`. (`Sources/ICS.swift:226`, `Sources/ICS.swift:282-305`)
 
 - [ ] **Reject unsupported recurrence frequencies.** Never reinterpret `HOURLY`, `MINUTELY`, `SECONDLY`, malformed values, or future frequencies as daily recurrences. (`Sources/ICS.swift:354-382`)
 
-- [ ] **Handle unsupported time zones safely.** Do not silently interpret unknown `TZID` values in the user's current zone. Support common Windows/Outlook identifiers and feed-defined `VTIMEZONE`, or reject affected events with a visible sync error. (`Sources/ICS.swift:248-280`)
+- [ ] **Handle unsupported time zones safely.** Do not silently interpret unknown `TZID` values in the user's current zone. Add a pragmatic Windows/Outlook TZID-to-IANA mapping and reject still-unknown zones with a visible sync error. Full `VTIMEZONE` parsing is optional if unknown zones fail safely. (`Sources/ICS.swift:248-280`)
 
 - [ ] **Merge or queue newly due alerts.** A new reminder must not replace an already visible reminder and permanently discard its events. (`Sources/AppStore.swift:423-437`, `Sources/AlertUI.swift:21-25`)
 
@@ -22,13 +20,13 @@ Static review performed without building, launching, or running tests. Items are
 
 - [ ] **Schedule reminder-related timers in a suitable run-loop mode.** Tick, refresh, menu-bar, and EventKit debounce timers must not stop during menu tracking or modal loops. (`Sources/AppStore.swift:93-95`, `Sources/AppStore.swift:191-196`, `Sources/AppStore.swift:440-445`, `Sources/MenuBar.swift:20-22`)
 
-- [ ] **Enforce main-actor isolation.** Add appropriate `@MainActor` isolation to `AppStore`, `AlertController`, and `NativeCalendarSource`, including the EventKit permission path. (`Sources/AppStore.swift:6`, `Sources/AppStore.swift:158-167`, `Sources/NativeCalendars.swift:17-20`, `Sources/AlertUI.swift:8`)
-
-- [ ] **Respect focused alert controls when Return is pressed.** The global monitor must not join the first meeting when another Join button, Snooze, Close, or another control has focus. Only accept intended modifier combinations. (`Sources/AlertUI.swift:101-133`, `Sources/AlertUI.swift:179-200`, `Sources/AlertUI.swift:305-314`)
-
 - [ ] **Stop silently approximating unsupported RRULE semantics.** Either implement each accepted rule correctly or reject it and expose a useful sync error. (`Sources/ICS.swift:19-49`, `Sources/ICS.swift:318-383`)
 
 ## Should Fix
+
+- [ ] **Enforce main-actor isolation.** Add appropriate `@MainActor` isolation to `AppStore`, `AlertController`, and `NativeCalendarSource`, including the EventKit permission path. Current call sites are mostly main-thread routed, so this is primarily contract enforcement and protection against future races rather than a confirmed current failure. (`Sources/AppStore.swift:6`, `Sources/AppStore.swift:158-167`, `Sources/NativeCalendars.swift:17-20`, `Sources/AlertUI.swift:8`)
+
+- [ ] **Respect focused alert controls when Return is pressed.** The global monitor must not join the first meeting when another Join button, Snooze, Close, or another control has focus. Only plain Return should trigger the global shortcut; modified Return must pass through. (`Sources/AlertUI.swift:101-133`, `Sources/AlertUI.swift:179-200`, `Sources/AlertUI.swift:305-314`)
 
 - [ ] **Implement common monthly recurrence forms.** Support ordinal `BYDAY` values such as `1MO` and `-1FR`, negative `BYMONTHDAY`, and monthly `BYDAY`. (`Sources/ICS.swift:35-43`, `Sources/ICS.swift:369-375`)
 
@@ -36,7 +34,7 @@ Static review performed without building, launching, or running tests. Items are
 
 - [ ] **Enforce the exact recurrence window end.** Do not emit an occurrence later than `windowEnd` merely because it is on the same day. (`Sources/ICS.swift:332-341`)
 
-- [ ] **Bound and optimize recurrence expansion.** Fast-forward old recurrences and enforce aggregate work and occurrence limits instead of iterating up to 20,000 days per event. (`Sources/ICS.swift:319-349`, `Sources/ICS.swift:535-543`)
+- [ ] **Fast-forward recurrence expansion and cap aggregate work.** Output and per-event iteration are already bounded, but each event can still perform up to 20,000 calendar-day operations and a feed can contain many recurring events. Fast-forward old anchors and enforce a feed-level work budget. (`Sources/ICS.swift:319-349`, `Sources/ICS.swift:535-543`)
 
 - [ ] **Support or reject `RDATE` and `RANGE=THISANDFUTURE`.** Do not silently omit additional dates or apply range overrides as one-off changes. (`Sources/ICS.swift:179-222`, `Sources/ICS.swift:548-555`)
 
@@ -46,21 +44,13 @@ Static review performed without building, launching, or running tests. Items are
 
 - [ ] **Reject invalid event durations.** Do not turn negative duration, zero duration, or `DTEND <= DTSTART` into a one-minute event. Reject invalid RFC duration syntax such as `P1M`. (`Sources/ICS.swift:226-242`, `Sources/ICS.swift:282-305`)
 
-- [ ] **Parse quoted property parameters correctly.** Preserve semicolons inside quoted values and account for escaped quotes. (`Sources/ICS.swift:130-158`)
-
-- [ ] **Parse component boundaries case-insensitively.** Accept valid mixed-case `BEGIN:VEVENT` and `END:VEVENT` tokens. (`Sources/ICS.swift:97-105`)
-
 - [ ] **Implement text unescaping left to right.** Prevent escaped backslashes followed by `n`, comma, or semicolon from being reinterpreted by later replacements. (`Sources/ICS.swift:308-315`)
 
-- [ ] **Trim status values before comparison.** Ensure whitespace cannot make a cancelled event appear active. (`Sources/ICS.swift:195-196`, `Sources/ICS.swift:539`, `Sources/ICS.swift:553`)
-
-- [ ] **Use exact recurrence timestamp matching.** Remove the arbitrary 60-second tolerance for EXDATE and detached override matching unless a documented normalization requires it. (`Sources/ICS.swift:340`, `Sources/ICS.swift:550`)
+- [ ] **Define and test recurrence timestamp matching.** RFC recurrence identity is exact, so prefer normalized exact matching. Retain a tolerance only if a real compatibility case demonstrates deliberate second-level drift; document and regression-test that case and ensure nearby legitimate occurrences cannot be conflated. (`Sources/ICS.swift:340`, `Sources/ICS.swift:550`)
 
 - [ ] **Improve meeting-link ranking.** Prefer actual join-like URLs over unrelated pages on known providers, and preserve the documented field priority over `ATTACH`. (`Sources/ICS.swift:395-411`)
 
 - [ ] **Consider all conference and attachment properties.** A bad first property must not hide a valid later browser link. (`Sources/ICS.swift:189-193`, `Sources/ICS.swift:216-217`)
-
-- [ ] **Fix two-consecutive-miss bookkeeping cleanup.** A second identical missing snapshot must prune stale alert and snooze state as documented. (`Sources/AppStore.swift:387-395`)
 
 - [ ] **Reconcile an open alert with refreshed events.** Close or update cards when meetings are cancelled, removed, disabled, rescheduled, or otherwise changed. (`Sources/AppStore.swift:380-397`, `Sources/AppStore.swift:412-419`)
 
@@ -72,13 +62,13 @@ Static review performed without building, launching, or running tests. Items are
 
 - [ ] **Refresh the available native-calendar list on every EventKit store change.** Do not require an enabled native calendar before updating available calendar metadata. (`Sources/AppStore.swift:191-197`)
 
-- [ ] **Prevent EventKit queries from blocking reminders and UI.** Preserve EventKit's threading requirements without running potentially expensive `events(matching:)` work on the reminder/UI path. (`Sources/AppStore.swift:174-188`, `Sources/NativeCalendars.swift:89-103`)
+- [ ] **Measure EventKit query latency and set a UI/reminder budget.** `events(matching:)` is synchronous and potentially slow, but the current main-thread design is deliberate. Instrument representative native stores first; move or restructure the query behind a generation guard only if it exceeds the accepted budget. (`Sources/AppStore.swift:174-188`, `Sources/NativeCalendars.swift:89-103`)
 
 - [ ] **Align native and ICS fetch-window semantics.** Explicitly enforce the intended start-time bounds on the EventKit path. (`Sources/NativeCalendars.swift:91-102`)
 
 - [ ] **Distinguish last sync attempt from last successful sync.** Do not label a failed attempt as “Last synced.” (`Sources/AppStore.swift:355-373`, `Sources/SettingsUI.swift:663-664`)
 
-- [ ] **Restore accessory activation policy after Settings closes.** Re-evaluate visibility after the close completes rather than relying only on `windowWillClose`. (`Sources/App.swift:136-150`)
+- [ ] **Verify activation policy after Settings closes, then fix if reproduced.** Static ordering suggests `windowWillClose` may run while `isVisible` is still true, but this needs a GUI check on the supported macOS versions. If the Dock icon remains, re-evaluate asynchronously after close. (`Sources/App.swift:136-150`)
 
 - [ ] **Route every Quit entry point through the custom quit flow.** The status menu must not bypass the Settings confirmation or active-alert handling. (`Sources/MenuBar.swift:100`, `Sources/MenuBar.swift:191-193`, `Sources/App.swift:82-112`)
 
@@ -108,6 +98,16 @@ Static review performed without building, launching, or running tests. Items are
 
 ## Can Fix
 
+- [ ] **Use modern EventKit authorization spelling for clarity.** `.authorized` and `.fullAccess` are aliases with raw value 3 in the target SDK, while `.writeOnly` is 4, so current behavior is already correct. An availability branch may still clarify the macOS 14 API and avoid deprecated terminology. (`Sources/NativeCalendars.swift:43-45`, `Sources/SettingsUI.swift:686-693`, `Sources/App.swift:188-205`)
+
+- [ ] **Parse quoted property parameters correctly.** Preserve semicolons inside quoted values and account for escaped quotes. Current behavior is unlikely to affect the `VALUE`, `TZID`, and `ENCODING` parameters the app consumes, but it is parser noncompliance. (`Sources/ICS.swift:130-158`)
+
+- [ ] **Parse component boundaries case-insensitively.** Accept valid mixed-case `BEGIN:VEVENT` and `END:VEVENT` tokens. Real-world producers overwhelmingly emit uppercase, so this is defensive compatibility. (`Sources/ICS.swift:97-105`)
+
+- [ ] **Trim status values before comparison.** RFC producers should not pad values, but trimming prevents malformed whitespace from making a cancelled event appear active. (`Sources/ICS.swift:195-196`, `Sources/ICS.swift:539`, `Sources/ICS.swift:553`)
+
+- [ ] **Make two-consecutive-miss bookkeeping match its documentation.** A second identical missing snapshot currently skips pruning. The stale entries are inert because `tick()` only reads current events, so this is cleanup correctness rather than active reminder behavior. (`Sources/AppStore.swift:387-395`)
+
 - [ ] **Use deterministic event ordering for equal start times.** Add stable tie-breakers such as calendar, title, and ID. (`Sources/ICS.swift:574`, `Sources/AppStore.swift:388`)
 
 - [ ] **Prevent duplicate normalized subscription URLs.** Avoid duplicate fetches and reminders for the same feed. (`Sources/SettingsUI.swift:504-517`, `Sources/SettingsUI.swift:563-575`)
@@ -130,15 +130,15 @@ Static review performed without building, launching, or running tests. Items are
 
 ## Must Add Tests
 
-- [ ] Test `.fullAccess`, `.authorized`, `.writeOnly`, `.denied`, `.restricted`, and `.notDetermined` authorization classification.
+- [ ] Add a regression test confirming that `.authorized`/`.fullAccess` are readable aliases, while `.writeOnly`, `.denied`, `.restricted`, and `.notDetermined` are not readable.
 
 - [ ] Test that a failed full refresh preserves cached events and reminder eligibility.
 
 - [ ] Test that a failed targeted refresh preserves cached events and records its error.
 
-- [ ] Test removal, disabling, and URL editing while requests are in flight.
+- [ ] After adding an injectable fetch seam, test removal, disabling, and URL editing while requests are in flight.
 
-- [ ] Test out-of-order targeted and full refresh completion.
+- [ ] After adding an injectable fetch seam, test out-of-order targeted and full refresh completion.
 
 - [ ] Test `DURATION:PT30M`, `PT1H`, and `P1DT2H`.
 
@@ -150,9 +150,7 @@ Static review performed without building, launching, or running tests. Items are
 
 - [ ] Test unknown `TZID`, common Windows/Outlook time zones, and feed-defined `VTIMEZONE` behavior.
 
-- [ ] Test wake, delayed launch, and delayed refresh after the current 45-second cutoff.
-
-- [ ] Test reminder delivery while an `NSMenu` or modal run loop is active.
+- [ ] After adding an injectable clock, test wake, delayed launch, and delayed refresh after the current 45-second cutoff.
 
 - [ ] Test a newly due meeting while another reminder is already open.
 
@@ -170,7 +168,7 @@ Static review performed without building, launching, or running tests. Items are
 
 - [ ] Test persisted-state migration and malformed or out-of-range settings, colors, subscriptions, and native calendars.
 
-- [ ] Test main-actor isolation expectations for store, alert, and EventKit operations.
+- [ ] Enforce actor isolation at compile time and verify the project builds with the chosen strict-concurrency settings; do not add a runtime unit test for actor annotations.
 
 ## Should Add Tests
 
@@ -208,21 +206,15 @@ Static review performed without building, launching, or running tests. Items are
 
 - [ ] Test pause, snooze, and dismissal behavior across relaunch.
 
-- [ ] Test Settings close, minimize, reopen, and `.regular` to `.accessory` transitions.
-
 - [ ] Test identical behavior from every Quit entry point.
-
-- [ ] Test large multi-event alerts on small displays and with accessibility text sizes.
-
-- [ ] Test status-item and Settings control accessibility labels.
 
 - [ ] Test stale native-calendar cleanup after all EventKit calendars disappear.
 
-- [ ] Test launch-at-login enabled, disabled, externally disabled, requires-approval, and failure states.
+- [ ] After introducing a login-item abstraction, test enabled, disabled, externally disabled, requires-approval, and failure states.
 
 - [ ] Test duplicate URL normalization and prevention.
 
-- [ ] Test permission-request reentrancy and repeated clicks.
+- [ ] After introducing an access-request abstraction, test permission-request reentrancy and repeated clicks without invoking TCC.
 
 - [ ] Strengthen the CRLF regression test to compare IDs, timestamps, titles, durations, and links, not only event counts. (`Sources/SelfTest.swift:142-144`)
 
@@ -235,3 +227,17 @@ Static review performed without building, launching, or running tests. Items are
 - [ ] Run `./outputs/now.app/Contents/MacOS/now --selftest`.
 
 - [ ] For startup, Settings, menu-bar, alert, or lifecycle changes, perform the documented GUI smoke test.
+
+## Targeted Manual Verification
+
+- [ ] Hold the status menu open across a reminder deadline and verify reminder delivery after the timer scheduling change.
+
+- [ ] Open, minimize, reopen, and close Settings with the red button and Command-W; verify `.regular` to `.accessory` transitions and immediate Dock-icon removal.
+
+- [ ] Show a large multi-event alert on a small display and verify all cards and controls remain reachable.
+
+- [ ] Verify alert layout and controls with accessibility text sizing and Full Keyboard Access.
+
+- [ ] Verify status-item and Settings control labels with VoiceOver.
+
+- [ ] Verify focused Join, Snooze, and Close controls plus plain and modified Return in the alert panel.
