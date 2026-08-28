@@ -1,4 +1,17 @@
 # Changelog
+## [1.4.0] - 2026-08-29
+
+### Added
+- Responsive Settings navigation with Command-number quick jumps and coordinated narrow layouts
+- Numbered multi-meeting reminder cards with 1-9 join shortcuts
+### Improved
+- Strict, broader ICS recurrence handling with safe time-zone and workload limits
+- Reminder accessibility, keyboard behavior, calendar controls, and sync status feedback
+### Fixed
+- Failed or stale refreshes no longer drop cached events or hide newer sync errors
+- Delayed reminders, overlapping alerts, recurrence overrides, and persistence edge cases
+- Release signing now verifies the exact stable identity and designated requirement
+
 ## [1.3.0] - 2026-08-28
 
 ### Added
@@ -50,3 +63,4 @@
 [1.1.0]: https://github.com/BoThomas/now/compare/v1.0.0...v1.1.0
 [1.2.0]: https://github.com/BoThomas/now/compare/v1.1.0...v1.2.0
 [1.3.0]: https://github.com/BoThomas/now/compare/v1.2.0...v1.3.0
+[1.4.0]: https://github.com/BoThomas/now/compare/v1.3.0...v1.4.0
