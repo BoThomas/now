@@ -22,7 +22,7 @@ Add the shared iCal (ICS) links of your calendars — or connect Apple Calendar 
 
 Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/releases/latest), unzip, and move `now.app` to /Applications.
 
-> The app is ad-hoc signed (not notarized), so macOS Gatekeeper shows a warning on first launch. Any one of these fixes it — only needed once:
+> Release builds are signed with a stable self-signed identity (not notarized with Apple), so macOS Gatekeeper shows a warning on first launch. Any one of these fixes it — only needed once:
 >
 > 1. Click **Done** in the warning dialog, then open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
 > 2. Right-click `now.app` → **Open** → **Open**.
@@ -34,7 +34,7 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 - Fullscreen takeover N seconds/minutes before an event starts (presets incl. Just in time + fine tune)
 - One-click **Join** when a meeting link is found — detected in `CONFERENCE`/`URL` properties, location, notes, Outlook HTML descriptions, attachments, even the title (Zoom, Google Meet, Teams, WebEx, GoTo, RingCentral, Jitsi, … or any URL — native `zoommtg://` and `msteams:` links are converted automatically)
 - Live countdown, Snooze 1 min (re-appears even after the meeting has started), Close
-- Keyboard: `esc` close · `return` join · `s` snooze — multiple simultaneous meetings in one alert
+- Keyboard: `esc` close · `return` join · `s` snooze · `1`–`9` join a specific meeting when several appear
 
 **Menu bar**
 - Live countdown to the next meeting — including late ones (`-3m`), for as long as you configure
@@ -59,7 +59,7 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 
 ## Building from source
 
-Requires Xcode Command Line Tools with a macOS 15.x SDK.
+Requires Xcode Command Line Tools with a macOS 15 or later SDK (the build uses the active SDK reported by `xcrun`; override with `SDK_PATH` if needed).
 
 ```bash
 ./build-app.sh

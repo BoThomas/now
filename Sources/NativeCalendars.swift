@@ -16,6 +16,7 @@ struct NativeCalendarInfo: Identifiable, Equatable {
 /// return nothing on recent macOS — see docs/plans/native-calendar-integration.md).
 /// Main-thread use only, like the rest of AppStore. Reading is never prompted for
 /// outside `requestAccess()`, so instantiating this at launch is TCC-silent.
+@MainActor
 final class NativeCalendarSource {
     let store = EKEventStore()
 
@@ -30,7 +31,10 @@ final class NativeCalendarSource {
             object: store,
             queue: .main
         ) { [weak self] _ in
-            self?.onStoreChange?()
+            // The notification queue is `.main`, so we are on the main thread.
+            MainActor.assumeIsolated {
+                self?.onStoreChange?()
+            }
         }
     }
 
@@ -41,7 +45,10 @@ final class NativeCalendarSource {
     }
 
     var isAuthorized: Bool {
-        authorizationStatus() == .authorized
+        if #available(macOS 14.0, *) {
+            return authorizationStatus() == .fullAccess
+        }
+        return authorizationStatus() == .authorized
     }
 
     func authorizationStatus() -> EKAuthorizationStatus {
@@ -86,27 +93,46 @@ final class NativeCalendarSource {
     /// Materializes each occurrence of recurring events itself, so no RRULE handling is
     /// needed here: detached/changed occurrences come through with their own start date
     /// and share the `eventIdentifier`, matching `MeetingEvent.id = (calendarID, uid, start)`.
+    ///
+    /// Window semantics match the ICS path exactly: an event is kept when its
+    /// START lies within `−6h … +14d` of `now` and it has not already ended at
+    /// windowStart (long-running events that began before the window are not
+    /// resurrected from ICS either).
+    ///
+    /// Latency budget: `events(matching:)` is synchronous
+    /// on the main thread by design. Budget: < 50 ms warm, < 500 ms cold
+    /// (right after launch or wake) for a representative multi-account store.
+    /// `--native` prints per-calendar timings to check this.
     func fetchEvents(calendars: [NativeCalendar], skipDeclined: Bool, now: Date) -> [MeetingEvent] {
         guard isAuthorized, !calendars.isEmpty else { return [] }
         let windowStart = now.addingTimeInterval(-6 * 3600)
         let windowEnd = now.addingTimeInterval(14 * 86400)
         let ekCalendars = calendars.compactMap { store.calendar(withIdentifier: $0.ekIdentifier) }
         guard !ekCalendars.isEmpty else { return [] }
-        let predicate = store.predicateForEvents(withStart: windowStart, end: windowEnd, calendars: ekCalendars)
+        // EventKit treats the predicate end as exclusive, while this app's
+        // window includes an event starting exactly at windowEnd. Extend only
+        // enough to cross that boundary, then enforce the exact window below.
+        let predicateEnd = windowEnd.addingTimeInterval(0.001)
+        let predicate = store.predicateForEvents(withStart: windowStart, end: predicateEnd, calendars: ekCalendars)
         var result: [MeetingEvent] = []
         for ekEvent in store.events(matching: predicate) {
+            guard Self.isWithinFetchWindow(start: ekEvent.startDate, end: ekEvent.endDate, windowStart: windowStart, windowEnd: windowEnd) else { continue }
             guard let ekCalendar = ekEvent.calendar else { continue }
             guard let native = calendars.first(where: { $0.ekIdentifier == ekCalendar.calendarIdentifier }) else { continue }
             guard let event = Self.meetingEvent(from: ekEvent, calendarTitle: ekCalendar.title, native: native, skipDeclined: skipDeclined) else { continue }
-            if event.end > windowStart { result.append(event) }
+            result.append(event)
         }
-        return result.sorted { $0.start < $1.start }
+        return result.sorted { ($0.start, $0.title, $0.uid) < ($1.start, $1.title, $1.uid) }
+    }
+
+    nonisolated static func isWithinFetchWindow(start: Date, end: Date, windowStart: Date, windowEnd: Date) -> Bool {
+        start >= windowStart && start <= windowEnd && end > windowStart
     }
 
     /// EKEvent has no public conference property — the join link lives in
     /// `url`/`location`/`notes`. Synthesize a `ParsedEvent` so `LinkExtractor`
     /// (priority order, host heuristics) is reused unchanged from the ICS path.
-    static func meetingEvent(from ekEvent: EKEvent, calendarTitle: String, native: NativeCalendar, skipDeclined: Bool) -> MeetingEvent? {
+    nonisolated static func meetingEvent(from ekEvent: EKEvent, calendarTitle: String, native: NativeCalendar, skipDeclined: Bool) -> MeetingEvent? {
         if ekEvent.isAllDay { return nil }
         if ekEvent.status == .canceled { return nil }
         if skipDeclined, isDeclined(ekEvent) { return nil }
@@ -136,14 +162,14 @@ final class NativeCalendarSource {
         )
     }
 
-    static func isDeclined(_ event: EKEvent) -> Bool {
+    nonisolated static func isDeclined(_ event: EKEvent) -> Bool {
         guard let attendees = event.attendees else { return false }
         return attendees.contains { $0.isCurrentUser && $0.participantStatus == .declined }
     }
 
     /// Pure function over plain values (EventKit-free) so the native→ICS mapping is
     /// unit-testable in the selftest, which must run without any TCC prompting.
-    static func parsedEvent(uid: String, title: String, location: String?, notes: String?, url: String?, start: Date, end: Date) -> ParsedEvent {
+    nonisolated static func parsedEvent(uid: String, title: String, location: String?, notes: String?, url: String?, start: Date, end: Date) -> ParsedEvent {
         ParsedEvent(
             uid: uid,
             title: title,

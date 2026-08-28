@@ -3,8 +3,13 @@ import AppKit
 
 enum Palette {
     static let nsColors: [NSColor] = [.systemBlue, .systemOrange, .systemPurple, .systemTeal, .systemPink, .systemGreen, .systemIndigo, .systemYellow, .systemRed, .systemMint]
+
+    /// Positive modulo — safe for any Int (including `Int.min`, where
+    /// `abs(index) % count` would trap).
     static func nsColor(_ index: Int) -> NSColor {
-        nsColors[abs(index) % nsColors.count]
+        let count = nsColors.count
+        let normalized = ((index % count) + count) % count
+        return nsColors[normalized]
     }
     static func color(_ index: Int) -> Color {
         Color(nsColor: nsColor(index))
@@ -33,6 +38,63 @@ enum Palette {
 
     static func color(hex: String) -> Color {
         Color(nsColor: nsColor(hex: hex))
+    }
+
+    // MARK: Contrast-safe derivations
+
+    enum ContrastTarget {
+        case onBlack
+        case onWhite
+    }
+
+    /// WCAG-style relative luminance of an sRGB color (pure — unit-testable).
+    static func luminance(_ color: NSColor) -> CGFloat {
+        let srgb = color.usingColorSpace(.sRGB) ?? color
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        srgb.getRed(&r, green: &g, blue: &b, alpha: &a)
+        func lin(_ channel: CGFloat) -> CGFloat {
+            channel <= 0.03928 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+
+    /// Linear interpolation toward another color (alpha forced to 1).
+    static func blend(_ color: NSColor, toward other: NSColor, amount: CGFloat) -> NSColor {
+        let a = color.usingColorSpace(.sRGB) ?? color
+        let b = other.usingColorSpace(.sRGB) ?? other
+        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, al1: CGFloat = 0
+        var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, al2: CGFloat = 0
+        a.getRed(&r1, green: &g1, blue: &b1, alpha: &al1)
+        b.getRed(&r2, green: &g2, blue: &b2, alpha: &al2)
+        let t = min(1, max(0, amount))
+        return NSColor(srgbRed: r1 + (r2 - r1) * t, green: g1 + (g2 - g1) * t, blue: b1 + (b2 - b1) * t, alpha: 1)
+    }
+
+    /// User-picked calendar colors can be near-black or near-white; text and
+    /// prominent controls rendered in them must stay readable. Lightens toward
+    /// white (on black backgrounds) or darkens toward black (on light ones)
+    /// until clear of the luminance floor/ceiling. Pure — unit-testable.
+    static func readable(_ color: NSColor, on target: ContrastTarget) -> NSColor {
+        let floor: CGFloat = 0.18
+        let ceiling: CGFloat = 0.82
+        if target == .onBlack {
+            guard luminance(color) < floor else { return color }
+            var amount: CGFloat = 0.05
+            while amount < 1 {
+                let mixed = blend(color, toward: .white, amount: amount)
+                if luminance(mixed) >= floor { return mixed }
+                amount += 0.05
+            }
+            return .white
+        }
+        guard luminance(color) > ceiling else { return color }
+        var amount: CGFloat = 0.05
+        while amount < 1 {
+            let mixed = blend(color, toward: .black, amount: amount)
+            if luminance(mixed) <= ceiling { return mixed }
+            amount += 0.05
+        }
+        return .black
     }
 
     static func dotImage(color: NSColor, size: CGFloat = 12) -> NSImage {
@@ -118,8 +180,22 @@ enum Fmt {
 
     /// Collapses whitespace/newlines, word-wraps to `width` chars per line and cuts after
     /// `maxLines` lines with a trailing ellipsis — for multi-line tooltips.
+    /// Unbreakable tokens (URLs, ids) longer than `width` are chunked so a
+    /// single token can't blow up the tooltip width.
     static func wrapped(_ text: String, width: Int, maxLines: Int) -> String {
-        let words = text.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        var words: [String] = []
+        for word in text.components(separatedBy: .whitespacesAndNewlines) where !word.isEmpty {
+            guard word.count > width else {
+                words.append(word)
+                continue
+            }
+            var index = word.startIndex
+            while index < word.endIndex {
+                let end = word.index(index, offsetBy: width, limitedBy: word.endIndex) ?? word.endIndex
+                words.append(String(word[index..<end]))
+                index = end
+            }
+        }
         var lines: [String] = []
         var current = ""
         for word in words {
