@@ -1,4 +1,11 @@
 # Changelog
+## [1.5.0] - 2026-08-31
+
+- Added automatic update checks and in-app installation
+- Added signed-update verification and automatic rollback when an updated app fails to start
+- Added update availability indicators in the menu and Settings
+- Improved release validation and updater test coverage
+
 ## [1.4.0] - 2026-08-29
 
 ### Added
@@ -64,3 +71,4 @@
 [1.2.0]: https://github.com/BoThomas/now/compare/v1.1.0...v1.2.0
 [1.3.0]: https://github.com/BoThomas/now/compare/v1.2.0...v1.3.0
 [1.4.0]: https://github.com/BoThomas/now/compare/v1.3.0...v1.4.0
+[1.5.0]: https://github.com/BoThomas/now/compare/v1.4.0...v1.5.0
