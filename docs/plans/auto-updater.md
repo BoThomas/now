@@ -285,9 +285,14 @@ space). Updates are discoverable in three places, escalating in intrusiveness:
   - ⌘Q with the update window key: plain terminate (nothing is lost — staging
     persists, the offer returns next launch). No third confirm dialog. ⌘W/⌘M come
     free from the Window menu once `.regular`.
-- **Auto-discovery choreography**: the one open taste call — see Open questions Q1.
-  Shared by all variants: `lastNotifiedVersion` is set when the window is **shown**,
-  never when the check lands (else a deferred window suppresses itself forever).
+- **Auto-discovery choreography (escalation — Q1 resolved)**: automatic checks never
+  steal focus — they only light up the menu item + About link. The update window
+  auto-shows **once per version**, and only if that same version has sat uninstalled
+  for ≥ 3 days (`firstSeenUpdateVersion`/`firstSeenUpdateDate`, evaluated at check
+  time — the daily/wake cadence is a sufficient trigger, no extra timer needed).
+  Manual checks always show it immediately. Shared by every variant:
+  `lastNotifiedVersion` is set when the window is **shown**, never when the check
+  lands (else a deferred window suppresses itself forever).
 
 ### Model & persistence
 
@@ -407,18 +412,20 @@ one-second read of persisted state — acceptable, documented in the script head
 
 - First release containing the updater (target v1.5.0) is the **last manual download**
   for every machine — say so in the release notes.
-- **v1.5.0 ships only with a green `scripts/update-smoke.sh`** — the smoke run has the
-  same gate status as `--require-identity`: the updater-introducing release is
-  unflyable until it flies, and Tiers 1–3 are the only proxy for that. Run manually
-  (Q3 asks whether to wire it into release.sh).
+- **Every release runs `scripts/update-smoke.sh` as a hard release.sh preflight**
+  (Q3 resolved) — invoked after build + selftest, *before* the commit/tag, with the
+  same gate status as `--require-identity`. The smoke accepts `--app <path>` to reuse
+  the freshly built `outputs/now.app` instead of compiling twice. For v1.5.0 this is
+  existential: the updater-introducing release is unflyable until it flies, and
+  Tiers 1–3 are the only proxy for that.
 - **v1.5.1 = deliberate canary**: a small, safe release a few days after v1.5.0 whose
   only job is proving the OTA path in production — don't wait for the next feature
   release to find out.
-- **Bad-release brake**: delete the GitHub release within the 24 h age-gate window;
+- Bad-release brake stays: delete the GitHub release within the 24 h age-gate window;
   already-updated installs wait for the next good release (no OTA rollback).
-- No changes to `release.sh`/`build-app.sh` (asset name + version bumps already
-  conform). Optional nicety later: `release.sh --notes` reminder that users now
-  auto-update.
+- `build-app.sh` untouched; `release.sh` gains only the smoke-preflight invocation.
+  Asset name + version bumps already conform. Optional nicety later:
+  `release.sh --notes` reminder that users now auto-update.
 - AGENTS.md updates with the implementation: new CLI flags, updater invariants (env-only
   helper params, pinned fingerprints list ↔ signing identity rotation procedure,
   staging-sibling rule, quit-bypass, multi-instance guard, Trash-on-update,
@@ -431,10 +438,13 @@ one-second read of persisted state — acceptable, documented in the script head
 - Age gate: automatic checks ignore releases < **24 h** old; manual checks bypass.
 - **Multi-instance guard**: no update while any other now instance runs (any path).
 - Check also on **wake** — throttled: success 24 h / failure ≥ 1 h, ≤ 3/day.
-- Update notification = dedicated window; auto-show cadence pending Q1 (see Open
-  questions).
+- Update notification = escalation (Q1): auto-checks light menu + About only; the
+  window auto-shows once per version after ~3 days uninstalled
+  (`firstSeenUpdateDate`); manual checks show immediately.
 - Helper failures never exit silent: restore → relaunch old app with
   `NOW_UPDATE_ERROR` → browser last ditch.
+- `release.sh` runs the update smoke as a hard preflight (Q3) — the gate can't be
+  forgotten.
 
 ## Out of scope (v2 candidates)
 
@@ -622,24 +632,6 @@ space). Updates are discoverable in three places, escalating in intrusiveness:
 5. Defer the update window while a reminder is showing; add the third term to
    `syncActivationPolicy()`.
 
-## Open questions (next session — run these through the question tool)
-
-1. **Auto-discovery choreography** — the review's one taste call, and the only real
-   product decision left:
-   - (a) *Popup once per version* — the window auto-shows on the first check that
-     discovers a new version (original plan; converges fastest, steals focus once).
-   - (b) *Escalation* (reviewer's preference) — auto-checks only light up the menu
-     item + About link; the window auto-shows once, only if the same version sat
-     uninstalled for ~3 days (`firstSeenUpdateDate`); manual checks always show
-     immediately. "Silent until a meeting" personality.
-   - (c) *Fully silent* — window only ever appears on manual action; fleet converges
-     only as fast as users open the menu.
-2. **Age gate**: 24 h picked provisionally — keep, or widen to 48 h for a bigger
-   delete-the-bad-release window?
-3. **Wire `scripts/update-smoke.sh` into `release.sh`** as a hard gate for the
-   v1.5.0+ releases (contradicts "no release.sh changes"), or keep it a documented
-   manual pre-release step (current plan)?
-
 ## Review disposition (2026-08-30 — processed before the next session)
 
 All findings reviewed against the source material (Sparkle internals, GitHub API
@@ -662,7 +654,8 @@ Integrated, with any choices the review left open resolved:
 - Gap 2 → age gate 24 h (review offered 24–48; picked 24 since the maintainer is the
   primary user and manual checks bypass anyway), delete-release brake documented with
   precise semantics (stops the spread, not an undo).
-- Gap 3 → smoke as manual release gate + v1.5.1 canary (automation → Q3).
+- Gap 3 → smoke as hard release.sh preflight + v1.5.1 canary (Q3 since resolved:
+  wired in, `--app` reuse flag so it doesn't compile twice).
 - Gap 4 → rotation procedure + compromised-key reality in the trust-model section.
 - Gap 5 → decide-before-download; staging is session-scoped (cleaned on launch,
   re-downloaded on demand); check-while-window-open is a no-op.
@@ -681,5 +674,7 @@ Integrated, with any choices the review left open resolved:
   `assets[].size`.
 - UI section → replaced with the review's spec (menu placement + dynamic update item,
   window-always-answers rule, three-state window, Settings/About surfaces,
-  activation-policy third term, defer-while-alert-open, ⌘Q bare terminate), minus the
-  escalation choreography → Q1.
+  activation-policy third term, defer-while-alert-open, ⌘Q bare terminate) + the
+  escalation choreography, which Q1 has since resolved in the reviewer's favor.
+- Q2 (age gate 24 h vs 48 h) also resolved after this disposition was written:
+  kept at 24 h.
