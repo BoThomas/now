@@ -909,6 +909,32 @@ struct BadgeLink<Content: View>: View {
     }
 }
 
+/// Action-based sibling of `BadgeLink` — same capsule look, runs a closure
+/// instead of opening a URL (e.g. "vX available" opens the update window).
+struct BadgeButton<Content: View>: View {
+    let action: () -> Void
+    let label: Content
+    @State private var hovering = false
+
+    init(action: @escaping () -> Void, @ViewBuilder label: () -> Content) {
+        self.action = action
+        self.label = label()
+    }
+
+    var body: some View {
+        Button(action: action) {
+            label
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(Color.primary.opacity(hovering ? 0.14 : 0.07)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .cursor(.pointingHand)
+        .onHover { hovering = $0 }
+    }
+}
+
 /// One sidebar navigation entry: icon + title, fixed-width trailing slot for
 /// the ⌘N shortcut hint (revealing it never shifts anything), selection +
 /// hover backgrounds. ⌘N is bound via `keyboardShortcut`.
@@ -980,6 +1006,7 @@ private let settingsContentBottomKey = "__contentBottom"
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var alerts: AlertController
+    @EnvironmentObject var updates: UpdateController
     @State private var showAddSheet = false
     @StateObject private var commandHints = CommandHoldTracker()
     @State private var selectedSection: SettingsSection = .calendars
@@ -1483,10 +1510,60 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
+            Divider()
+            Toggle("Check for updates automatically", isOn: $store.settings.automaticUpdateChecks)
+            // Wide: one row. Narrow: wraps to its own lines (ViewThatFits).
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    updateStatusContent
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    updateStatusContent
+                }
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.05)))
+    }
+
+    @ViewBuilder private var updateStatusContent: some View {
+        Button {
+            updates.check(userInitiated: true)
+        } label: {
+            if updates.isChecking {
+                Text("Checking…")
+            } else {
+                Text("Check Now")
+            }
+        }
+        .disabled(updates.isChecking)
+        if let manifest = updates.available {
+            if updates.stagedVersion == manifest.version {
+                Text("v\(manifest.version) is ready to install")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Install…") {
+                    updates.presentAvailableFromMenu()
+                }
+            } else if let failure = updates.preparationFailure, failure.version == manifest.version {
+                Text("Couldn't prepare v\(manifest.version)")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .help(failure.reason)
+                Button("Retry") {
+                    updates.retryPreparation()
+                }
+            } else {
+                Text("v\(manifest.version) is being prepared…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else if let last = updates.lastSuccessfulCheck {
+            Text("Last checked \(Fmt.ago(last))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: - About
@@ -1511,12 +1588,27 @@ struct SettingsView: View {
 
     @ViewBuilder private var aboutItems: some View {
         // Version badge → the changelog/release notes of exactly this version.
+        // While an update is known-available, a SECOND badge appears next to
+        // it — it opens the update window (not a URL): the version pill stays
+        // about the running version, the availability pill is the action.
         BadgeLink(url: Self.changelogURL ?? Links.releases) {
             HStack(spacing: 5) {
                 Image(systemName: "tag")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                 Text("Version \(Self.version)").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        if let manifest = updates.available {
+            BadgeButton {
+                updates.presentAvailableFromMenu()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.up.circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    Text("v\(manifest.version) available").font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
         BadgeLink(url: Links.repo) {

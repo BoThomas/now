@@ -2,6 +2,10 @@ outputs/
 .build/
 .DS_Store
 *.p12
+*.pfx
 *.pem
 *.key
 *.mobileprovision
+.env
+.env.*
+!.env.example

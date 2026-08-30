@@ -40,6 +40,10 @@ struct AppSettings: Codable, Equatable {
     var launchAtLogin = false
     var lateMinutes = 0
     var skipDeclined = true
+    var automaticUpdateChecks = true
+    /// Reserved for the v2 "Skip this version" UI — the updater already
+    /// honors it in `decide`.
+    var skippedUpdateVersion: String?
 
     /// The values the UI offers — persisted junk is snapped back into range on
     /// decode instead of crashing pickers or producing absurd behavior.
@@ -48,7 +52,7 @@ struct AppSettings: Codable, Equatable {
     static let allowedLateMinutes = [-1, 0, 5, 15, 30, 60]
 
     enum CodingKeys: String, CodingKey {
-        case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, lateMinutes, skipDeclined
+        case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, lateMinutes, skipDeclined, automaticUpdateChecks, skippedUpdateVersion
     }
 
     init() {}
@@ -74,6 +78,8 @@ struct AppSettings: Codable, Equatable {
         let late = try c.decodeIfPresent(Int.self, forKey: .lateMinutes) ?? 0
         lateMinutes = Self.nearest(late, in: Self.allowedLateMinutes, default: 0)
         skipDeclined = try c.decodeIfPresent(Bool.self, forKey: .skipDeclined) ?? true
+        automaticUpdateChecks = try c.decodeIfPresent(Bool.self, forKey: .automaticUpdateChecks) ?? true
+        skippedUpdateVersion = try c.decodeIfPresent(String.self, forKey: .skippedUpdateVersion)
     }
 }
 

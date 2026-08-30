@@ -16,7 +16,6 @@ Usage: ./release.sh [patch|minor|major|X.Y.Z] [options]
   --notes "..."       changelog entry, one bullet per line
   --yes               skip the confirmation prompt
   --dry-run           verify prerequisites and print the plan, change nothing
-  --repo owner/name   GitHub repo (default: ${REPO_SLUG})
 EOF
 }
 
@@ -28,7 +27,6 @@ while [[ $# -gt 0 ]]; do
     --notes) NOTES="${2:-}"; shift ;;
     --yes|-y) ASSUME_YES=true ;;
     --dry-run) DRY_RUN=true ;;
-    --repo) REPO_SLUG="${2:?}"; shift ;;
     --help|-h) usage; exit 0 ;;
     -*) print -u2 "Unknown option: $1"; usage; exit 1 ;;
     *) VERSION_SPEC="$1" ;;
@@ -36,7 +34,7 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-is_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] }
+is_version() { [[ "$1" =~ '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ]] }
 
 version_gt() {
   local candidate="$1" current="$2" cmaj cmin cpat omaj omin opat
@@ -65,6 +63,14 @@ gh auth status >/dev/null 2>&1 || die "gh not authenticated (gh auth login)"
 [[ -z "$(git status --porcelain)" ]] || die "working tree not clean — commit first"
 [[ "$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)" == origin/main ]] ||
   die "main must track origin/main"
+ORIGIN_URL=$(git remote get-url origin 2>/dev/null) || die "origin remote missing"
+case "$ORIGIN_URL" in
+  https://github.com/${REPO_SLUG}|https://github.com/${REPO_SLUG}.git|git@github.com:${REPO_SLUG}|git@github.com:${REPO_SLUG}.git|ssh://git@github.com/${REPO_SLUG}|ssh://git@github.com/${REPO_SLUG}.git) ;;
+  *) die "origin must be the default repository $REPO_SLUG (found $ORIGIN_URL)" ;;
+esac
+GH_REPO=$(gh repo view "$REPO_SLUG" --json nameWithOwner --jq .nameWithOwner 2>/dev/null) ||
+  die "could not access GitHub repository $REPO_SLUG"
+[[ "${(L)GH_REPO}" == "${(L)REPO_SLUG}" ]] || die "GitHub repository mismatch: expected $REPO_SLUG, found $GH_REPO"
 LOCAL_HEAD=$(git rev-parse HEAD)
 TRACKING_HEAD=$(git rev-parse refs/remotes/origin/main 2>/dev/null) || die "origin/main tracking ref missing; fetch it first"
 [[ "$LOCAL_HEAD" == "$TRACKING_HEAD" ]] || die "main is not synchronized with the local origin/main ref"
@@ -77,6 +83,7 @@ SIGNING_IDENTITY_SHA1="${NOW_SIGNING_IDENTITY_SHA1:-A505B08900C56A28709479297A04
 SIGNING_IDENTITY_SHA1="${(U)SIGNING_IDENTITY_SHA1}"
 AVAILABLE_IDENTITIES=$(security find-identity -v -p codesigning)
 [[ "$AVAILABLE_IDENTITIES" == *"$SIGNING_IDENTITY_SHA1"* ]] || die "required signing identity $SIGNING_IDENTITY_SHA1 not found"
+[[ -x scripts/update-smoke.sh ]] || die "mandatory scripts/update-smoke.sh is missing or not executable"
 
 CURRENT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
 if [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+$ ]]; then CURRENT="$CURRENT.0"; fi
@@ -156,7 +163,43 @@ if [[ "$ASSUME_YES" != true ]]; then
   [[ "$REPLY" == [yY]* ]] || die "aborted"
 fi
 
-trap 'print -u2 "release: failed — check git status and git tag to clean up"' ERR
+PHASE="preparing release files"
+NOTES_FILE=""
+release_failed() {
+  local rc=$?
+  print -u2 ""
+  print -u2 "release: failed while $PHASE"
+  case "$PHASE" in
+    "preparing release files"|"building and testing")
+      print -u2 "Recovery: fix the failure in this worktree, then resume the preflight and publication:"
+      print -u2 "  ./build-app.sh --require-identity && ./outputs/now.app/Contents/MacOS/now --selftest"
+      print -u2 "  ./scripts/update-smoke.sh --app outputs/now.app && cp outputs/now.zip 'outputs/now-$TAG.zip'"
+      print -u2 "  git add Info.plist CHANGELOG.md && git commit -m 'Release $TAG' && git tag '$TAG'"
+      print -u2 "  git push --atomic -u origin HEAD '$TAG'"
+      print -u2 "Do not rerun release.sh until these generated release changes are committed or removed."
+      ;;
+    "committing release")
+      print -u2 "Recovery: inspect git status, then complete the commit and continue:"
+      print -u2 "  git add Info.plist CHANGELOG.md && git commit -m 'Release $TAG' && git tag '$TAG'"
+      print -u2 "  git push --atomic -u origin HEAD '$TAG'"
+      ;;
+    "tagging release")
+      print -u2 "Recovery: create the missing tag, then publish both refs atomically:"
+      print -u2 "  git tag '$TAG' && git push --atomic -u origin HEAD '$TAG'"
+      ;;
+    "publishing branch and tag")
+      print -u2 "Recovery: the atomic push left both refs published or neither; verify, then retry:"
+      print -u2 "  git ls-remote origin refs/heads/main refs/tags/$TAG"
+      print -u2 "  git push --atomic -u origin HEAD '$TAG'"
+      ;;
+    "creating GitHub release")
+      print -u2 "Recovery: branch and tag are published. Retry only the GitHub release:"
+      print -u2 "  gh release create '$TAG' 'outputs/now-$TAG.zip' --repo '$REPO_SLUG' --title 'now $VERSION' --notes-file '$NOTES_FILE'"
+      ;;
+  esac
+  exit $rc
+}
+trap release_failed ERR
 
 print "• Updating CHANGELOG.md"
 CHANGELOG="CHANGELOG.md"
@@ -182,22 +225,21 @@ print "• Updating Info.plist → $VERSION (build $BUILD)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" Info.plist
 
 print "• Building"
+PHASE="building and testing"
 # Stable signing is mandatory for releases: an ad-hoc release zip would
 # invalidate existing Calendar (TCC) grants on every update.
 ./build-app.sh --require-identity >/dev/null
 ./outputs/now.app/Contents/MacOS/now --selftest
+
+# Hard preflight for every release: the update smoke exercises the real
+# updater path (check → stage → signature gate → swap → relaunch) against a
+# forged local release. For v1.5.0+ this is existential — the updater rides
+# in the app being released. (Quits a running now for the test; re-opens it.)
+print "• Running update smoke test"
+./scripts/update-smoke.sh --app outputs/now.app
 cp outputs/now.zip "outputs/now-$TAG.zip"
 
-print "• Committing and tagging"
-git add Info.plist CHANGELOG.md
-git commit -m "Release $TAG" --quiet
-git tag "$TAG"
-
-print "• Publishing"
-git push -u origin HEAD
-git push origin "$TAG"
-
-print "• Creating GitHub release"
+print "• Preparing release notes"
 NOTES_FILE=$(mktemp)
 {
   printf '%s' "$NOTES_ENTRY"
@@ -206,8 +248,23 @@ NOTES_FILE=$(mktemp)
     print "Full changelog: $CHANGE_URL"
   fi
 } > "$NOTES_FILE"
-gh release create "$TAG" "outputs/now-$TAG.zip" --title "now $VERSION" --notes-file "$NOTES_FILE"
+
+print "• Committing and tagging"
+PHASE="committing release"
+git add Info.plist CHANGELOG.md
+git commit -m "Release $TAG" --quiet
+PHASE="tagging release"
+git tag "$TAG"
+
+print "• Publishing"
+PHASE="publishing branch and tag"
+git push --atomic -u origin HEAD "$TAG"
+
+print "• Creating GitHub release"
+PHASE="creating GitHub release"
+gh release create "$TAG" "outputs/now-$TAG.zip" --repo "$REPO_SLUG" --title "now $VERSION" --notes-file "$NOTES_FILE"
 rm -f "$NOTES_FILE"
+PHASE="complete"
 
 print ""
 print "Released: https://github.com/$REPO_SLUG/releases/tag/$TAG"

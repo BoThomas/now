@@ -5,13 +5,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private unowned let store: AppStore
     private unowned let alerts: AlertController
+    private unowned let updates: UpdateController
     private let openSettingsHandler: () -> Void
     private let quitHandler: () -> Void
     private var buttonTimer: Timer?
+    /// While the dropdown is tracking, updater state changes (a check
+    /// finishing, an update appearing) rebuild the OPEN menu in place —
+    /// `menuNeedsUpdate` alone only fires on the next open.
+    private var menuIsTracking = false
+    private var lastUpdateSignature = ""
+    private var trackingObservers: [Any] = []
 
-    init(store: AppStore, alerts: AlertController, openSettings: @escaping () -> Void, quit: @escaping () -> Void) {
+    init(store: AppStore, alerts: AlertController, updates: UpdateController, openSettings: @escaping () -> Void, quit: @escaping () -> Void) {
         self.store = store
         self.alerts = alerts
+        self.updates = updates
         self.openSettingsHandler = openSettings
         self.quitHandler = quit
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -20,6 +28,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.delegate = self
         menu.minimumWidth = 280
         statusItem.menu = menu
+        trackingObservers = [
+            NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: menu, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.menuIsTracking = true }
+            },
+            NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: menu, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.menuIsTracking = false }
+            },
+        ]
         // .common mode: the countdown keeps updating while the dropdown is
         // tracking (menu tracking runs a modal-ish run loop in .default mode).
         buttonTimer = AppStore.commonTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -28,7 +44,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         updateButton()
     }
 
+    deinit {
+        for observer in trackingObservers { NotificationCenter.default.removeObserver(observer) }
+    }
+
     private func updateButton() {
+        refreshOpenMenuForUpdateState()
         guard let button = statusItem.button else { return }
         if store.isPaused {
             button.attributedTitle = NSAttributedString(string: "")
@@ -60,7 +81,23 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             : "now — next meeting \(next.title) at \(Fmt.time.string(from: next.start)), in \(Fmt.mmss(next.start.timeIntervalSince(Date())))")
     }
 
+    /// Rebuild the currently-tracking menu when updater state changed — the
+    /// "Update to vX…" item must appear (or the "Checking…" state clear)
+    /// without the user closing and reopening the dropdown.
+    private func refreshOpenMenuForUpdateState() {
+        let signature = "\(updates.available?.version ?? "")|\(updates.stagedVersion ?? "")|\(updates.isChecking)"
+        guard menuIsTracking, signature != lastUpdateSignature else {
+            lastUpdateSignature = signature
+            return
+        }
+        lastUpdateSignature = signature
+        if let menu = statusItem.menu {
+            menuNeedsUpdate(menu)
+        }
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
+        lastUpdateSignature = "\(updates.available?.version ?? "")|\(updates.stagedVersion ?? "")|\(updates.isChecking)"
         menu.removeAllItems()
         let upcoming = Array(store.upcoming.prefix(5))
         if store.isPaused {
@@ -108,6 +145,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(withTitle: "Preview Reminder", action: #selector(previewAction), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(settingsAction), keyEquivalent: ",").target = self
+        // One slot: "Update to vX…" REPLACES "Check for Updates…" while an
+        // update is known-available. The menu bar itself stays meeting-only.
+        if let manifest = updates.available {
+            let updateItem = menu.addItem(withTitle: "Update to v\(manifest.version)…", action: #selector(updateAction), keyEquivalent: "")
+            updateItem.target = self
+            updateItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
+        } else {
+            // A manual check always answers with the window (clicking this
+            // dismisses the menu, so a transient title is never the feedback).
+            let checkItem = menu.addItem(withTitle: updates.isChecking ? "Checking…" : "Check for Updates…", action: #selector(checkUpdateAction), keyEquivalent: "")
+            checkItem.target = self
+            checkItem.isEnabled = !updates.isChecking
+        }
         let loginItem = menu.addItem(withTitle: "Launch at Login", action: #selector(toggleLoginAction), keyEquivalent: "")
         loginItem.target = self
         // Reflect the ACTUAL registration state, not just persisted intent.
@@ -204,6 +254,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func settingsAction() {
         openSettingsHandler()
+    }
+
+    @objc private func updateAction() {
+        updates.presentAvailableFromMenu()
+    }
+
+    @objc private func checkUpdateAction() {
+        updates.check(userInitiated: true)
     }
 
     @objc private func toggleLoginAction() {
