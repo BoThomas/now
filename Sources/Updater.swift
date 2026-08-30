@@ -574,6 +574,13 @@ final class UpdateController: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        // A successful install relaunches us AS the pending version — clear
+        // the marker so a later failed update can't mark the wrong version
+        // as already-notified.
+        if state.pendingInstallVersion == UpdateLogic.currentVersion {
+            state.pendingInstallVersion = nil
+            saveState()
+        }
         UpdateStaging.cleanupLaunchArtifacts(bundlePath: Bundle.main.bundlePath)
         // Launch +10 s: past the startup burst, before the user leaves.
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
