@@ -1246,6 +1246,7 @@ enum SelfTest {
         c.expect(decoded?.soundName == "Hero", "unknown sound falls back to Hero")
         c.expect(decoded?.lateMinutes == 60, "huge lateMinutes snaps to 60 (got \(String(describing: decoded?.lateMinutes)))")
         c.expect(decoded?.skipDeclined == false, "valid booleans preserved")
+        c.expect(decoded?.automaticUpdateChecks == true && decoded?.skippedUpdateVersion == nil, "legacy settings use updater defaults")
         let upper = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\": 99999, \"refreshMinutes\": 45, \"lateMinutes\": -3}".utf8))
         c.expect(upper?.leadSeconds == 7200, "oversized lead clamps to 7200")
         c.expect(upper?.refreshMinutes == 30 || upper?.refreshMinutes == 60, "45 min snaps to a picker value (got \(String(describing: upper?.refreshMinutes)))")
@@ -1507,8 +1508,9 @@ enum SelfTest {
         c.expect(UpdateLogic.parseLatestRelease(releaseJSON(tag: "v1.5.0-beta.1", assets: [("now-v1.5.0-beta.1.zip", "https://x/now.zip", 10)]).data(using: .utf8)!) == nil, "non-numeric tag suffix rejected")
         c.expect(UpdateLogic.parseLatestRelease(Data("{\"garbage\":true}".utf8)) == nil, "malformed JSON rejected")
         // Missing published_at counts as just-released (age gate keeps blocking).
-        let noDate = UpdateLogic.parseLatestRelease(releaseJSON(tag: "v1.5.0", assets: [("now-v1.5.0.zip", "https://x/now.zip", 10)], published: nil).data(using: .utf8)!)
-        c.expect(noDate.map { now.timeIntervalSince($0.publishedAt) < 60 } == true, "missing published_at → now")
+        let fallbackDate = date(2026, 8, 28, hour: 9)
+        let noDate = UpdateLogic.parseLatestRelease(releaseJSON(tag: "v1.5.0", assets: [("now-v1.5.0.zip", "https://x/now.zip", 10)], published: nil).data(using: .utf8)!, now: fallbackDate)
+        c.expect(noDate?.publishedAt == fallbackDate, "missing published_at → injected current time")
 
         // -- Version comparison --------------------------------------------
         c.expect(UpdateLogic.isVersion("1.5.1", newerThan: "1.5.0"), "patch newer")
@@ -1517,7 +1519,57 @@ enum SelfTest {
         c.expect(UpdateLogic.isVersion("1.10.0", newerThan: "1.9.9"), "numeric compare, not string (1.10 > 1.9)")
         c.expect(UpdateLogic.isVersion("2.0.0", newerThan: "1.99.99"), "major bump newer")
         c.expect(!UpdateLogic.isVersion("1.5", newerThan: "1.4.0"), "2-component candidate rejected")
+        c.expect(!UpdateLogic.isVersion("2.-1.0", newerThan: "1.4.0"), "negative component rejected")
+        c.expect(!UpdateLogic.isVersion("02.0.0", newerThan: "1.4.0"), "leading-zero component rejected")
         c.expect(UpdateLogic.version(fromTag: "v2.3.4") == "2.3.4", "tag parse")
+        c.expect(UpdateLogic.version(fromTag: "v+2.3.4") == nil, "signed version component rejected")
+        c.expect(UpdateLogic.version(fromTag: "v２.3.4") == nil, "non-ASCII version component rejected")
+
+        c.expect(!UpdateFetch.isSuccessfulStatus(nil), "non-HTTP update status rejected")
+        c.expect(!UpdateFetch.isSuccessfulStatus(199), "1xx update status rejected")
+        c.expect(UpdateFetch.isSuccessfulStatus(200) && UpdateFetch.isSuccessfulStatus(299), "2xx update status accepted")
+        c.expect(!UpdateFetch.isSuccessfulStatus(300) && !UpdateFetch.isSuccessfulStatus(500), "non-2xx update status rejected")
+        c.expect(UpdateTransport.session.delegate === UpdateTransport.delegate, "redirect-gated updater session is wired")
+        c.expect(UpdateFetch.allows(URL(string: "https://api.github.com/x")!, apiBaseOverride: nil), "production HTTPS transport accepted")
+        c.expect(UpdateFetch.allows(URL(string: "https://objects.githubusercontent.com/x")!, apiBaseOverride: nil), "arbitrary HTTPS CDN accepted")
+        c.expect(!UpdateFetch.allows(URL(string: "http://127.0.0.1:8000/x")!, apiBaseOverride: nil), "loopback HTTP rejected without explicit override")
+        c.expect(UpdateFetch.allows(URL(string: "http://127.0.0.1:8000/x")!, apiBaseOverride: "http://localhost:9000/api"), "loopback HTTP accepted with explicit loopback override")
+        c.expect(!UpdateFetch.allows(URL(string: "http://example.com/x")!, apiBaseOverride: "http://127.0.0.1:8000/api"), "loopback override cannot enable remote HTTP")
+
+        var tracker = StagingTracker()
+        let generationA = tracker.begin(version: "1.5.0")
+        c.expect(tracker.accepts(generation: generationA, version: "1.5.0", availableVersion: "1.5.0"), "current staging generation accepted")
+        let generationB = tracker.begin(version: "1.6.0")
+        c.expect(!tracker.accepts(generation: generationA, version: "1.5.0", availableVersion: "1.6.0"), "superseded staging generation rejected")
+        c.expect(tracker.accepts(generation: generationB, version: "1.6.0", availableVersion: "1.6.0"), "replacement staging generation accepted")
+        tracker.clear()
+        c.expect(!tracker.accepts(generation: generationB, version: "1.6.0", availableVersion: "1.6.0"), "cleared staging generation rejected")
+
+        var failedInstall = UpdateState()
+        failedInstall.lastNotifiedVersion = "1.4.0"
+        failedInstall.pendingInstallVersion = "1.5.0"
+        let afterFailure = UpdateLogic.stateAfterInstallFailure(failedInstall)
+        c.expect(afterFailure.pendingInstallVersion == nil && afterFailure.lastNotifiedVersion == "1.5.0", "failed install marks pending version notified")
+        var noPending = UpdateState()
+        noPending.lastNotifiedVersion = "1.3.0"
+        c.expect(UpdateLogic.stateAfterInstallFailure(noPending).lastNotifiedVersion == "1.3.0", "failed install without pending version preserves notification")
+        let requestedOnly = UpdateLogic.stateAfterShowingUpdate(noPending, version: nil)
+        c.expect(requestedOnly.lastNotifiedVersion == "1.3.0", "deferred update request does not record notification")
+        let actuallyShown = UpdateLogic.stateAfterShowingUpdate(noPending, version: "1.5.0")
+        c.expect(actuallyShown.lastNotifiedVersion == "1.5.0", "visible update records notification")
+        c.expect(!UpdateLogic.shouldStageUpdate(version: "1.3.0", userInitiated: false, state: noPending), "shown update does not restage automatically")
+        c.expect(UpdateLogic.shouldStageUpdate(version: "1.3.0", userInitiated: true, state: noPending), "explicit action restages shown update")
+        c.expect(UpdateLogic.shouldStageUpdate(version: "1.5.0", userInitiated: false, state: noPending), "new update stages on first discovery")
+
+        let monitorRoot = FileManager.default.temporaryDirectory.appendingPathComponent("now-process-monitor-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: monitorRoot, withIntermediateDirectories: true)
+        let shortLimits = StagingLimits(archiveBytes: 100, extractedBytes: 100, extractionSeconds: 0.05, pollSeconds: 0.01, extractedEntries: 10)
+        c.expect(UpdateStaging.runMonitoredProcess("/bin/sleep", ["1"], monitoredDirectory: monitorRoot, limits: shortLimits) == .timedOut, "extraction process timeout enforced")
+        try? Data(repeating: 0, count: 101).write(to: monitorRoot.appendingPathComponent("large"))
+        var sizeLimits = shortLimits
+        sizeLimits.extractionSeconds = 1
+        c.expect(UpdateStaging.runMonitoredProcess("/bin/sleep", ["1"], monitoredDirectory: monitorRoot, limits: sizeLimits) == .sizeLimit, "extraction disk budget enforced")
+        try? FileManager.default.removeItem(at: monitorRoot)
 
         // -- Decide ---------------------------------------------------------
         func manifest(version: String, publishedOffsetHours: Double, size: Int = 100) -> UpdateManifest {
@@ -1600,10 +1652,27 @@ enum SelfTest {
         c.expect(UpdateLogic.noteBlocks("# \n") == [], "empty heading dropped")
 
         // -- OS floor --------------------------------------------------------
-        c.expect(UpdateLogic.meetsMinimumSystemVersion(required: nil, osMajor: 13, osMinor: 0, osPatch: 0), "missing LSMinimumSystemVersion passes")
         c.expect(UpdateLogic.meetsMinimumSystemVersion(required: "13.0", osMajor: 13, osMinor: 4, osPatch: 1), "13.0 required, 13.4.1 running passes")
         c.expect(UpdateLogic.meetsMinimumSystemVersion(required: "14.0", osMajor: 13, osMinor: 4, osPatch: 1) == false, "14.0 required, 13.4.1 running refuses")
         c.expect(UpdateLogic.meetsMinimumSystemVersion(required: "13", osMajor: 13, osMinor: 0, osPatch: 0), "single-component requirement passes")
+        c.expect(UpdateLogic.meetsMinimumSystemVersion(required: "13.0.1", osMajor: 13, osMinor: 0, osPatch: 1), "three-component requirement passes")
+        c.expect(!UpdateLogic.meetsMinimumSystemVersion(required: nil, osMajor: 13, osMinor: 0, osPatch: 0), "missing project LSMinimumSystemVersion rejected")
+        c.expect(!UpdateLogic.meetsMinimumSystemVersion(required: "13.0.0.0", osMajor: 14, osMinor: 0, osPatch: 0), "four-component system requirement rejected")
+        c.expect(!UpdateLogic.meetsMinimumSystemVersion(required: "013.0", osMajor: 14, osMinor: 0, osPatch: 0), "noncanonical system requirement rejected")
+        c.expect(!UpdateLogic.meetsMinimumSystemVersion(required: "13.beta", osMajor: 14, osMinor: 0, osPatch: 0), "nonnumeric system requirement rejected")
+
+        // -- Launch artifact names ------------------------------------------
+        let artifactUUID = "12345678-1234-1234-1234-123456789ABC"
+        c.expect(UpdateStaging.launchArtifact(named: ".now-update-\(artifactUUID)") == .staging(UUID(uuidString: artifactUUID)!), "canonical staging artifact matched")
+        c.expect(UpdateStaging.launchArtifact(named: "now.app.old-\(artifactUUID)") == .backup(UUID(uuidString: artifactUUID)!), "canonical backup artifact matched")
+        c.expect(UpdateStaging.launchArtifact(named: ".now-update-\(artifactUUID.lowercased())") == nil, "noncanonical lowercase UUID artifact ignored")
+        c.expect(UpdateStaging.launchArtifact(named: ".now-update-\(artifactUUID)-extra") == nil, "UUID artifact suffix ignored")
+        c.expect(UpdateStaging.launchArtifact(named: "now.app.old-not-a-uuid") == nil, "non-UUID backup ignored")
+        let artifactPath = "/Applications/.now-update-\(artifactUUID)"
+        c.expect(!UpdateStaging.shouldRemoveStaging(path: artifactPath, timestamp: now.addingTimeInterval(-3600), activePaths: [], now: now), "fresh staging artifact retained")
+        c.expect(UpdateStaging.shouldRemoveStaging(path: artifactPath, timestamp: now.addingTimeInterval(-25 * 3600), activePaths: [], now: now), "stale staging artifact removed")
+        c.expect(!UpdateStaging.shouldRemoveStaging(path: artifactPath, timestamp: now.addingTimeInterval(-25 * 3600), activePaths: [artifactPath], now: now), "active stale staging artifact retained")
+        c.expect(!UpdateStaging.shouldRemoveStaging(path: artifactPath, timestamp: nil, activePaths: [], now: now), "undated staging artifact retained")
 
         // -- Install-location refusals ---------------------------------------
         c.expect(UpdateLogic.installLocationProblem("/Applications/now.app") == nil, "normal install location ok")

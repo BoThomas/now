@@ -1546,6 +1546,14 @@ struct SettingsView: View {
                 Button("Install…") {
                     updates.presentAvailableFromMenu()
                 }
+            } else if let failure = updates.preparationFailure, failure.version == manifest.version {
+                Text("Couldn't prepare v\(manifest.version)")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .help(failure.reason)
+                Button("Retry") {
+                    updates.retryPreparation()
+                }
             } else {
                 Text("v\(manifest.version) is being prepared…")
                     .font(.caption)

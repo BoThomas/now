@@ -146,45 +146,54 @@ Static funcs (all pure, unit-tested):
 - `check(userInitiated:)` — async; network + parse via static nonisolated helper
   (never on the main actor, mirrors `performFetch`).
 - Triggers: launch +10 s; `Timer` every 24 h in `.common` mode via
-  `AppStore.commonTimer` pattern; `NSWorkspace.didWakeNotification` (the same wake
-  signal AppStore refreshes on); manual from menu/settings. A check that fires while
+  `AppStore.commonTimer` pattern; one AppDelegate observer on
+  `NSWorkspace.shared.notificationCenter` refreshes calendars and invokes the updater
+  on wake; manual from menu/settings. A check that fires while
   the update window is open is a **no-op**.
 - Throttle, split by outcome: success → `lastSuccessCheckDate` ≥ 24 h; **failure →
   retry after ≥ 1 h, max 3 silent attempts/day** (a network blip at launch+10 s must
   not silence checks for a day).
-- **Decide before downloading**: `decide()` runs on the manifest first — a non-manual
-  check whose version is age-gated or already `lastNotifiedVersion` stops before any
-  download. The menu item lights up from the manifest alone; download + extract +
-  verify happen at most once per session per version.
+- **Decide before downloading**: `decide()` runs on the manifest first. Age-gated,
+  skipped, and non-newer releases stop before download. First discovery stages eagerly
+  so Install is instant. Once that version has actually been shown, later automatic
+  checks keep the offer visible without restaging; menu/Settings/manual actions stage
+  it explicitly.
 - Request: explicit `User-Agent: now/<version>` (GitHub 403s without a UA; an explicit
   one keeps a UA-403 distinguishable from rate limiting). HTTP 404 → up to date.
 - API base override: `NOW_UPDATE_API_BASE` env (test hook; default
   `https://api.github.com`). The `--update-*` CLI modes are **read-only** on the
   updates defaults — a terminal run must never record `lastCheckDate` and suppress
   the real app's next auto-check (the smoke install shares the dev's UserDefaults).
+- A dedicated updater URLSession is used by API, asset, and updater CLI requests.
+  Production accepts HTTPS only and redirect policy is checked before following;
+  arbitrary HTTPS CDN destinations are allowed. HTTP is accepted only for loopback
+  URLs when `NOW_UPDATE_API_BASE` is explicitly set to a loopback HTTP base.
 
 ### Install flow (check → verify → swap → relaunch)
 
-1. **Download** (off main actor): `URLSession` streaming to
+1. **Download** (off main actor): `URLSession.AsyncBytes` streaming to
    `<bundleDir>/.now-update-<uuid>/now-vX.Y.Z.zip`; hard cap 100 MB; timeouts; final
    size cross-checked against `manifest.assetSize` (cheap early tamper/corruption
    signal before signature verification even runs).
-2. **Extract**: `ditto -x -k --sequesterRsrc` via `Process` into the same staging dir.
+2. **Extract**: `ditto -x -k --sequesterRsrc` via a monitored `Process` into the same
+   staging dir (60 s, 500 MB logical/allocated data, 50k-entry ceilings).
    Staging is a **sibling of the current bundle** → guaranteed same volume → the final
-   install step is a rename. Stale `.now-update-*` dirs *and* leftover
-   `now.app.old-*` backups are cleaned on launch (a backup only ever exists after a
-   successful swap, so cleanup is safe). Side benefit of the dot-prefix: hidden dirs
-   aren't indexed by LaunchServices, so the staged copy never gets registered
-   mid-update.
+   install step is a rename. Launch cleanup matches exact canonical-UUID artifact
+   names, excludes helper-active paths, deletes staging only after 24 hours, and
+   retries moving verified `now.app.old-<uuid>` backups to Trash rather than deleting
+   them. Side benefit of the dot-prefix: hidden dirs aren't indexed by LaunchServices,
+   so the staged copy never gets registered mid-update.
 3. **Verify (the security gate)**:
    - Staging contains **exactly one top-level entry and it is `now.app`** (catches
      malformed/adversarial zips regardless of extractor path handling).
    - `SecStaticCodeCreateWithPath(staged now.app)` + `SecStaticCodeCheckValidity`
-     against every pinned `updateRequirement(fingerprint:)`.
+     with strict, all-architectures, and nested-code flags against every pinned
+     `updateRequirement(fingerprint:)`.
    - Sanity: staged `CFBundleShortVersionString` == manifest version, staged
      `CFBundleVersion` >= running `CFBundleVersion`, and staged
-     `LSMinimumSystemVersion` <= running OS (a future deployment-target bump refuses
-     instead of installing an app that can't launch).
+     required `LSMinimumSystemVersion` is one to three canonical decimal components
+     and <= running OS (a future deployment-target bump refuses instead of installing
+     an app that can't launch).
    - Any failure → delete staging, keep running, surface error (manual checks only).
 4. **Confirm**: update window (below) → "Install & Relaunch".
 5. **Install**: refuse if bundle path is translocated (`/App Translocation/`) or on
@@ -196,41 +205,49 @@ Static funcs (all pure, unit-tested):
    parameters passed via environment, never string-interpolated** (manifest data must
    never reach a shell): `NOW_OLD_PID`, `NOW_APP_PATH`, `NOW_STAGED_APP`,
    `NOW_BACKUP_PATH`, `NOW_RELEASES_URL` (constant compiled from the repo slug),
-   optional `NOW_SMOKE_*`. Helper contract — **never exit silent**: every failure path
+   optional `NOW_SMOKE_*`. Helper contract: every failure after filesystem mutation
    first restores a valid bundle at `$NOW_APP_PATH`, then relaunches the *old* app
    with `NOW_UPDATE_ERROR=<reason>` so it can tell the user; if even that `open`
    fails, `open "$NOW_RELEASES_URL"` (browser) as the last ditch. Hardening:
    `PATH=/bin:/usr/bin` pinned inside the script, stdio → `/dev/null`, poll bounded to
    60 s (env-overridable for the smoke's stuck-quit variant) — a stuck quit must not
    leak a spinning helper forever; on timeout nothing has been touched yet, so it
-   just bails (app still running, staging cleaned next launch). Old bundle goes to
-   the **Finder Trash**, timestamped against collisions (no "Put Back" metadata —
-   accepted); if the trash move fails the helper still exits 0 (the `now.app.old-*`
-   launch cleanup covers the leftover):
+    deletes staging and bails (the old app is still running). Old bundle goes to
+   the **Finder Trash** only after the launched executable writes an exact
+   child-PID/random-token health acknowledgement. Child exit or a 30-second timeout
+   triggers rollback. If the Trash move fails, launch cleanup retries moving the valid
+   backup rather than deleting it.
    ```sh
    PATH=/bin:/usr/bin; export PATH
    end=$(( $(date +%s) + ${NOW_SMOKE_POLL_TIMEOUT:-60} ))
    while kill -0 "$NOW_OLD_PID" 2>/dev/null; do
-     [ "$(date +%s)" -ge "$end" ] && exit 1        # stuck quit → nothing moved, bail
+      if [ "$(date +%s)" -ge "$end" ]; then
+        rm -rf "$NOW_STAGING_ROOT"                  # old app is still intact
+        exit 1
+      fi
      sleep 0.1
    done
    fail() {                                        # restore, then tell the user
-     if [ -d "$NOW_BACKUP_PATH" ]; then
-       rm -rf "$NOW_APP_PATH"                      # only ever the unlaunchable new app
-       mv "$NOW_BACKUP_PATH" "$NOW_APP_PATH" || true
-     fi
+      if [ -d "$NOW_BACKUP_PATH" ]; then            # rename aside; never delete first
+        [ ! -e "$NOW_APP_PATH" ] || mv "$NOW_APP_PATH" "$NOW_FAILED_PATH" || exit 1
+        mv "$NOW_BACKUP_PATH" "$NOW_APP_PATH" || {
+          [ ! -e "$NOW_FAILED_PATH" ] || mv "$NOW_FAILED_PATH" "$NOW_APP_PATH" || true
+          open "$NOW_RELEASES_URL"; exit 1
+        }
+        rm -rf "$NOW_FAILED_PATH"
+      fi
      open "$NOW_APP_PATH" --env "NOW_UPDATE_ERROR=$1" 2>/dev/null \
        || open "$NOW_RELEASES_URL"                 # last ditch: browser
      exit 1
    }
-   mv "$NOW_APP_PATH" "$NOW_BACKUP_PATH"           # sibling now.app.old-<uuid>
+    mv "$NOW_APP_PATH" "$NOW_BACKUP_PATH" || fail "backup move failed"
    mv "$NOW_STAGED_APP" "$NOW_APP_PATH" || fail "install move failed"
    open "$NOW_APP_PATH" || fail "relaunch failed"
-   mv "$NOW_BACKUP_PATH" "$HOME/.Trash/now-old-$(date +%Y%m%d%H%M%S).app" 2>/dev/null
+    mv "$NOW_BACKUP_PATH" "$HOME/.Trash/now-old-$(date +%Y%m%d%H%M%S)-$$.app" 2>/dev/null
    exit 0
    ```
-   (Note the `rm -rf` before restore in `fail()`: `mv` cannot replace an existing app
-   directory — the review's restore sketch missed that.)
+   The failed new app is renamed aside before restore; rollback never deletes the only
+   bundle at the install path before the old bundle has been restored.
 6. **Quit**: `AppDelegate.terminateForUpdate()` — closes the alert panel (via
    AlertController), bypasses both `handleQuitRequest` confirmations, `NSApp.terminate`.
    The helper finishes the swap + relaunch after our PID dies.
@@ -245,11 +262,10 @@ Static funcs (all pure, unit-tested):
 The menu bar itself stays meeting-only (no badge, no dot — the countdown owns that
 space). Updates are discoverable in three places, escalating in intrusiveness:
 
-- **Menu dropdown** (`MenuBarController`): a dynamic "Update to v1.5.0…" item
-  (SF symbol `arrow.triangle.2.circlepath`) directly above "Settings…", present only
-  while an update is known-available; selecting it opens the update window (instant
-  when staged). "Check for Updates…" is a permanent item after "Settings…", before
-  "Launch at Login", disabled to "Checking…" while a check runs. No shortcut in v1.
+- **Menu dropdown** (`MenuBarController`): one update slot after Settings. It reads
+  "Check for Updates…" normally and is replaced by "Update to v1.5.0…" while an
+  update is known. Selecting the offer opens the staged update or its preparation
+  failure with a direct retry. No shortcut in v1.
 - **A manual check always answers with the window** — clicking a menu item dismisses
   the menu, so the transient item title can never be the feedback channel (it stays
   as a hint for the *next* menu open). Window variants: update-available /
@@ -287,8 +303,9 @@ space). Updates are discoverable in three places, escalating in intrusiveness:
     `.screenSaver`-level fullscreen panel whose key monitor eats Return/Esc; the
     update window would sit underneath, invisible and unfocusable. Defer; show when
     the alert closes.
-  - ⌘Q with the update window key: plain terminate (nothing is lost — staging
-    persists, the offer returns next launch). No third confirm dialog. ⌘W/⌘M come
+  - ⌘Q with the update window key: plain terminate. Staging files can remain until
+    launch cleanup, but manifest/staging state is not persisted; the offer returns on
+    the next eligible automatic check or manual Check Now. No third confirm dialog. ⌘W/⌘M come
     free from the Window menu once `.regular`.
 - **Auto-discovery choreography (escalation — Q1 resolved)**: automatic checks never
   steal focus — they only light up the menu item + About link. The update window
@@ -316,14 +333,15 @@ space). Updates are discoverable in three places, escalating in intrusiveness:
 | No network / 403 / 429 / malformed JSON | silent skip, retry ≥ 1 h, ≤ 3/day (manual: error window) |
 | 404 (no releases yet) | silent "up to date" |
 | Release younger than 24 h | automatic checks ignore it; manual checks offer it |
-| Download dies mid-way / size ≠ `assetSize` | delete staging, retry next cycle |
+| Download dies mid-way / exceeds 100 MB / size ≠ `assetSize` | delete staging; direct retry when surfaced, otherwise next cycle |
+| Extraction exceeds 60 s / 500 MB / 50k entries | terminate extraction, delete staging; direct retry when surfaced |
 | Signature/DR mismatch (tampered or foreign zip) | hard abort, keep running, error |
 | Staging not exactly one top-level `now.app` | hard abort (adversarial/malformed zip) |
 | Staged version ≠ manifest, older build, or `LSMinimumSystemVersion` > running OS | hard abort |
 | Old PID never dies (stuck quit) | helper bails ≤ 60 s before touching anything |
 | `mv` fails (permissions/read-only) | helper restores + relaunches old app with `NOW_UPDATE_ERROR`; last ditch: browser → releases |
-| Relaunch fails after swap | same: restore backup, relaunch old with `NOW_UPDATE_ERROR` |
-| Trash move fails | non-fatal; `now.app.old-*` cleaned next launch |
+| Relaunch or startup health acknowledgement fails after swap | restore backup, relaunch old with `NOW_UPDATE_ERROR` |
+| Trash move fails | non-fatal; exact canonical-UUID backup is verified and retried to Trash next launch |
 | Bundle translocated/on DMG | refuse up front with explanation |
 | Another now instance running (any path, incl. `open -n`) | refuse with "quit the other copy first" |
 | Update window open while reminder alert shows | deferred until the alert closes |
@@ -336,9 +354,9 @@ space). Updates are discoverable in three places, escalating in intrusiveness:
   update could break. What degrades gracefully if it ever changes: the signature
   verify still gates the download, and the staged-launch smoke would catch the
   "Verifying…" regression.
-- **`open` success ≠ a healthy first minute**: a release that crashes on launch
-  auto-installs anyway. Mitigation = age gate + delete-the-release brake; affected
-  installs wait for the next good release (no OTA rollback exists).
+- **The startup handshake is deliberately shallow**: it proves that the exact launched
+  executable reached early app startup, not that every delayed code path is healthy.
+  The age gate + delete-the-release brake still mitigate later crashes.
 - **PID reuse** after the bounded helper wait: theoretical, accepted (Sparkle accepts
   the same residual).
 - **No revocation** for a self-signed key — see the trust-model rotation notes.
@@ -376,7 +394,7 @@ No GitHub, no real release, exercises the *real* updater + real signatures:
    identity (present on the dev machine) — the `codesign` invocation must mirror
    build-app.sh's exactly (flags, entitlements, fingerprint); keep a "keep in sync"
    comment pair in both scripts, they *will* drift — then
-   `ditto -c -k --sequesterRsrc --keepParent` → `now-v9.9.9.zip`.
+   `ditto -c -k --sequesterRsrc --keepParent` → the dynamically versioned asset.
 4. Serve a fake `releases/latest` JSON + the zip via `python3 -m http.server` on
    127.0.0.1 (background, killed at the end).
 5. Run the *installed* copy's binary with
@@ -387,17 +405,19 @@ No GitHub, no real release, exercises the *real* updater + real signatures:
    version to the report file, exits — script never talks to the GUI. The updater
    passes its own `HOME=$TMPDIR/now-update-test/home` to the helper, so the trashed
    old bundle lands in the test sandbox, not the developer's real `~/.Trash`.
-6. Assertions: exit codes; temp path now contains the 9.9.9 binary; report file says
-   9.9.9; old bundle sitting in `~/.Trash` (timestamped), staging dir gone.
-7. Negative variants, same harness: (a) tamper the zip → re-sign ad-hoc → updater must
-   abort, install untouched; (b) tag older than running → "up to date"; (c) 404 asset
-   → graceful error; (d) downgrade-tag → refused; (e) **stuck quit** — smoke mode
+6. Assertions: exit codes; temp path and report contain the dynamically newer version;
+   exact startup health acknowledgement completed; old bundle sits in `~/.Trash`;
+   staging is gone.
+7. Negative variants, same harness: ad-hoc signature rejection; older tag; no-release
+   404; a lying response stopped at the streaming byte cap; manifest size mismatch;
+   asset-download 404; injected old→backup failure; injected post-swap relaunch
+   failure with restore/error relaunch; suppressed startup acknowledgement with
+   pre-Trash rollback; and **stuck quit** — smoke mode
    keeps the old process alive (`NOW_SMOKE_SKIP_QUIT=1`) while the helper runs with
    `NOW_SMOKE_POLL_TIMEOUT=3` → helper must bail with nothing moved, app untouched.
-   Known gap, accepted: the helper's *internal* failure paths (`mv`/`open` failing
-   mid-install) aren't injectable without hooks — the helper stays a 15-line reviewed
-   script, and the `NOW_UPDATE_ERROR` relaunch contract is exercised by variant (a)'s
-   app-side abort path plus code review.
+   Smoke hooks are stripped from normal inherited environments and only the hidden
+   CLI can pass an allow-listed fault to the helper. The failed-version bookkeeping
+   transition is covered separately by pure selftest.
 
 Note: the smoke "installed" copy shares the bundle id (and thus UserDefaults) with a
 dev's real instance; the child exits immediately via the env flag, so exposure is a
@@ -567,12 +587,9 @@ follows is gaps first, UI second, then the short list of what to lock before bui
 The menu bar itself stays meeting-only (no badge, no dot — the countdown owns that
 space). Updates are discoverable in three places, escalating in intrusiveness:
 
-1. **Menu dropdown.** A dynamic "Update to v1.5.0…" item (SF symbol
-   `arrow.triangle.2.circlepath`) appears directly above "Settings…" *only* when an
-   update is known-available; selecting it opens the update window (instant if staged).
-   "Check for Updates…" is a permanent item in the app group — after "Settings…",
-   before "Launch at Login" — disabled to "Checking…" while a check runs. No shortcut
-   in v1.
+1. **Menu dropdown.** One slot after Settings reads "Check for Updates…" normally and
+   is replaced by "Update to v1.5.0…" when an update is known. Selecting it opens the
+   staged update or a preparation failure with direct retry. No shortcut in v1.
 2. **The menu-title feedback problem.** The plan shows "Checking…"/"Up to date" as the
    item's title — but clicking a menu item *dismisses the menu*, so the user who asked
    never sees the answer. Rule: a **manual check always answers with the small window**
@@ -614,8 +631,9 @@ space). Updates are discoverable in three places, escalating in intrusiveness:
      `.screenSaver`-level fullscreen panel whose key monitor eats Return/Esc — the
      update window would sit underneath it, invisible and unfocusable. Defer; show
      when the alert closes.
-   - ⌘Q with the update window key: bare terminate is fine (nothing is lost — staging
-     persists, the offer comes back next launch). Don't grow a third confirm dialog.
+   - ⌘Q with the update window key: bare terminate is fine. Staging is discarded on
+     next launch and the offer returns on the next eligible/manual check. Don't grow a
+     third confirm dialog.
    - ⌘W/⌘M work for free from the Window menu once `.regular`.
 6. **Escalation instead of popup (the one taste call I'd make).** The plan pops the
    window on the first auto-check that finds a new version (once per version). For an
@@ -644,9 +662,9 @@ behavior, this codebase). **Nothing dismissed outright**; everything integrated 
 the plan body above except the single deferred product call (Q1). Two places where
 the review's own fixes were corrected:
 
-- **Helper `fail()` needs `rm -rf` before restore** — `mv` cannot replace an existing
-  app directory, so the review's "restore the backup" sketch would silently fail on
-  the relaunch-failure path. Fixed in the helper contract.
+- **Helper restore was later hardened beyond this review's `rm -rf` fix** — the failed
+  new app is now renamed aside, the backup is restored, and only then is the failed
+  copy removed. Rollback never deletes the sole bundle at the install path first.
 - **Failed-update relaunch must suppress re-offering that version** — without setting
   `lastNotifiedVersion` on the `NOW_UPDATE_ERROR` path, the popup variant would
   immediately re-nag about a version that just failed to install. Added as install
@@ -683,3 +701,265 @@ Integrated, with any choices the review left open resolved:
   escalation choreography, which Q1 has since resolved in the reviewer's favor.
 - Q2 (age gate 24 h vs 48 h) also resolved after this disposition was written:
   kept at 24 h.
+
+---
+
+## Final production-readiness review (2026-08-30)
+
+This section supersedes the initial production-readiness review after two independent
+challenge passes and a source-level revalidation of every item.
+
+**Status at review time: do not ship.** The review identified six implementation/
+release-path findings. Their implementation disposition and current gate status are
+recorded at the end of this section.
+
+### Challenge disposition
+
+1. **Revised: Critical → High; release blocker.** The first helper `mv` is unchecked,
+   but the old app normally remains rather than being deleted. The real failure is a
+   false-success install that can nest the staged app inside the old signed bundle.
+   `codesign --verify --deep --strict` then reports unsealed bundle-root contents. The
+   existing `fail()` already handles the pre-backup state; the required code fix is
+   `mv "$NOW_APP_PATH" "$NOW_BACKUP_PATH" || fail "backup move failed"`, plus a test.
+2. **Kept: High; release blocker.** The download/extraction resource-exhaustion finding
+   stands. Rejecting a manifest-declared oversize asset is only an early optimization;
+   a lying response still requires streaming with an enforced byte limit. Extraction
+   also needs a time and disk-growth budget before unsigned input reaches `ditto`.
+3. **Revised: High → Medium; release blocker.** Stale staging completion is a real race,
+   but `install()` checks `stagedVersion == available.version`, so no mismatched version
+   can be installed. The impact is unavailable/misleading state and litter, not a trust
+   bypass.
+4. **Revised: High/permanent → Medium/recoverable; release blocker.** A later Settings
+   “Check Now” or eligible automatic cycle retries. The defect is that an automatic
+   stage failure is hidden and the opened offer remains labelled “Preparing…” with no
+   failure reason or direct retry.
+5. **Revised: High → Medium; release blocker.** The promised mandatory smoke still
+   fails open when its script is absent or non-executable.
+6. **Revised: Medium → Low; pre-release correctness.** Notification bookkeeping is
+   recorded on request rather than actual visibility. The narrow failure requires an
+   escalation while a reminder is open followed by quitting before dismissal; only
+   future automatic popup is lost, not the menu/manual offer. The documented show-time
+   invariant should still be implemented while this state flow is being fixed.
+7. **Revised: Medium → Low product/spec decision.** Re-downloading a previously notified
+   update is bounded by the 24-hour successful-check throttle, not every launch. It
+   contradicts the explicit decide-before-download plan, but eager staging also keeps
+   Install instant. Choose and document one behavior; it is not independently unsafe.
+8. **Withdrawn as a defect.** Recording GitHub discovery as a successful check is
+   defensible, and the failure table says archive failures retry “next cycle.” The
+   broad one-hour wording is ambiguous and specifically motivates network/API failure.
+   Direct retry belongs in finding 4; changing automatic preparation retry cadence is
+   an optional product policy.
+9. **Withdrawn as a defect.** Treating GitHub `/latest` as authoritative and clearing
+   an older offer when a newer release is still age-gated is consistent with the
+   documented `.upToDate` semantics. Preserving the older release could keep offering
+   a superseded or known-bad build. Revisit only as an explicit product decision.
+10. **Revised: Medium → Low; pre-release defensive correctness.** Only 404 is handled
+    specially; another non-2xx body is parsed if it happens to match the schema. GitHub
+    does not normally return release JSON on errors, but final 2xx should be required.
+11. **Revised: Medium → Low hardening.** The code allows loopback non-HTTPS based only
+    on hostname and does not control redirects, but the production
+    `browser_download_url` is GitHub-generated and the operation is a blind GET whose
+    bytes still face the signature gate. Bind loopback HTTP to an explicit test
+    override. If redirect enforcement is added, use a URLSession delegate to reject a
+    disallowed redirect *before following it*: allow HTTPS redirects to GitHub's CDN
+    hosts without a brittle fixed-host list, and allow loopback HTTP only in test mode.
+12. **Revised: Medium → Low maintainer-error guard.** Lenient parsing is real, but this
+    check follows the pinned signature gate. Parse the whole value as one to three
+    nonnegative decimal components. Missing `LSMinimumSystemVersion` is valid in macOS
+    generally and currently has an explicit passing selftest; decide separately whether
+    this project's release invariant requires it. This plist check alone does not prove
+    the Mach-O can launch.
+13. **Kept: Low; pre-release correctness.** The client accepts negative components and
+    the release script accepts leading-zero versions the client rejects. Use one
+    canonical ASCII-decimal validator in both paths.
+14. **Kept with narrower wording: Low future hardening.** Empty flags still validate
+    the main executable, sealed resources, and pinned requirement. Strict structure,
+    all-architecture, and nested-code flags add useful coverage, but are not exactly
+    equivalent to `codesign --deep --strict`; no current arm64 single-binary bypass is
+    known.
+15. **Revised: Medium → Low UX follow-up.** First-run Settings can cover the failed-
+    install window, but the failure window still exists and remains recoverable.
+16. **Replaced: Low duplicate-owner claim → Medium broken wake handling; release
+    blocker.** Both observers register on `NotificationCenter.default`. Apple QA1340
+    explicitly states that `NSWorkspace` sleep/wake notifications use
+    `NSWorkspace.shared.notificationCenter` and are not received through the default
+    center. Register one owner on the workspace center, remove it from that same center,
+    and have it refresh calendars and invoke the throttled updater once.
+17. **Revised: High → Low future tooling debt.** Fixed `9.9.9` safely supports the
+    current 1.5.x release and fails closed once no longer newer. Eventually derive both
+    a guaranteed-newer semantic version and a build greater than the tested app; the
+    fixed build `999999` is a second future ceiling.
+18. **Revised: Medium assurance requirement.** Keep focused helper fault injection for
+    old→backup and at least one post-backup failure proving restore/relaunch. Test the
+    `NOW_UPDATE_ERROR` controller bookkeeping separately; the ad-hoc signature case
+    never reaches it. A restore failure can only assert attempted restore and browser
+    fallback, not successful rollback.
+19. **Revised and narrowed: Medium assurance tied to changed guards.** Do not turn every
+    guard into a full swap smoke. Add deterministic coverage at the cheapest correct
+    layer for the archive byte/extraction limits, response-size mismatch, asset HTTP
+    failure, malformed archive layout, build/OS rejection, API status, and any redirect
+    policy changed above. The current smoke summary falsely says it verifies age gating:
+    `--update-smoke` uses `minAge: 0`; age gating is covered only by pure selftest.
+20. **Kept: Low test flake.** The child report can arrive before the helper finishes its
+    Trash move. Poll final filesystem state or add a completion marker.
+21. **Kept: Low test-tooling debt.** Literal `/now.app/` matching misses renamed copies,
+    and whitespace-delimited `lsof` parsing loses paths containing spaces. This fails
+    the smoke closed or fails to reopen a developer app; use path-safe bundle-aware
+    discovery.
+22. **Kept: Low test defect.** The fixed-date, one-sided missing-`published_at`
+    assertion becomes vacuous. Bound the result by real timestamps captured around
+    parsing or inject the clock.
+23. **Revised: focused assurance, not a blanket GUI-test mandate.** The ad-hoc smoke
+    does test one `UpdateStaging.stage` failure, but not controller retry/supersession/
+    stale-completion transitions. Add regression coverage for state transitions changed
+    by findings 3, 4, and 6 and explicitly assert legacy defaults for the new settings.
+    External-close and activation policy can remain targeted GUI/manual coverage unless
+    extracted into pure decisions.
+24. **Partly withdrawn.** The reproduced forged-app leak is valid: cleanup only knows
+    the pre-install PID, so the relaunched demo can survive Ctrl-C. Resetting the
+    separate ephemeral updater defaults is deliberate and documented; backing them up
+    is optional developer ergonomics, not a production finding.
+25. **Revised documentation drift.** Final documentation must say: one menu slot;
+    staging files may survive ordinary quit but are discarded on next launch and are
+    not reusable; every failure *after filesystem mutation* attempts restore/report;
+    pre-mutation PID timeout and post-success Trash failure are deliberate exceptions.
+    The current claim that an offer simply returns next launch is also false: manifest
+    state is not persisted and the successful-check throttle can hide it until the next
+    eligible check or manual Check Now.
+26. **Kept but separated as pre-existing release tooling.** `--repo` is inconsistent,
+    but adding it only to `gh release create` is insufficient because checks/pushes use
+    `origin`. Either remove `--repo`, or validate and apply one selected repository and
+    remote consistently. The sandbox updater test does not require `release.sh --repo`.
+27. **Kept but separated as pre-existing release tooling.** The process is not
+    resumable; exact retry behavior depends on the failed phase. Atomically push branch
+    and tag where supported, record completed phases, and print phase-specific
+    idempotent recovery commands. GitHub release creation cannot be transactional with
+    Git publication.
+
+### Final release findings
+
+1. **[High] Unchecked old→backup move can falsely succeed**
+   (`Sources/Updater.swift:502-517`). Guard the first `mv` with the existing `fail()`
+   path and add injected first-move failure coverage.
+2. **[High] Unauthenticated archive handling has no effective resource bound**
+   (`Sources/Updater.swift:341-342,382-417`). Reject declared oversize early, stream
+   with a real byte cap, and bound extraction time/disk growth.
+3. **[Medium] Staging tasks have no generation/version ownership**
+   (`Sources/Updater.swift:721-723,790-825`). Discard stale completions and ensure the
+   current manifest starts after supersession.
+4. **[Medium] Automatic preparation failures are hidden with no direct retry**
+   (`Sources/Updater.swift:806-813`, `Sources/UpdateUI.swift:32-69`,
+   `Sources/SettingsUI.swift:1541-1552`). Show the failure and retry action.
+5. **[Medium] The mandatory release smoke fails open** (`release.sh:190-197`). Missing
+   or non-executable smoke must fail the release.
+6. **[Medium] Wake handling never receives real workspace wake notifications**
+   (`Sources/App.swift:64-69`, `Sources/Updater.swift:619-645`). Consolidate on
+   `NSWorkspace.shared.notificationCenter`.
+
+Required assurance for those fixes:
+
+- Inject old→backup and post-backup helper failures; verify restore, relaunch, and the
+  failed-version bookkeeping contract at the appropriate helper/controller layers.
+- Add focused state-machine tests for supersession, cancellation/stale completion,
+  automatic stage failure, direct retry, and actual-show notification bookkeeping.
+- Add bounded-download/extraction tests, plus deterministic tests for guards changed by
+  the fix. Correct the smoke's age-gate overclaim.
+
+Small pre-release correctness fixes that should ride with the blocker pass:
+
+- Record `lastNotifiedVersion` only when the window is actually made visible.
+- Require final 2xx API status (preserving intentional 404 behavior).
+- Align canonical nonnegative semantic-version validation in Swift and `release.sh`.
+- Fix the missing-`published_at` wall-clock assertion.
+- Reconcile the authoritative plan text with final behavior.
+
+Non-blocking decisions/hardening:
+
+- Decide whether already-notified versions restage automatically or only on explicit
+  action; current code and plan disagree.
+- Decide whether staging failure should alter the one-hour API-failure throttle; current
+  “next cycle” behavior is defensible.
+- Keep `/latest` authoritative across the age gate unless product requirements change.
+- Bind loopback HTTP to test mode and consider pre-follow redirect policy.
+- Tighten `LSMinimumSystemVersion` parsing, signature flags, and first-run window order.
+- Fix the optional UI demo's relaunched-process cleanup and future-proof the fixed
+  smoke version/build and path discovery.
+- Track `release.sh --repo` consistency and resumable publishing separately from this
+  branch's runtime gate.
+
+### Verification performed
+
+- `./build-app.sh` and `--selftest` passed with the stable designated requirement.
+- The current five-case signed updater smoke passed: swap/relaunch, ad-hoc rejection,
+  downgrade refusal, no-release 404, and pre-mutation stuck-PID bailout.
+- Live GitHub `--update-check`, `git diff --check`, and shell syntax checks passed.
+- A staged-app directory nested into a signed copy reproduced strict signature failure:
+  `unsealed contents present in the bundle root`.
+- Apple QA1340 and `NSWorkspace.notificationCenter` documentation confirm that wake
+  notifications registered on `NotificationCenter.default` are not delivered.
+- `release.sh --dry-run` correctly refused the feature branch; rerun it from clean,
+  synchronized `main` after the release blockers are fixed and merged.
+
+### Implementation closure (2026-08-30)
+
+All six release findings and the agreed small pre-release correctness work are now
+implemented:
+
+- Installer checks old→backup, uses rename-aside rollback instead of delete-first,
+  cleans staging on stuck-PID timeout, and preserves the active backup until the helper
+  owns its Trash move.
+- Archives stream directly to disk under a real 100 MB byte cap. Unsigned extraction is
+  terminated at 60 seconds, 500 MB logical/allocated size, or 50k entries.
+- Staging has version/generation ownership; stale completions are discarded and cleaned.
+  Preparation failures retain their reason and retry the known manifest directly.
+- `lastNotifiedVersion` is recorded only after actual window presentation; deferred
+  reminder choreography and retry-window ordering are covered by the corrected state
+  flow. First-run Settings waits until an update problem is dismissed.
+- The release smoke fails closed and now covers twelve signed end-to-end cases, including
+  streaming overflow, size mismatch, asset 404, old→backup failure, post-swap rollback,
+  and acknowledged stuck-PID cleanup.
+- Wake handling has one owner on `NSWorkspace.shared.notificationCenter`. API status and
+  canonical semver validation are strict and shared with diagnostics/release tooling.
+- Pure selftests cover generation invalidation, install-failure/show bookkeeping,
+  canonical versions, HTTP status, legacy update-setting defaults, deterministic
+  `published_at` fallback, and extraction timeout/size monitoring.
+
+Current verification: production build/signature passed, selftest passed, the expanded
+12-case updater smoke passed, live GitHub `--update-check` passed, shell syntax passed,
+and `git diff --check` passed. `release.sh --dry-run` remains intentionally unexecutable
+on this feature branch and must be rerun from clean synchronized `main`.
+
+The updater is now clear of the review's original must-fix and should-fix release gate.
+The remaining decisions were reviewed immediately afterward and selected for rollout:
+
+1. Add a new-app health acknowledgement before moving the old bundle to Trash; restore
+   the old version if the new process does not confirm healthy startup.
+2. Stage an already-notified version only after explicit user action, avoiding repeated
+   background downloads after session staging was discarded.
+3. Enforce HTTPS-only production redirects before following them; permit loopback HTTP
+   only under the explicit local test override.
+4. Require strict project `LSMinimumSystemVersion` parsing and add strict,
+   all-architecture, and nested-code Security-framework validation flags.
+5. Generate smoke/demo version and build dynamically, use path-safe running-app
+   discovery, and clean the UI demo's relaunched process.
+6. Remove `release.sh --repo`, validate the origin-only release target, atomically push
+   branch/tag where supported, and provide phase-specific resumable recovery guidance.
+7. Match exact updater UUID artifacts, age-bound stale staging cleanup, and retry moving
+   valid old backups to Trash instead of deleting them.
+
+### Selected hardening closure (2026-08-30)
+
+All seven selected items above are implemented. The helper launches the real executable
+and retains the rollback backup until the normal app finishes initialization, survives
+on the main run loop, and emits an exact PID/token acknowledgement; child exit or
+timeout restores the old bundle. All updater API/asset/CLI traffic uses a redirect-
+gated session with HTTPS production policy and explicit-loopback-only HTTP. Staged apps
+require canonical one-to-three-component `LSMinimumSystemVersion` and strict/all-
+architectures/nested signature validation. Cleanup matches exact canonical UUIDs,
+excludes active paths, age-bounds staging removal, and retries verified backups to
+Trash. Already-notified updates restage only after explicit action. Smoke/demo fixtures
+are dynamically newer, process handling is path-safe, and demo cleanup owns the
+relaunched copy. Releases are origin-only, publish branch/tag atomically, and print
+phase-specific recovery instructions. Pure selftests and the 12-case signed smoke cover
+these invariants, including child-exit and health-timeout rollback before Trash. No open
+blocker or deferred review item remains.

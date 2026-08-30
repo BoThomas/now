@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Security
+import Darwin
 
 // MARK: - Pure decision layer (top level, nonisolated — selftest-callable)
 
@@ -72,7 +73,8 @@ enum UpdateLogic {
         version.split(separator: ".").compactMap { Int($0) }
     }
 
-    /// STRICT variant: every dot-component must be a plain integer (no
+    /// STRICT variant: every dot-component must be canonical ASCII decimal
+    /// (no signs, leading zeroes, or
     /// "1.5.0-beta.1", no dropped junk) — lenient `compactMap` parsing made
     /// prerelease tags masquerade as valid versions.
     static func strictVersionComponents(_ version: String) -> [Int]? {
@@ -80,7 +82,10 @@ enum UpdateLogic {
         guard !parts.isEmpty else { return nil }
         var result: [Int] = []
         for part in parts {
-            guard let value = Int(part), part == String(value) else { return nil }
+            guard !part.isEmpty,
+                  part.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+                  let value = Int(part),
+                  part == String(value) else { return nil }
             result.append(value)
         }
         return result
@@ -146,6 +151,10 @@ enum UpdateLogic {
         return now.timeIntervalSince(seenDate) >= escalationDwell
     }
 
+    static func shouldStageUpdate(version: String, userInitiated: Bool, state: UpdateState) -> Bool {
+        userInitiated || state.lastNotifiedVersion != version
+    }
+
     /// Release body → window text: drops release.sh's trailing
     /// "Full changelog: …" line and surrounding blank lines.
     static func displayNotes(_ body: String) -> String {
@@ -204,9 +213,9 @@ enum UpdateLogic {
     /// Staged LSMinimumSystemVersion vs the running OS — a future deployment
     /// bump must refuse instead of installing an app that can't launch.
     static func meetsMinimumSystemVersion(required: String?, osMajor: Int, osMinor: Int, osPatch: Int) -> Bool {
-        guard let required else { return true }
-        let parts = versionComponents(required)
-        guard !parts.isEmpty else { return true }
+        guard let required,
+              let parts = strictVersionComponents(required),
+              (1...3).contains(parts.count) else { return false }
         return orderedVersionComponents([osMajor, osMinor, osPatch], parts) >= 0
     }
 
@@ -242,7 +251,7 @@ enum UpdateLogic {
     /// v + x.y.z and the matching `now-vX.Y.Z.zip` asset must exist. A missing
     /// or unparsable `published_at` counts as "just released" (age gate keeps
     /// blocking automatic offers; manual checks still work).
-    static func parseLatestRelease(_ data: Data, appName: String = "now") -> UpdateManifest? {
+    static func parseLatestRelease(_ data: Data, appName: String = "now", now: Date = Date()) -> UpdateManifest? {
         guard let release = try? JSONDecoder().decode(GitHubLatestRelease.self, from: data) else { return nil }
         guard let version = version(fromTag: release.tag_name) else { return nil }
         let assetName = "\(appName)-v\(version).zip"
@@ -252,7 +261,7 @@ enum UpdateLogic {
         if let iso = release.published_at, let parsed = ISO8601DateFormatter().date(from: iso) {
             published = parsed
         } else {
-            published = Date()
+            published = now
         }
         return UpdateManifest(version: version, zipURL: url, assetSize: max(0, asset.size), publishedAt: published, notes: release.body ?? "")
     }
@@ -269,6 +278,22 @@ enum UpdateLogic {
 
     static var currentBuild: Int {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String).flatMap(Int.init) ?? 0
+    }
+
+    static func stateAfterInstallFailure(_ old: UpdateState) -> UpdateState {
+        var state = old
+        if let pending = state.pendingInstallVersion {
+            state.lastNotifiedVersion = pending
+        }
+        state.pendingInstallVersion = nil
+        return state
+    }
+
+    static func stateAfterShowingUpdate(_ old: UpdateState, version: String?) -> UpdateState {
+        guard let version else { return old }
+        var state = old
+        state.lastNotifiedVersion = version
+        return state
     }
 }
 
@@ -308,20 +333,69 @@ enum UpdateFetch {
         URL(string: "\(base)/repos/\(repo)/releases/latest")
     }
 
+    static func isSuccessfulStatus(_ status: Int?) -> Bool {
+        status.map { (200...299).contains($0) } ?? false
+    }
+
+    static func isLoopbackHost(_ host: String?) -> Bool {
+        guard let host = host?.lowercased() else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    /// Production permits HTTPS only. HTTP exists solely for the local smoke
+    /// server and is enabled only by an explicit loopback API-base override.
+    static func allows(_ url: URL, apiBaseOverride: String?) -> Bool {
+        if url.scheme?.lowercased() == "https" { return true }
+        guard url.scheme?.lowercased() == "http",
+              isLoopbackHost(url.host),
+              let override = apiBaseOverride,
+              let overrideURL = URL(string: override),
+              overrideURL.scheme?.lowercased() == "http",
+              isLoopbackHost(overrideURL.host) else { return false }
+        return true
+    }
+
     static func fetch(url: URL, base: String) async -> Outcome {
+        guard allows(url, apiBaseOverride: apiBaseOverride) else {
+            return Outcome(data: nil, status: nil, error: "update URL must use HTTPS")
+        }
         var request = URLRequest(url: url)
         request.setValue(userAgent(), forHTTPHeaderField: "User-Agent")
         if let token = authToken(base: base) {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         do {
-            let (data, response) = try await AppStore.session.data(for: request)
+            let (data, response) = try await UpdateTransport.session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode
             return Outcome(data: data, status: status, error: nil)
         } catch {
             return Outcome(data: nil, status: nil, error: error.localizedDescription)
         }
     }
+}
+
+/// One session owns every updater request. Its delegate sees redirects before
+/// URLSession follows them, allowing arbitrary HTTPS CDNs while refusing any
+/// production downgrade to cleartext transport.
+final class UpdateTransportDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let url = request.url,
+              UpdateFetch.allows(url, apiBaseOverride: UpdateFetch.apiBaseOverride) else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
+    }
+}
+
+enum UpdateTransport {
+    static let delegate = UpdateTransportDelegate()
+    static let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 120
+        return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+    }()
 }
 
 // MARK: - Staging pipeline (nonisolated — download/extract/verify off the main actor)
@@ -331,15 +405,92 @@ struct StageFailure: Error {
     let reason: String
 }
 
+/// Pure request ownership for asynchronous staging. Cancellation is only a
+/// request, so completions must also match the current generation and version.
+struct StagingTracker: Equatable {
+    private(set) var generation = 0
+    private(set) var version: String?
+
+    mutating func begin(version: String) -> Int {
+        generation += 1
+        self.version = version
+        return generation
+    }
+
+    mutating func clear() {
+        generation += 1
+        version = nil
+    }
+
+    func accepts(generation: Int, version: String, availableVersion: String?) -> Bool {
+        self.generation == generation && self.version == version && availableVersion == version
+    }
+}
+
+struct PreparationFailure: Equatable {
+    let version: String
+    let reason: String
+}
+
+struct StagingLimits: Equatable {
+    var archiveBytes: Int64
+    var extractedBytes: Int64
+    var extractionSeconds: TimeInterval
+    var pollSeconds: TimeInterval
+    var extractedEntries: Int
+
+    static let production = StagingLimits(
+        archiveBytes: 100 * 1_000_000,
+        extractedBytes: 500 * 1_000_000,
+        extractionSeconds: 60,
+        pollSeconds: 0.1,
+        extractedEntries: 50_000
+    )
+}
+
+enum MonitoredProcessResult: Equatable {
+    case succeeded
+    case failed
+    case timedOut
+    case sizeLimit
+    case entryLimit
+    case cancelled
+}
+
 enum UpdateStaging {
+    enum LaunchArtifact: Equatable {
+        case staging(UUID)
+        case backup(UUID)
+    }
+
+    static let staleStagingAge: TimeInterval = 24 * 3600
+
+    /// Only names generated by this updater are artifacts. UUID parsing alone
+    /// is permissive, so require UUID's exact uppercase canonical rendering.
+    static func launchArtifact(named name: String, bundleName: String = "now.app") -> LaunchArtifact? {
+        func canonicalUUID(after prefix: String) -> UUID? {
+            guard name.hasPrefix(prefix) else { return nil }
+            let raw = String(name.dropFirst(prefix.count))
+            guard let uuid = UUID(uuidString: raw), uuid.uuidString == raw else { return nil }
+            return uuid
+        }
+        if let uuid = canonicalUUID(after: ".now-update-") { return .staging(uuid) }
+        if let uuid = canonicalUUID(after: "\(bundleName).old-") { return .backup(uuid) }
+        return nil
+    }
+
+    static func shouldRemoveStaging(path: String, timestamp: Date?, activePaths: [String], now: Date) -> Bool {
+        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard !activePaths.contains(standardized),
+              let timestamp else { return false }
+        return now.timeIntervalSince(timestamp) >= staleStagingAge
+    }
+
     struct StagedUpdate {
         let manifest: UpdateManifest
         let stagingRoot: URL
         let appURL: URL
     }
-
-    /// Hard cap on the update archive — matches the plan's 100 MB budget.
-    static let maxArchiveBytes = 100 * 1_000_000
 
     /// Sibling staging dir prefix (dot-prefix: LaunchServices never indexes it,
     /// and launch cleanup matches it). Staging is session-scoped: cleaned on
@@ -349,18 +500,34 @@ enum UpdateStaging {
         return dir.appendingPathComponent(".now-update-\(UUID().uuidString)")
     }
 
-    /// Launch cleanup: drop stale staging dirs and leftover rollback backups
-    /// (a `now.app.old-*` only ever exists after a successful swap, so
-    /// removing it is safe).
-    static func cleanupLaunchArtifacts(bundlePath: String) {
+    /// Launch cleanup removes only old staging roots and retries moving valid
+    /// rollback bundles to Trash. Active helper-owned paths are excluded.
+    static func cleanupLaunchArtifacts(bundlePath: String, now: Date = Date()) {
         let bundleURL = URL(fileURLWithPath: bundlePath)
         let dir = bundleURL.deletingLastPathComponent()
         let name = bundleURL.lastPathComponent // "now.app"
-        guard let entries = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        let environment = ProcessInfo.processInfo.environment
+        let activePaths = [environment["NOW_UPDATE_ACTIVE_BACKUP"], environment["NOW_UPDATE_ACTIVE_STAGING"]]
+            .compactMap { $0 }
+            .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .creationDateKey]
+        guard let entries = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys) else { return }
         for entry in entries {
-            let entryName = entry.lastPathComponent
-            if entryName.hasPrefix(".now-update-") || entryName.hasPrefix("\(name).old-") {
+            guard !activePaths.contains(entry.standardizedFileURL.path),
+                  let artifact = launchArtifact(named: entry.lastPathComponent, bundleName: name) else { continue }
+            switch artifact {
+            case .staging:
+                let values = try? entry.resourceValues(forKeys: Set(keys))
+                let timestamp = values?.contentModificationDate ?? values?.creationDate
+                guard shouldRemoveStaging(path: entry.path, timestamp: timestamp, activePaths: activePaths, now: now) else { continue }
                 try? FileManager.default.removeItem(at: entry)
+            case .backup:
+                guard verifySignature(appURL: entry),
+                      let info = NSDictionary(contentsOf: entry.appendingPathComponent("Contents/Info.plist")) as? [String: Any],
+                      info["CFBundleIdentifier"] as? String == UpdateLogic.updateBundleIdentifier else { continue }
+                let trash = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
+                let destination = trash.appendingPathComponent("now-old-\(UUID().uuidString).app")
+                try? FileManager.default.moveItem(at: entry, to: destination)
             }
         }
     }
@@ -368,7 +535,10 @@ enum UpdateStaging {
     /// Full stage: download → extract → contents check → signature gate →
     /// staged-plist sanity. Returns the staged app URL or a reason. The
     /// staging root is deleted by the caller on failure.
-    static func stage(manifest: UpdateManifest, bundlePath: String) async -> Result<StagedUpdate, StageFailure> {
+    static func stage(manifest: UpdateManifest, bundlePath: String, limits: StagingLimits = .production) async -> Result<StagedUpdate, StageFailure> {
+        guard manifest.assetSize <= limits.archiveBytes else {
+            return .failure(StageFailure(reason: "update archive larger than \(limits.archiveBytes / 1_000_000) MB"))
+        }
         let root = stagingRoot(for: bundlePath)
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -379,32 +549,23 @@ enum UpdateStaging {
             try? FileManager.default.removeItem(at: root)
             return .failure(StageFailure(reason: reason))
         }
-        // 1. Download — https only, except explicit localhost for the smoke test.
-        guard let scheme = manifest.zipURL.scheme?.lowercased(),
-              scheme == "https" || manifest.zipURL.host == "127.0.0.1" || manifest.zipURL.host == "localhost" else {
+        // 1. Download — HTTPS in production; explicit loopback override in tests.
+        guard UpdateFetch.allows(manifest.zipURL, apiBaseOverride: UpdateFetch.apiBaseOverride) else {
             return failure("update URL must be https")
         }
         var request = URLRequest(url: manifest.zipURL)
         request.setValue(UpdateFetch.userAgent(), forHTTPHeaderField: "User-Agent")
-        let data: Data
+        let zipURL = root.appendingPathComponent("now-v\(manifest.version).zip")
+        let downloadedBytes: Int64
         do {
-            let (body, response) = try await AppStore.session.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                return failure("download returned \(http.statusCode)")
-            }
-            data = body
+            downloadedBytes = try await download(request: request, to: zipURL, maxBytes: limits.archiveBytes)
+        } catch let stageFailure as StageFailure {
+            return failure(stageFailure.reason)
         } catch {
             return failure("download failed: \(error.localizedDescription)")
         }
-        if data.count > maxArchiveBytes { return failure("update archive larger than \(maxArchiveBytes / 1_000_000) MB") }
-        if manifest.assetSize > 0, data.count != manifest.assetSize {
-            return failure("download size \(data.count) ≠ expected \(manifest.assetSize)")
-        }
-        let zipURL = root.appendingPathComponent("now-v\(manifest.version).zip")
-        do {
-            try data.write(to: zipURL)
-        } catch {
-            return failure("cannot write staged archive: \(error.localizedDescription)")
+        if manifest.assetSize > 0, downloadedBytes != Int64(manifest.assetSize) {
+            return failure("download size \(downloadedBytes) ≠ expected \(manifest.assetSize)")
         }
         // 2. Extract with ditto (matches build-app.sh's zip creation flags).
         let extracted = root.appendingPathComponent("extracted")
@@ -413,7 +574,24 @@ enum UpdateStaging {
         } catch {
             return failure("cannot create extraction directory")
         }
-        guard runProcess("/usr/bin/ditto", ["-x", "-k", "--sequesterRsrc", zipURL.path, extracted.path]) else {
+        let extraction = runMonitoredProcess(
+            "/usr/bin/ditto",
+            ["-x", "-k", "--sequesterRsrc", zipURL.path, extracted.path],
+            monitoredDirectory: extracted,
+            limits: limits
+        )
+        switch extraction {
+        case .succeeded:
+            break
+        case .timedOut:
+            return failure("extraction exceeded \(Int(limits.extractionSeconds)) seconds")
+        case .sizeLimit:
+            return failure("extracted update larger than \(limits.extractedBytes / 1_000_000) MB")
+        case .entryLimit:
+            return failure("extracted update contains too many files")
+        case .cancelled:
+            return failure("update preparation cancelled")
+        case .failed:
             return failure("extraction failed")
         }
         // 3. Exactly one top-level entry and it is now.app — regardless of
@@ -442,9 +620,10 @@ enum UpdateStaging {
             return failure("staged build \(stagedBuild) is older than running build \(UpdateLogic.currentBuild)")
         }
         let os = ProcessInfo.processInfo.operatingSystemVersion
-        guard UpdateLogic.meetsMinimumSystemVersion(required: info["LSMinimumSystemVersion"] as? String, osMajor: os.majorVersion, osMinor: os.minorVersion, osPatch: os.patchVersion) else {
+        guard let required = info["LSMinimumSystemVersion"] as? String,
+              UpdateLogic.meetsMinimumSystemVersion(required: required, osMajor: os.majorVersion, osMinor: os.minorVersion, osPatch: os.patchVersion) else {
             let required = info["LSMinimumSystemVersion"] as? String ?? "?"
-            return failure("update requires macOS \(required) or newer")
+            return failure("update has invalid or unsupported LSMinimumSystemVersion \(required)")
         }
         return .success(StagedUpdate(manifest: manifest, stagingRoot: root, appURL: appURL))
     }
@@ -452,6 +631,7 @@ enum UpdateStaging {
     /// SecStaticCodeCheckValidity against every pinned requirement. This is
     /// the security gate: a tampered or foreign zip fails here.
     static func verifySignature(appURL: URL) -> Bool {
+        let validationFlags = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures | kSecCSCheckNestedCode)
         var staticCode: SecStaticCode?
         guard SecStaticCodeCreateWithPath(appURL as CFURL, SecCSFlags(), &staticCode) == errSecSuccess,
               let code = staticCode else { return false }
@@ -460,13 +640,66 @@ enum UpdateStaging {
             let text = UpdateLogic.updateRequirement(fingerprint: fingerprint)
             guard SecRequirementCreateWithString(text as CFString, SecCSFlags(), &requirement) == errSecSuccess,
                   let req = requirement else { continue }
-            if SecStaticCodeCheckValidity(code, SecCSFlags(), req) == errSecSuccess { return true }
+            if SecStaticCodeCheckValidity(code, validationFlags, req) == errSecSuccess { return true }
         }
         return false
     }
 
-    @discardableResult
-    static func runProcess(_ launchPath: String, _ arguments: [String]) -> Bool {
+    static func download(request: URLRequest, to destination: URL, maxBytes: Int64) async throws -> Int64 {
+        guard let url = request.url,
+              UpdateFetch.allows(url, apiBaseOverride: UpdateFetch.apiBaseOverride) else {
+            throw StageFailure(reason: "update URL must use HTTPS")
+        }
+        let (bytes, response) = try await UpdateTransport.session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw StageFailure(reason: "download returned a non-HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw StageFailure(reason: "download returned \(http.statusCode)")
+        }
+        if response.expectedContentLength > maxBytes {
+            throw StageFailure(reason: "update archive larger than \(maxBytes / 1_000_000) MB")
+        }
+        guard FileManager.default.createFile(atPath: destination.path, contents: nil) else {
+            throw StageFailure(reason: "cannot create staged archive")
+        }
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forWritingTo: destination)
+        } catch {
+            throw StageFailure(reason: "cannot write staged archive: \(error.localizedDescription)")
+        }
+        defer { try? handle.close() }
+
+        var count: Int64 = 0
+        var buffer = Data()
+        buffer.reserveCapacity(64 * 1024)
+        do {
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                guard count < maxBytes else {
+                    throw StageFailure(reason: "update archive larger than \(maxBytes / 1_000_000) MB")
+                }
+                buffer.append(byte)
+                count += 1
+                if buffer.count == 64 * 1024 {
+                    try handle.write(contentsOf: buffer)
+                    buffer.removeAll(keepingCapacity: true)
+                }
+            }
+            if !buffer.isEmpty { try handle.write(contentsOf: buffer) }
+            try handle.synchronize()
+            return count
+        } catch let stageFailure as StageFailure {
+            throw stageFailure
+        } catch is CancellationError {
+            throw StageFailure(reason: "update preparation cancelled")
+        } catch {
+            throw StageFailure(reason: "download failed: \(error.localizedDescription)")
+        }
+    }
+
+    static func runMonitoredProcess(_ launchPath: String, _ arguments: [String], monitoredDirectory: URL, limits: StagingLimits) -> MonitoredProcessResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launchPath)
         process.arguments = arguments
@@ -474,11 +707,75 @@ enum UpdateStaging {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
         } catch {
-            return false
+            return .failed
         }
+
+        func stop() {
+            if process.isRunning { process.terminate() }
+            let grace = ProcessInfo.processInfo.systemUptime + 1
+            while process.isRunning, ProcessInfo.processInfo.systemUptime < grace {
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+            if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+            process.waitUntilExit()
+        }
+
+        let deadline = ProcessInfo.processInfo.systemUptime + limits.extractionSeconds
+        while process.isRunning {
+            if withUnsafeCurrentTask(body: { $0?.isCancelled ?? false }) {
+                stop()
+                return .cancelled
+            }
+            if ProcessInfo.processInfo.systemUptime >= deadline {
+                stop()
+                return .timedOut
+            }
+            guard let usage = directoryUsage(at: monitoredDirectory, maxEntries: limits.extractedEntries) else {
+                stop()
+                return .failed
+            }
+            if usage.entries > limits.extractedEntries {
+                stop()
+                return .entryLimit
+            }
+            if usage.bytes > limits.extractedBytes {
+                stop()
+                return .sizeLimit
+            }
+            Thread.sleep(forTimeInterval: limits.pollSeconds)
+        }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let usage = directoryUsage(at: monitoredDirectory, maxEntries: limits.extractedEntries) else {
+            return .failed
+        }
+        if usage.entries > limits.extractedEntries { return .entryLimit }
+        if usage.bytes > limits.extractedBytes { return .sizeLimit }
+        return .succeeded
+    }
+
+    static func directoryUsage(at directory: URL, maxEntries: Int) -> (bytes: Int64, entries: Int)? {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .fileAllocatedSizeKey, .totalFileAllocatedSizeKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: keys,
+            options: [],
+            errorHandler: { _, _ in false }
+        ) else { return nil }
+        var bytes: Int64 = 0
+        var entries = 0
+        for case let url as URL in enumerator {
+            entries += 1
+            if entries > maxEntries { return (bytes, entries) }
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true else { continue }
+            let logical = Int64(values.fileSize ?? 0)
+            let allocated = Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0)
+            let (sum, overflow) = bytes.addingReportingOverflow(max(logical, allocated))
+            if overflow { return (Int64.max, entries) }
+            bytes = sum
+        }
+        return (bytes, entries)
     }
 }
 
@@ -487,34 +784,62 @@ enum UpdateStaging {
 enum UpdateInstaller {
     /// The helper contract (parameters arrive via environment, never
     /// interpolated): wait for the old PID to die (bounded), move old →
-    /// backup, staged → app, relaunch, trash the old bundle. Every failure
-    /// path restores a valid bundle first and relaunches the OLD app with
+    /// backup, staged → app, launch its executable, wait for an exact PID/token
+    /// health acknowledgement, then trash the old bundle. Every mutation-
+    /// time failure renames the failed new app aside, restores a valid bundle,
+    /// and relaunches the OLD app with
     /// `NOW_UPDATE_ERROR` so it can tell the user; if even that fails, the
-    /// browser opens the releases page. `mv` cannot replace an existing app
-    /// directory — hence the `rm -rf` before restore in fail().
+    /// browser opens the releases page. Rollback never deletes the app path
+    /// before the backup has been restored.
     static let helperScript = """
     PATH=/bin:/usr/bin; export PATH
     end=$(( $(date +%s) + ${NOW_SMOKE_POLL_TIMEOUT:-60} ))
     while kill -0 "$NOW_OLD_PID" 2>/dev/null; do
-      [ "$(date +%s)" -ge "$end" ] && exit 1
+      if [ "$(date +%s)" -ge "$end" ]; then
+        rm -rf "$NOW_STAGING_ROOT"
+        [ -n "${NOW_SMOKE_HELPER_DONE:-}" ] && printf timeout > "$NOW_SMOKE_HELPER_DONE"
+        exit 1
+      fi
       sleep 0.1
     done
     fail() {
+      [ -n "${new_pid:-}" ] && kill -0 "$new_pid" 2>/dev/null && kill "$new_pid" 2>/dev/null || true
       if [ -d "$NOW_BACKUP_PATH" ]; then
-        rm -rf "$NOW_APP_PATH"
-        mv "$NOW_BACKUP_PATH" "$NOW_APP_PATH" || true
+        if [ -e "$NOW_APP_PATH" ]; then
+          mv "$NOW_APP_PATH" "$NOW_FAILED_PATH" || { open "$NOW_RELEASES_URL"; exit 1; }
+        fi
+        if ! mv "$NOW_BACKUP_PATH" "$NOW_APP_PATH"; then
+          [ -e "$NOW_FAILED_PATH" ] && mv "$NOW_FAILED_PATH" "$NOW_APP_PATH" || true
+          open "$NOW_RELEASES_URL"
+          exit 1
+        fi
+        rm -rf "$NOW_FAILED_PATH"
       fi
-      open --env "NOW_UPDATE_ERROR=$1" "$NOW_APP_PATH" 2>/dev/null || open "$NOW_RELEASES_URL"
+      rm -rf "$NOW_STAGING_ROOT"
+      if [ -n "${NOW_SMOKE_FAILURE_REPORT:-}" ]; then
+        open --env "NOW_UPDATE_ERROR=$1" --env "NOW_SMOKE_FAILURE_REPORT=$NOW_SMOKE_FAILURE_REPORT" "$NOW_APP_PATH" 2>/dev/null || open "$NOW_RELEASES_URL"
+      else
+        open --env "NOW_UPDATE_ERROR=$1" "$NOW_APP_PATH" 2>/dev/null || open "$NOW_RELEASES_URL"
+      fi
       exit 1
     }
-    mv "$NOW_APP_PATH" "$NOW_BACKUP_PATH"
+    [ "${NOW_SMOKE_HELPER_FAULT:-}" = "backup" ] && fail "backup move failed"
+    mv "$NOW_APP_PATH" "$NOW_BACKUP_PATH" || fail "backup move failed"
     mv "$NOW_STAGED_APP" "$NOW_APP_PATH" || fail "install move failed"
-    if [ -n "${NOW_SMOKE_REPORT:-}" ]; then
-      open --env "NOW_SMOKE_REPORT=$NOW_SMOKE_REPORT" "$NOW_APP_PATH" || fail "relaunch failed"
-    else
-      open "$NOW_APP_PATH" || fail "relaunch failed"
-    fi
-    mv "$NOW_BACKUP_PATH" "$HOME/.Trash/now-old-$(date +%Y%m%d%H%M%S).app" 2>/dev/null
+    [ "${NOW_SMOKE_HELPER_FAULT:-}" = "relaunch" ] && fail "relaunch failed"
+    env -u NOW_SMOKE_FAILURE_REPORT "$NOW_APP_PATH/Contents/MacOS/now" >/dev/null 2>&1 &
+    new_pid=$!
+    health_end=$(( $(date +%s) + ${NOW_SMOKE_HEALTH_TIMEOUT:-30} ))
+    while :; do
+      health="$(cat "$NOW_HEALTH_ACK" 2>/dev/null || true)"
+      [ "$health" = "$new_pid:$NOW_HEALTH_TOKEN" ] && break
+      kill -0 "$new_pid" 2>/dev/null || fail "updated app exited before startup health check"
+      [ "$(date +%s)" -ge "$health_end" ] && fail "updated app startup health check timed out"
+      sleep 0.1
+    done
+    rm -rf "$NOW_STAGING_ROOT"
+    mv "$NOW_BACKUP_PATH" "$HOME/.Trash/now-old-$(date +%Y%m%d%H%M%S)-$$.app" 2>/dev/null
+    [ -n "${NOW_SMOKE_HELPER_DONE:-}" ] && printf done > "$NOW_SMOKE_HELPER_DONE"
     exit 0
     """
 
@@ -531,8 +856,9 @@ enum UpdateInstaller {
         }
     }
 
-    /// Spawns the detached helper. `extraEnv` carries smoke-test overrides
-    /// (NOW_SMOKE_REPORT / NOW_SMOKE_POLL_TIMEOUT) and the sandboxed HOME.
+    /// Spawns the detached helper. Smoke variables are stripped from the
+    /// inherited environment and only an explicit hidden-CLI allow-list can
+    /// add them back through `extraEnv`.
     /// The environment INHERITS the app's (the helper needs the real $HOME
     /// for `~/.Trash` — replacing it wholesale once silently skipped the
     /// trash step) with overrides applied on top.
@@ -542,13 +868,27 @@ enum UpdateInstaller {
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", helperScript]
         var environment = ProcessInfo.processInfo.environment
-        for (key, value) in extraEnv where key != "NOW_SMOKE_HOME" {
+        for key in environment.keys.filter({ $0.hasPrefix("NOW_SMOKE_") }) {
+            environment.removeValue(forKey: key)
+        }
+        let allowedSmokeKeys: Set<String> = [
+            "NOW_SMOKE_REPORT", "NOW_SMOKE_FAILURE_REPORT", "NOW_SMOKE_POLL_TIMEOUT",
+            "NOW_SMOKE_HEALTH_TIMEOUT", "NOW_SMOKE_HELPER_FAULT", "NOW_SMOKE_HELPER_DONE"
+        ]
+        for (key, value) in extraEnv where allowedSmokeKeys.contains(key) {
             environment[key] = value
         }
         environment["NOW_OLD_PID"] = String(getpid())
         environment["NOW_APP_PATH"] = bundlePath
         environment["NOW_STAGED_APP"] = stagedAppPath
+        let stagingRoot = URL(fileURLWithPath: stagedAppPath).deletingLastPathComponent().deletingLastPathComponent().path
+        environment["NOW_STAGING_ROOT"] = stagingRoot
         environment["NOW_BACKUP_PATH"] = backupPath
+        environment["NOW_FAILED_PATH"] = backupPath + ".failed"
+        environment["NOW_HEALTH_TOKEN"] = UUID().uuidString
+        environment["NOW_HEALTH_ACK"] = stagingRoot + "/health-ack"
+        environment["NOW_UPDATE_ACTIVE_BACKUP"] = backupPath
+        environment["NOW_UPDATE_ACTIVE_STAGING"] = stagingRoot
         environment["NOW_RELEASES_URL"] = releasesURL
         if let home = extraEnv["NOW_SMOKE_HOME"] { environment["HOME"] = home }
         process.environment = environment
@@ -571,7 +911,12 @@ enum UpdateWindowContent: Equatable {
     case upToDate
     /// Any refusal/failure: fetch error (retryable), install guard refusal,
     /// or the NOW_UPDATE_ERROR relaunch path.
-    case problem(title: String, message: String, retry: Bool)
+    case problem(title: String, message: String, retry: UpdateRetry?)
+}
+
+enum UpdateRetry: Equatable {
+    case check
+    case preparation
 }
 
 @MainActor
@@ -587,6 +932,7 @@ final class UpdateController: ObservableObject {
     @Published private(set) var isChecking = false
     @Published private(set) var lastSuccessfulCheck: Date?
     @Published private(set) var lastCheckError: String?
+    @Published private(set) var preparationFailure: PreparationFailure?
     /// Non-nil ⇒ the update window should be (or is being) shown.
     @Published var windowContent: UpdateWindowContent? {
         didSet {
@@ -604,7 +950,7 @@ final class UpdateController: ObservableObject {
     private var stagedRoot: URL?
     private var checkTimer: Timer?
     private var stagingTask: Task<Void, Never>?
-    private var wakeObserver: Any?
+    private var stagingTracker = StagingTracker()
     private var started = false
 
     init(store: AppStore) {
@@ -618,7 +964,6 @@ final class UpdateController: ObservableObject {
 
     deinit {
         checkTimer?.invalidate()
-        if let wakeObserver { NotificationCenter.default.removeObserver(wakeObserver) }
     }
 
     func start() {
@@ -638,9 +983,6 @@ final class UpdateController: ObservableObject {
         }
         // .common mode like every app timer (menus/modals must not stall it).
         checkTimer = AppStore.commonTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.checkMaybeAutomatic() }
-        }
-        wakeObserver = NotificationCenter.default.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkMaybeAutomatic() }
         }
     }
@@ -665,7 +1007,7 @@ final class UpdateController: ObservableObject {
             isChecking = false
             recordAttempt(success: false, now: Date())
             lastCheckError = "invalid update URL"
-            if userInitiated { windowContent = .problem(title: "Couldn't check for updates", message: "Invalid update URL.", retry: true) }
+            if userInitiated { windowContent = .problem(title: "Couldn't check for updates", message: "Invalid update URL.", retry: .check) }
             return
         }
         Task { [weak self] in
@@ -689,14 +1031,21 @@ final class UpdateController: ObservableObject {
         if let error = outcome.error {
             recordAttempt(success: false, now: now)
             lastCheckError = error
-            if userInitiated { windowContent = .problem(title: "Couldn't check for updates", message: error, retry: true) }
+            if userInitiated { windowContent = .problem(title: "Couldn't check for updates", message: error, retry: .check) }
+            return
+        }
+        guard UpdateFetch.isSuccessfulStatus(outcome.status) else {
+            let reason = outcome.status.map({ "server returned \($0)" }) ?? "invalid server response"
+            recordAttempt(success: false, now: now)
+            lastCheckError = reason
+            if userInitiated { windowContent = .problem(title: "Couldn't check for updates", message: reason, retry: .check) }
             return
         }
         guard let data = outcome.data, let manifest = UpdateLogic.parseLatestRelease(data) else {
             let reason = outcome.status.map({ "server returned \($0)" }) ?? "unreadable response"
             recordAttempt(success: false, now: now)
             lastCheckError = reason
-            if userInitiated { windowContent = .problem(title: "Couldn't check for updates", message: reason, retry: true) }
+            if userInitiated { windowContent = .problem(title: "Couldn't check for updates", message: reason, retry: .check) }
             return
         }
         recordAttempt(success: true, now: now)
@@ -715,10 +1064,11 @@ final class UpdateController: ObservableObject {
         case .available(let manifest):
             available = manifest
             noteFirstSeen(manifest)
-            // Decide-before-download is honored by never staging when the
-            // discovery is already notified/skipped — but an *offered*
-            // version stages eagerly so Install is instant.
-            if stagedVersion != manifest.version, stagingTask == nil {
+            // First discovery stages eagerly. Once a shown update loses its
+            // session staging, later automatic checks keep the offer visible
+            // without downloading again; manual checks/actions are explicit.
+            let shouldStage = UpdateLogic.shouldStageUpdate(version: manifest.version, userInitiated: userInitiated, state: state)
+            if shouldStage, stagedVersion != manifest.version, stagingTracker.version != manifest.version {
                 beginStaging(manifest)
             }
             if userInitiated {
@@ -739,7 +1089,7 @@ final class UpdateController: ObservableObject {
         case .error(let reason):
             lastCheckError = reason
             if userInitiated {
-                windowContent = .problem(title: "Couldn't check for updates", message: reason, retry: true)
+                windowContent = .problem(title: "Couldn't check for updates", message: reason, retry: .check)
             }
         }
     }
@@ -751,21 +1101,39 @@ final class UpdateController: ObservableObject {
         saveState()
     }
 
-    /// Sets window content + records show-time notification bookkeeping.
-    /// `lastNotifiedVersion` is written HERE (never when a check lands), so a
-    /// deferred window can't suppress itself and a shown version never nags
-    /// again automatically.
+    /// Requests the available window. AppDelegate records notification only
+    /// after the request is actually visible (a reminder can defer it).
     private func presentAvailable(_ manifest: UpdateManifest) {
-        state.lastNotifiedVersion = manifest.version
-        saveState()
         windowContent = .available(manifest)
+    }
+
+    func updateWindowDidShow() {
+        let shownVersion: String?
+        switch windowContent {
+        case .available(let manifest):
+            shownVersion = manifest.version
+        case .problem(_, _, .preparation):
+            shownVersion = available?.version
+        default:
+            shownVersion = nil
+        }
+        guard let shownVersion, state.lastNotifiedVersion != shownVersion else { return }
+        state = UpdateLogic.stateAfterShowingUpdate(state, version: shownVersion)
+        saveState()
     }
 
     /// Menu "Update to v1.5.0…" / Settings "Install…": open the window for
     /// the known-available update without re-checking.
     func presentAvailableFromMenu() {
         if let manifest = available {
-            presentAvailable(manifest)
+            if let failure = preparationFailure, failure.version == manifest.version {
+                windowContent = .problem(title: "Couldn't prepare the update", message: failure.reason, retry: .preparation)
+            } else {
+                if stagedVersion != manifest.version, stagingTracker.version != manifest.version {
+                    beginStaging(manifest)
+                }
+                presentAvailable(manifest)
+            }
         }
     }
 
@@ -775,9 +1143,14 @@ final class UpdateController: ObservableObject {
 
     /// "Try Again": dismiss the problem window, then re-check (the check
     /// guards against an open window, so order matters).
-    func retryCheck() {
+    func retry(_ retry: UpdateRetry) {
         windowContent = nil
-        check(userInitiated: true)
+        switch retry {
+        case .check:
+            check(userInitiated: true)
+        case .preparation:
+            retryPreparation()
+        }
     }
 
     /// ⌘W / window close — mirrors dismissWindow without re-triggering close.
@@ -789,11 +1162,20 @@ final class UpdateController: ObservableObject {
 
     private func beginStaging(_ manifest: UpdateManifest) {
         clearStaging()
+        preparationFailure = nil
+        let generation = stagingTracker.begin(version: manifest.version)
         stagingTask = Task { [weak self] in
             let result = await UpdateStaging.stage(manifest: manifest, bundlePath: Bundle.main.bundlePath)
             await MainActor.run { [weak self] in
                 guard let self else { return }
+                guard self.stagingTracker.accepts(generation: generation, version: manifest.version, availableVersion: self.available?.version) else {
+                    if case .success(let stale) = result {
+                        try? FileManager.default.removeItem(at: stale.stagingRoot)
+                    }
+                    return
+                }
                 self.stagingTask = nil
+                self.stagingTracker.clear()
                 switch result {
                 case .success(let staged):
                     self.stagedRoot = staged.stagingRoot
@@ -805,43 +1187,50 @@ final class UpdateController: ObservableObject {
                     }
                 case .failure(let stageFailure):
                     self.lastCheckError = stageFailure.reason
-                    // Only surface staging failures for the manual flow (an
-                    // auto-check that can't stage stays quiet and retries).
+                    self.preparationFailure = PreparationFailure(version: manifest.version, reason: stageFailure.reason)
                     if case .available(let shown) = self.windowContent, shown.version == manifest.version {
-                        self.windowContent = .problem(title: "Couldn't prepare the update", message: stageFailure.reason, retry: true)
+                        self.windowContent = .problem(title: "Couldn't prepare the update", message: stageFailure.reason, retry: .preparation)
                     }
                 }
             }
         }
     }
 
+    func retryPreparation() {
+        guard let manifest = available else { return }
+        beginStaging(manifest)
+        presentAvailable(manifest)
+    }
+
     private func clearStaging() {
         stagingTask?.cancel()
         stagingTask = nil
+        stagingTracker.clear()
         if let stagedRoot {
             try? FileManager.default.removeItem(at: stagedRoot)
         }
         stagedRoot = nil
         stagedVersion = nil
+        preparationFailure = nil
     }
 
     // MARK: Install
 
     func install() {
         guard let manifest = available else {
-            windowContent = .problem(title: "No update staged", message: "Check for updates first.", retry: true)
+            windowContent = .problem(title: "No update staged", message: "Check for updates first.", retry: .check)
             return
         }
         guard stagedVersion == manifest.version, let stagedRoot else {
-            windowContent = .problem(title: "Update is still downloading", message: "Try again in a moment — the update is being prepared.", retry: true)
+            windowContent = .problem(title: "Update is still downloading", message: "Try again in a moment — the update is being prepared.", retry: .preparation)
             return
         }
         if let problem = UpdateLogic.installLocationProblem(Bundle.main.bundlePath) {
-            windowContent = .problem(title: "Can't update in place", message: problem, retry: false)
+            windowContent = .problem(title: "Can't update in place", message: problem, retry: nil)
             return
         }
         guard !UpdateInstaller.otherInstanceRunning() else {
-            windowContent = .problem(title: "Another copy of now is running", message: "Quit the other copy of now, then update again.", retry: false)
+            windowContent = .problem(title: "Another copy of now is running", message: "Quit the other copy of now, then update again.", retry: nil)
             return
         }
         let bundleURL = URL(fileURLWithPath: Bundle.main.bundlePath)
@@ -849,21 +1238,16 @@ final class UpdateController: ObservableObject {
             .appendingPathComponent("now.app.old-\(UUID().uuidString)").path
         state.pendingInstallVersion = manifest.version
         saveState()
-        var extraEnv: [String: String] = [:]
-        let env = ProcessInfo.processInfo.environment
-        if let report = env["NOW_SMOKE_REPORT"] { extraEnv["NOW_SMOKE_REPORT"] = report }
-        if let home = env["NOW_SMOKE_HOME"] { extraEnv["NOW_SMOKE_HOME"] = home }
-        if let timeout = env["NOW_SMOKE_POLL_TIMEOUT"] { extraEnv["NOW_SMOKE_POLL_TIMEOUT"] = timeout }
         guard UpdateInstaller.spawnHelper(
             bundlePath: Bundle.main.bundlePath,
             stagedAppPath: stagedRoot.appendingPathComponent("extracted/now.app").path,
             backupPath: backupPath,
             releasesURL: Links.releases.absoluteString,
-            extraEnv: extraEnv
+            extraEnv: [:]
         ) else {
             state.pendingInstallVersion = nil
             saveState()
-            windowContent = .problem(title: "Couldn't start the updater", message: "The update helper failed to launch. Download the update manually.", retry: false)
+            windowContent = .problem(title: "Couldn't start the updater", message: "The update helper failed to launch. Download the update manually.", retry: nil)
             return
         }
         onTerminateForUpdate?()
@@ -872,12 +1256,9 @@ final class UpdateController: ObservableObject {
     /// The helper relaunched us after a FAILED update — show what happened
     /// and never auto-offer that version again on this install.
     func handleInstallFailure(reason: String) {
-        if let pending = state.pendingInstallVersion {
-            state.lastNotifiedVersion = pending
-        }
-        state.pendingInstallVersion = nil
+        state = UpdateLogic.stateAfterInstallFailure(state)
         saveState()
-        windowContent = .problem(title: "Update failed", message: reason + " The previous version is still running. You can also download the update manually.", retry: false)
+        windowContent = .problem(title: "Update failed", message: reason + " The previous version is still running. You can also download the update manually.", retry: nil)
     }
 
     // MARK: State

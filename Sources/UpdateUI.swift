@@ -142,7 +142,7 @@ struct UpdateView: View {
 
     // MARK: - Problem
 
-    private func problemView(title: String, message: String, retry: Bool) -> some View {
+    private func problemView(title: String, message: String, retry: UpdateRetry?) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: "exclamationmark.triangle")
@@ -160,10 +160,13 @@ struct UpdateView: View {
             }
             Spacer(minLength: 8)
             footer(
-                primaryTitle: retry ? "Try Again" : "OK",
+                primaryTitle: retry == nil ? "OK" : "Try Again",
                 primaryEnabled: true,
-                primaryAction: { retry ? controller.retryCheck() : controller.dismissWindow() },
-                cancelTitle: retry ? "Cancel" : nil
+                primaryAction: {
+                    if let retry { controller.retry(retry) }
+                    else { controller.dismissWindow() }
+                },
+                cancelTitle: retry == nil ? nil : "Cancel"
             )
         }
         .frame(height: 380, alignment: .topLeading)

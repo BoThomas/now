@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A window request that arrived while a reminder was showing — shown
     /// when the alert closes (via `policyDidChange`).
     private var pendingUpdateWindow = false
+    private var pendingFirstRunSettings = false
     private var windowRequestObserver: Any?
     private var wakeObserver: Any?
 
@@ -52,7 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateController.handleInstallFailure(reason: reason)
         }
         windowRequestObserver = updateController.$windowContent.receive(on: RunLoop.main).sink { [weak self] (content: UpdateWindowContent?) in
-            if content == nil { self?.closeUpdateWindow() }
+            guard content == nil, self?.updateController.windowContent == nil else { return }
+            self?.closeUpdateWindow()
         }
         menuBarController = MenuBarController(store: store, alerts: alertController, updates: updateController, openSettings: { [weak self] in
             self?.openSettings()
@@ -61,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // dismiss a showing alert, else terminate.
             self?.handleQuitRequest()
         })
-        wakeObserver = NotificationCenter.default.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             // Main queue delivery — hop into our MainActor context.
             MainActor.assumeIsolated {
                 self?.store.refresh()
@@ -72,8 +74,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateController.start()
         if store.subscriptions.isEmpty && !store.nativeCalendars.contains(where: \.isEnabled) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                self?.openSettings()
+                guard let self else { return }
+                if self.updateController.windowContent == nil {
+                    self.openSettings()
+                } else {
+                    self.pendingFirstRunSettings = true
+                }
             }
+        }
+        // Prove the normal AppKit/store startup path and main run loop stayed
+        // alive before the install helper releases the rollback backup.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            NowApp.acknowledgeUpdatedStartup()
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
     }
 
@@ -253,6 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateWindow = window
         }
         updateWindow?.makeKeyAndOrderFront(nil)
+        updateController.updateWindowDidShow()
         syncActivationPolicy()
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -267,6 +286,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func closeUpdateWindow() {
         updateWindow?.orderOut(nil)
         syncActivationPolicy()
+        if pendingFirstRunSettings {
+            pendingFirstRunSettings = false
+            DispatchQueue.main.async { [weak self] in self?.openSettings() }
+        }
     }
 
     /// Install flow quit: closes the alert (the swap helper finishes after
@@ -326,11 +349,19 @@ enum NowApp {
             updateSmokeCLI(base)
             exit(0)
         }
+        if let reportPath = ProcessInfo.processInfo.environment["NOW_SMOKE_FAILURE_REPORT"], !reportPath.isEmpty {
+            UpdateStaging.cleanupLaunchArtifacts(bundlePath: Bundle.main.bundlePath)
+            let reason = ProcessInfo.processInfo.environment["NOW_UPDATE_ERROR"] ?? "unknown failure"
+            let report = "\(UpdateLogic.currentVersion)|\(reason)"
+            try? report.write(toFile: reportPath, atomically: true, encoding: .utf8)
+            exit(0)
+        }
         // Smoke-test child: the install helper relaunched us (via
         // `open --env NOW_SMOKE_REPORT=…`) to prove the swap worked. Write
         // the version report, run the launch cleanup the real app would run,
         // and never start the UI.
         if let reportPath = ProcessInfo.processInfo.environment["NOW_SMOKE_REPORT"], !reportPath.isEmpty {
+            acknowledgeUpdatedStartup()
             UpdateStaging.cleanupLaunchArtifacts(bundlePath: Bundle.main.bundlePath)
             try? UpdateLogic.currentVersion.write(toFile: reportPath, atomically: true, encoding: .utf8)
             exit(0)
@@ -462,7 +493,11 @@ enum NowApp {
         var data: Data?
         var status: Int?
         var fetchError: String?
-        AppStore.session.dataTask(with: request) { body, response, error in
+        guard UpdateFetch.allows(url, apiBaseOverride: UpdateFetch.apiBaseOverride) else {
+            print("DECISION error — update URL must use HTTPS")
+            return
+        }
+        UpdateTransport.session.dataTask(with: request) { body, response, error in
             data = body
             status = (response as? HTTPURLResponse)?.statusCode
             fetchError = error?.localizedDescription
@@ -476,6 +511,10 @@ enum NowApp {
         print("HTTP \(status.map(String.init) ?? "?")")
         if status == 404 {
             print("DECISION up-to-date — no releases (404)")
+            return
+        }
+        guard UpdateFetch.isSuccessfulStatus(status) else {
+            print("DECISION error — server returned \(status.map(String.init) ?? "non-HTTP response")")
             return
         }
         guard let data else { return }
@@ -542,6 +581,10 @@ enum NowApp {
             print("SMOKE: ERROR \(error)")
             exit(4)
         }
+        guard UpdateFetch.isSuccessfulStatus(outcome.status) else {
+            print("SMOKE: ERROR server returned \(outcome.status.map(String.init) ?? "non-HTTP response")")
+            exit(4)
+        }
         guard let data = outcome.data else {
             print("SMOKE: ERROR empty response")
             exit(4)
@@ -558,8 +601,11 @@ enum NowApp {
         }
         let stageSemaphore = DispatchSemaphore(value: 0)
         var staged: Result<UpdateStaging.StagedUpdate, StageFailure>?
+        var stagingLimits = StagingLimits.production
+        if let value = envInt64("NOW_SMOKE_ARCHIVE_LIMIT") { stagingLimits.archiveBytes = value }
+        if let value = envInt64("NOW_SMOKE_EXTRACTED_LIMIT") { stagingLimits.extractedBytes = value }
         Task {
-            staged = await UpdateStaging.stage(manifest: manifest, bundlePath: bundlePath)
+            staged = await UpdateStaging.stage(manifest: manifest, bundlePath: bundlePath, limits: stagingLimits)
             stageSemaphore.signal()
         }
         runLoopWait(stageSemaphore)
@@ -582,8 +628,12 @@ enum NowApp {
         }
         let env = ProcessInfo.processInfo.environment
         var extraEnv: [String: String] = [:]
-        for key in ["NOW_SMOKE_REPORT", "NOW_SMOKE_HOME", "NOW_SMOKE_POLL_TIMEOUT"] {
+        for key in ["NOW_SMOKE_REPORT", "NOW_SMOKE_FAILURE_REPORT", "NOW_SMOKE_HOME", "NOW_SMOKE_POLL_TIMEOUT", "NOW_SMOKE_HEALTH_TIMEOUT", "NOW_SMOKE_HELPER_FAULT", "NOW_SMOKE_HELPER_DONE"] {
             if let value = env[key], !value.isEmpty { extraEnv[key] = value }
+        }
+        if let fault = extraEnv["NOW_SMOKE_HELPER_FAULT"], !["backup", "relaunch", "health"].contains(fault) {
+            print("SMOKE: ERROR unknown helper fault \(fault)")
+            exit(4)
         }
         let backupPath = URL(fileURLWithPath: bundlePath).deletingLastPathComponent()
             .appendingPathComponent("now.app.old-\(UUID().uuidString)").path
@@ -616,6 +666,23 @@ enum NowApp {
         while semaphore.wait(timeout: .now() + 0.05) == .timedOut {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
         }
+    }
+
+    static func envInt64(_ key: String) -> Int64? {
+        guard let raw = ProcessInfo.processInfo.environment[key],
+              let value = Int64(raw), value > 0 else { return nil }
+        return value
+    }
+
+    /// The installer accepts startup only from the exact child PID it launched
+    /// and only for its unguessable token. This runs before every CLI/UI branch.
+    static func acknowledgeUpdatedStartup() {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["NOW_SMOKE_HELPER_FAULT"] != "health",
+              let token = environment["NOW_HEALTH_TOKEN"], !token.isEmpty,
+              let path = environment["NOW_HEALTH_ACK"], !path.isEmpty else { return }
+        let acknowledgement = "\(getpid()):\(token)"
+        try? acknowledgement.write(toFile: path, atomically: true, encoding: .utf8)
     }
 
     static func parseCLI(_ target: String) {
