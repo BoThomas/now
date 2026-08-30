@@ -35,7 +35,18 @@ security find-identity -v -p codesigning | grep -q "$SIGNING_IDENTITY_SHA1" || {
   print -u2 "update-ui-demo: stable signing identity missing — the DR gate would refuse everything."
   exit 1
 }
-lsof -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1 && { print -u2 "update-ui-demo: port $PORT busy"; exit 1; }
+# Reclaim our own leftovers: a Ctrl-C'd previous run can leave the python
+# server behind (the EXIT trap doesn't always win the race). Only ever kill
+# processes that are OUR `http.server` invocation on this exact port.
+if lsof -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
+  if pgrep -f "http.server $PORT " >/dev/null 2>&1 || pgrep -f "http.server $PORT\$" >/dev/null 2>&1; then
+    print "• Reclaiming port $PORT from a leftover demo server"
+    pkill -f "http.server $PORT " 2>/dev/null || true
+    pkill -f "http.server $PORT\$" 2>/dev/null || true
+    sleep 0.5
+  fi
+  lsof -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1 && { print -u2 "update-ui-demo: port $PORT busy"; exit 1; }
+fi
 
 # Fresh, deterministic state + no competing instance (a running copy would
 # trip the multi-instance guard and steal the launch env).
@@ -51,6 +62,10 @@ cleanup() {
   rm -rf "$WORK"
 }
 trap cleanup EXIT
+# Explicit INT/TERM handling: on Ctrl-C zsh's EXIT trap alone can lose the
+# race with the interrupt — run cleanup directly and exit from the signal.
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 print "• Forging 9.9.9"
 mkdir -p "$WORK/www/ok/api/repos/BoThomas/now/releases" "$WORK/forge"
