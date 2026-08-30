@@ -1,5 +1,10 @@
 # Auto-Updater — Research & Plan
 
+> **Status: implemented** on `feat/auto-updater` (see `Sources/Updater.swift`,
+> `Sources/UpdateUI.swift`, `scripts/update-smoke.sh`, and AGENTS.md →
+> Auto-updater). Kept as the design rationale; behavior documented in AGENTS.md
+> is authoritative where wording drifted.
+
 Goal: the app updates itself from GitHub Releases — no Sparkle, no appcast, no extra
 hosting, no Apple Developer account. One manual download per machine ever (the release
 that first contains the updater), everything after that automatic.

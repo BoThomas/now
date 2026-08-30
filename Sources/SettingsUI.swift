@@ -980,6 +980,7 @@ private let settingsContentBottomKey = "__contentBottom"
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var alerts: AlertController
+    @EnvironmentObject var updates: UpdateController
     @State private var showAddSheet = false
     @StateObject private var commandHints = CommandHoldTracker()
     @State private var selectedSection: SettingsSection = .calendars
@@ -1483,6 +1484,38 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
+            Divider()
+            Toggle("Check for updates automatically", isOn: $store.settings.automaticUpdateChecks)
+            HStack(spacing: 10) {
+                Button {
+                    updates.check(userInitiated: true)
+                } label: {
+                    if updates.isChecking {
+                        Text("Checking…")
+                    } else {
+                        Text("Check Now")
+                    }
+                }
+                .disabled(updates.isChecking)
+                if let manifest = updates.available {
+                    if updates.stagedVersion == manifest.version {
+                        Text("v\(manifest.version) is ready to install")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Install…") {
+                            updates.presentAvailableFromMenu()
+                        }
+                    } else {
+                        Text("v\(manifest.version) is being prepared…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let last = updates.lastSuccessfulCheck {
+                    Text("Last checked \(Fmt.ago(last))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1511,12 +1544,23 @@ struct SettingsView: View {
 
     @ViewBuilder private var aboutItems: some View {
         // Version badge → the changelog/release notes of exactly this version.
+        // While an update is known-available, the badge row gains an
+        // "vX available" link — update state lives where the version lives.
         BadgeLink(url: Self.changelogURL ?? Links.releases) {
             HStack(spacing: 5) {
                 Image(systemName: "tag")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                 Text("Version \(Self.version)").font(.caption).foregroundStyle(.secondary)
+                if let manifest = updates.available {
+                    Text("·").font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.circle")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                        Text("v\(manifest.version) available").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         BadgeLink(url: Links.repo) {

@@ -186,6 +186,15 @@ print "• Building"
 # invalidate existing Calendar (TCC) grants on every update.
 ./build-app.sh --require-identity >/dev/null
 ./outputs/now.app/Contents/MacOS/now --selftest
+
+# Hard preflight for every release: the update smoke exercises the real
+# updater path (check → stage → signature gate → swap → relaunch) against a
+# forged local release. For v1.5.0+ this is existential — the updater rides
+# in the app being released. (Quits a running now for the test; re-opens it.)
+if [[ -x scripts/update-smoke.sh ]]; then
+  print "• Running update smoke test"
+  ./scripts/update-smoke.sh --app outputs/now.app
+fi
 cp outputs/now.zip "outputs/now-$TAG.zip"
 
 print "• Committing and tagging"

@@ -1,13 +1,22 @@
 import SwiftUI
 import AppKit
 import EventKit
+import Combine
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = AppStore()
     let alertController = AlertController()
+    /// Created lazily (initializes off `store`; property initializers run
+    /// before self). First touched in applicationDidFinishLaunching.
+    lazy var updateController = UpdateController(store: store)
     private var menuBarController: MenuBarController?
     private var settingsWindow: NSWindow?
+    private var updateWindow: NSWindow?
+    /// A window request that arrived while a reminder was showing — shown
+    /// when the alert closes (via `policyDidChange`).
+    private var pendingUpdateWindow = false
+    private var windowRequestObserver: Any?
     private var wakeObserver: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -26,11 +35,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alertController.store = store
         alertController.policyDidChange = { [weak self] in
             self?.syncActivationPolicy()
+            self?.presentPendingUpdateWindow()
         }
         store.onAlert = { [weak alertController] events in
             alertController?.present(events)
         }
-        menuBarController = MenuBarController(store: store, alerts: alertController, openSettings: { [weak self] in
+        updateController.onWindowRequest = { [weak self] in
+            self?.presentUpdateWindow()
+        }
+        updateController.onTerminateForUpdate = { [weak self] in
+            self?.terminateForUpdate()
+        }
+        // The helper relaunches us with NOW_UPDATE_ERROR when an install
+        // failed — tell the user and stop auto-offering that version.
+        if let reason = ProcessInfo.processInfo.environment["NOW_UPDATE_ERROR"], !reason.isEmpty {
+            updateController.handleInstallFailure(reason: reason)
+        }
+        windowRequestObserver = updateController.$windowContent.receive(on: RunLoop.main).sink { [weak self] (content: UpdateWindowContent?) in
+            if content == nil { self?.closeUpdateWindow() }
+        }
+        menuBarController = MenuBarController(store: store, alerts: alertController, updates: updateController, openSettings: { [weak self] in
             self?.openSettings()
         }, quit: { [weak self] in
             // Same flow as ⌘Q and the app menu: confirm when Settings is key,
@@ -41,9 +65,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Main queue delivery — hop into our MainActor context.
             MainActor.assumeIsolated {
                 self?.store.refresh()
+                self?.updateController.checkMaybeAutomatic()
             }
         }
         store.start()
+        updateController.start()
         if store.subscriptions.isEmpty && !store.nativeCalendars.contains(where: \.isEnabled) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                 self?.openSettings()
@@ -161,7 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 940, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "now · Settings"
             window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SettingsView().environmentObject(store).environmentObject(alertController))
+            window.contentView = NSHostingView(rootView: SettingsView().environmentObject(store).environmentObject(alertController).environmentObject(updateController))
             window.minSize = NSSize(width: 520, height: 480)
             window.delegate = self
             window.setFrameAutosaveName("now-settings")
@@ -192,11 +218,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// The app is .regular (Dock icon + owns the menu bar) while Settings or the
-    /// fullscreen alert is visible, .accessory otherwise (menu-bar-only). Called
-    /// whenever either appears/disappears — never set the policy anywhere else.
+    /// The app is .regular (Dock icon + owns the menu bar) while Settings, the
+    /// fullscreen alert, or the update window is visible, .accessory otherwise
+    /// (menu-bar-only). Called whenever any of them appears/disappears —
+    /// never set the policy anywhere else.
     private func syncActivationPolicy() {
-        let wantRegular = (settingsWindow?.isVisible ?? false) || alertController.isOpen
+        let wantRegular = (settingsWindow?.isVisible ?? false) || alertController.isOpen || (updateWindow?.isVisible ?? false)
         let current = NSApp.activationPolicy()
         if wantRegular, current == .accessory {
             NSApp.setActivationPolicy(.regular)
@@ -204,10 +231,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.setActivationPolicy(.accessory)
         }
     }
+
+    // MARK: - Update window
+
+    /// Shows the update window — deferred while a reminder is showing: the
+    /// alert is a .screenSaver-level fullscreen panel whose key monitor eats
+    /// Return/Esc, so the window would sit underneath it, invisible.
+    private func presentUpdateWindow() {
+        guard updateController.windowContent != nil else { return }
+        guard !alertController.isOpen else {
+            pendingUpdateWindow = true
+            return
+        }
+        if updateWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 424), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Update now"
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: UpdateView(controller: updateController))
+            window.delegate = self
+            window.center()
+            updateWindow = window
+        }
+        updateWindow?.makeKeyAndOrderFront(nil)
+        syncActivationPolicy()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// A deferred request fires when the reminder alert closes.
+    private func presentPendingUpdateWindow() {
+        guard pendingUpdateWindow, !alertController.isOpen else { return }
+        pendingUpdateWindow = false
+        presentUpdateWindow()
+    }
+
+    private func closeUpdateWindow() {
+        updateWindow?.orderOut(nil)
+        syncActivationPolicy()
+    }
+
+    /// Install flow quit: closes the alert (the swap helper finishes after
+    /// our PID dies) and terminates WITHOUT either quit confirmation — the
+    /// user just explicitly asked to install & relaunch.
+    private func terminateForUpdate() {
+        updateWindow?.orderOut(nil)
+        if alertController.isOpen { alertController.close() }
+        NSApp.terminate(nil)
+    }
 }
 
 extension AppDelegate: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
+        // The update window "closing" is just hiding (orderOut semantics with
+        // isReleasedWhenClosed = false); mirror the state to the controller so
+        // a ⌘W close and the Later button agree.
+        if let window = notification.object as? NSWindow, window === updateWindow {
+            updateController.windowClosedExternally()
+        }
         syncActivationPolicy()
         // Hardening: windowWillClose can run while `isVisible` is still true,
         // which would leave the Dock icon behind. Re-evaluate once more after
@@ -237,6 +316,25 @@ enum NowApp {
             nativeCLI(subcommand)
             exit(0)
         }
+        if let index = arguments.firstIndex(of: "--update-check") {
+            let base = updateCLIValue(after: index, arguments: arguments)
+            updateCheckCLI(base)
+            exit(0)
+        }
+        if let index = arguments.firstIndex(of: "--update-smoke") {
+            let base = updateCLIValue(after: index, arguments: arguments)
+            updateSmokeCLI(base)
+            exit(0)
+        }
+        // Smoke-test child: the install helper relaunched us (via
+        // `open --env NOW_SMOKE_REPORT=…`) to prove the swap worked. Write
+        // the version report, run the launch cleanup the real app would run,
+        // and never start the UI.
+        if let reportPath = ProcessInfo.processInfo.environment["NOW_SMOKE_REPORT"], !reportPath.isEmpty {
+            UpdateStaging.cleanupLaunchArtifacts(bundlePath: Bundle.main.bundlePath)
+            try? UpdateLogic.currentVersion.write(toFile: reportPath, atomically: true, encoding: .utf8)
+            exit(0)
+        }
         // main() itself is nonisolated; everything below runs on the main thread.
         MainActor.assumeIsolated {
             let app = NSApplication.shared
@@ -244,6 +342,15 @@ enum NowApp {
             app.setActivationPolicy(.accessory)
             app.run()
         }
+    }
+
+    /// The value after a CLI flag, unless it looks like another flag (or is
+    /// the --update-repo pair, which belongs to that flag).
+    static func updateCLIValue(after index: Int, arguments: [String]) -> String? {
+        guard arguments.count > index + 1 else { return nil }
+        let next = arguments[index + 1]
+        guard !next.hasPrefix("--") else { return nil }
+        return next
     }
 
     /// EventKit counterpart of `--parse`: prints authorization status, every EKCalendar,
@@ -319,6 +426,195 @@ enum NowApp {
         case .denied: return "denied"
         case .authorized: return "authorized"
         default: return "unknown(\(status.rawValue))"
+        }
+    }
+
+    // MARK: Update CLI (--update-check / --update-smoke)
+
+    /// The `--parse` of updates: prints exactly what the updater sees and
+    /// would decide — running version, API response, matched asset, decision
+    /// for manual AND automatic (age-gated) checks, accepted fingerprints.
+    /// Read-only: never writes the updates defaults.
+    static func updateCheckCLI(_ baseArgument: String?) {
+        let arguments = ProcessInfo.processInfo.arguments
+        var repoArgument: String?
+        if let index = arguments.firstIndex(of: "--update-repo"), index + 1 < arguments.count {
+            repoArgument = arguments[index + 1]
+        }
+        let base = UpdateFetch.resolvedBase(baseArgument)
+        let repo = UpdateFetch.resolvedRepo(repoArgument)
+        print("NOW \(UpdateLogic.currentVersion) (build \(UpdateLogic.currentBuild))")
+        print("ACCEPTS \(UpdateLogic.pinnedFingerprints.joined(separator: " "))")
+        for fingerprint in UpdateLogic.pinnedFingerprints {
+            print("DR \(UpdateLogic.updateRequirement(fingerprint: fingerprint))")
+        }
+        guard let url = UpdateFetch.latestReleaseURL(base: base, repo: repo) else {
+            print("DECISION error — invalid URL for base \(base)")
+            return
+        }
+        print("API \(url.absoluteString)")
+        var request = URLRequest(url: url)
+        request.setValue(UpdateFetch.userAgent(), forHTTPHeaderField: "User-Agent")
+        if let token = UpdateFetch.authToken(base: base) {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let semaphore = DispatchSemaphore(value: 0)
+        var data: Data?
+        var status: Int?
+        var fetchError: String?
+        AppStore.session.dataTask(with: request) { body, response, error in
+            data = body
+            status = (response as? HTTPURLResponse)?.statusCode
+            fetchError = error?.localizedDescription
+            semaphore.signal()
+        }.resume()
+        semaphore.wait()
+        if let fetchError {
+            print("HTTP error — \(fetchError)")
+            return
+        }
+        print("HTTP \(status.map(String.init) ?? "?")")
+        if status == 404 {
+            print("DECISION up-to-date — no releases (404)")
+            return
+        }
+        guard let data else { return }
+        guard let manifest = UpdateLogic.parseLatestRelease(data) else {
+            print("DECISION error — no usable release/asset in response (\(data.count) bytes)")
+            return
+        }
+        print("TAG v\(manifest.version) ASSET \(manifest.zipURL.lastPathComponent) SIZE \(manifest.assetSize) PUBLISHED \(ISO8601DateFormatter().string(from: manifest.publishedAt))")
+        let manual = UpdateLogic.decide(manifest: manifest, currentVersion: UpdateLogic.currentVersion, skipped: nil, now: Date(), minAge: 0)
+        let automatic = UpdateLogic.decide(manifest: manifest, currentVersion: UpdateLogic.currentVersion, skipped: nil, now: Date(), minAge: UpdateController.ageGate)
+        func describe(_ decision: UpdateDecision) -> String {
+            switch decision {
+            case .available(let m): return "available — v\(m.version) is newer"
+            case .upToDate: return "up-to-date"
+            case .skippedVersion(let v): return "skipped — v\(v)"
+            case .error(let e): return "error — \(e)"
+            }
+        }
+        print("DECISION (manual) \(describe(manual))")
+        print("DECISION (auto)   \(describe(automatic))")
+    }
+
+    /// Hidden smoke mode: runs the REAL updater flow (check → stage → verify →
+    /// spawn swap helper → terminate) headless against an overridden API base.
+    /// Exit codes: 0 spawned helper (or stuck-quit variant stayed alive),
+    /// 2 REFUSED (guards/verification — nothing was touched), 3 UPTODATE,
+    /// 4 ERROR. Never writes the updates defaults.
+    static func updateSmokeCLI(_ baseArgument: String?) {
+        MainActor.assumeIsolated {
+            updateSmokeCLIBody(baseArgument)
+        }
+    }
+
+    @MainActor private static func updateSmokeCLIBody(_ baseArgument: String?) {
+        let arguments = ProcessInfo.processInfo.arguments
+        var repoArgument: String?
+        if let index = arguments.firstIndex(of: "--update-repo"), index + 1 < arguments.count {
+            repoArgument = arguments[index + 1]
+        }
+        let base = UpdateFetch.resolvedBase(baseArgument)
+        let repo = UpdateFetch.resolvedRepo(repoArgument)
+        let bundlePath = Bundle.main.bundlePath
+        print("SMOKE: old app \(bundlePath) v\(UpdateLogic.currentVersion) (build \(UpdateLogic.currentBuild))")
+        guard let url = UpdateFetch.latestReleaseURL(base: base, repo: repo) else {
+            print("SMOKE: ERROR invalid URL for base \(base)")
+            exit(4)
+        }
+        let fetchSemaphore = DispatchSemaphore(value: 0)
+        var outcome: UpdateFetch.Outcome?
+        Task {
+            outcome = await UpdateFetch.fetch(url: url, base: base)
+            fetchSemaphore.signal()
+        }
+        runLoopWait(fetchSemaphore)
+        guard let outcome else {
+            print("SMOKE: ERROR no fetch outcome")
+            exit(4)
+        }
+        if outcome.status == 404 {
+            print("SMOKE: UPTODATE 404 no releases")
+            exit(3)
+        }
+        if let error = outcome.error {
+            print("SMOKE: ERROR \(error)")
+            exit(4)
+        }
+        guard let data = outcome.data else {
+            print("SMOKE: ERROR empty response")
+            exit(4)
+        }
+        guard let manifest = UpdateLogic.parseLatestRelease(data) else {
+            print("SMOKE: ERROR no usable release in payload")
+            exit(4)
+        }
+        print("SMOKE: latest v\(manifest.version)")
+        let decision = UpdateLogic.decide(manifest: manifest, currentVersion: UpdateLogic.currentVersion, skipped: nil, now: Date(), minAge: 0)
+        guard case .available = decision else {
+            print("SMOKE: UPTODATE \(decision)")
+            exit(3)
+        }
+        let stageSemaphore = DispatchSemaphore(value: 0)
+        var staged: Result<UpdateStaging.StagedUpdate, StageFailure>?
+        Task {
+            staged = await UpdateStaging.stage(manifest: manifest, bundlePath: bundlePath)
+            stageSemaphore.signal()
+        }
+        runLoopWait(stageSemaphore)
+        guard case .success(let update) = staged else {
+            if case .failure(let stageFailure)? = staged {
+                print("SMOKE: REFUSED \(stageFailure.reason)")
+                exit(2)
+            }
+            print("SMOKE: ERROR staging produced no result")
+            exit(4)
+        }
+        print("SMOKE: staged v\(update.manifest.version) at \(update.appURL.path)")
+        if let problem = UpdateLogic.installLocationProblem(bundlePath) {
+            print("SMOKE: REFUSED \(problem)")
+            exit(2)
+        }
+        if UpdateInstaller.otherInstanceRunning() {
+            print("SMOKE: REFUSED another instance of now is running")
+            exit(2)
+        }
+        let env = ProcessInfo.processInfo.environment
+        var extraEnv: [String: String] = [:]
+        for key in ["NOW_SMOKE_REPORT", "NOW_SMOKE_HOME", "NOW_SMOKE_POLL_TIMEOUT"] {
+            if let value = env[key], !value.isEmpty { extraEnv[key] = value }
+        }
+        let backupPath = URL(fileURLWithPath: bundlePath).deletingLastPathComponent()
+            .appendingPathComponent("now.app.old-\(UUID().uuidString)").path
+        guard UpdateInstaller.spawnHelper(
+            bundlePath: bundlePath,
+            stagedAppPath: update.appURL.path,
+            backupPath: backupPath,
+            releasesURL: Links.releases.absoluteString,
+            extraEnv: extraEnv
+        ) else {
+            print("SMOKE: ERROR helper spawn failed")
+            exit(4)
+        }
+        if env["NOW_SMOKE_SKIP_QUIT"] == "1" {
+            // Stuck-quit negative: stay alive past the helper's poll timeout —
+            // the helper must bail WITHOUT touching anything.
+            let wait = Double(env["NOW_SMOKE_POLL_TIMEOUT"] ?? "3") ?? 3
+            print("SMOKE: staying alive \(wait + 2)s (stuck-quit variant)")
+            Thread.sleep(forTimeInterval: wait + 2)
+            print("SMOKE: still alive; helper should have bailed, nothing moved")
+            exit(0)
+        }
+        print("SMOKE: INSTALLED v\(manifest.version) — terminating for swap")
+        exit(0)
+    }
+
+    /// Services the main run loop while waiting — async URLSession/Task
+    /// completions must be allowed to land (same pattern as --native).
+    static func runLoopWait(_ semaphore: DispatchSemaphore) {
+        while semaphore.wait(timeout: .now() + 0.05) == .timedOut {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
         }
     }
 
