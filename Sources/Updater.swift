@@ -157,6 +157,50 @@ enum UpdateLogic {
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// One renderable element of a release body: real changelogs are often
+    /// multiple lists under `#`/`##` headings (release.sh `--notes` keeps
+    /// heading and bullet lines), not one flat list.
+    enum NoteBlock: Equatable {
+        case heading(level: Int, text: String)
+        case bullet(text: String)
+        case paragraph(text: String)
+    }
+
+    /// Line-based parse of a release body into `NoteBlock`s (input already
+    /// goes through `displayNotes`). Consecutive non-empty plain lines merge
+    /// into one paragraph; heading level is capped at 3.
+    static func noteBlocks(_ body: String) -> [NoteBlock] {
+        var blocks: [NoteBlock] = []
+        var paragraph: [String] = []
+        func flushParagraph() {
+            if !paragraph.isEmpty {
+                blocks.append(.paragraph(text: paragraph.joined(separator: "\n")))
+                paragraph.removeAll()
+            }
+        }
+        for rawLine in displayNotes(body).split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                flushParagraph()
+            } else if line.hasPrefix("#") {
+                flushParagraph()
+                let hashes = line.prefix(while: { $0 == "#" }).count
+                let text = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
+                if !text.isEmpty { blocks.append(.heading(level: min(hashes, 3), text: text)) }
+            } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                flushParagraph()
+                blocks.append(.bullet(text: String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)))
+            } else if line == "-" || line == "*" {
+                flushParagraph()
+                blocks.append(.bullet(text: ""))
+            } else {
+                paragraph.append(line)
+            }
+        }
+        flushParagraph()
+        return blocks
+    }
+
     /// Staged LSMinimumSystemVersion vs the running OS — a future deployment
     /// bump must refuse instead of installing an app that can't launch.
     static func meetsMinimumSystemVersion(required: String?, osMajor: Int, osMinor: Int, osPatch: Int) -> Bool {
@@ -489,12 +533,18 @@ enum UpdateInstaller {
 
     /// Spawns the detached helper. `extraEnv` carries smoke-test overrides
     /// (NOW_SMOKE_REPORT / NOW_SMOKE_POLL_TIMEOUT) and the sandboxed HOME.
+    /// The environment INHERITS the app's (the helper needs the real $HOME
+    /// for `~/.Trash` — replacing it wholesale once silently skipped the
+    /// trash step) with overrides applied on top.
     @MainActor
     static func spawnHelper(bundlePath: String, stagedAppPath: String, backupPath: String, releasesURL: String, extraEnv: [String: String] = [:]) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", helperScript]
-        var environment = extraEnv
+        var environment = ProcessInfo.processInfo.environment
+        for (key, value) in extraEnv where key != "NOW_SMOKE_HOME" {
+            environment[key] = value
+        }
         environment["NOW_OLD_PID"] = String(getpid())
         environment["NOW_APP_PATH"] = bundlePath
         environment["NOW_STAGED_APP"] = stagedAppPath

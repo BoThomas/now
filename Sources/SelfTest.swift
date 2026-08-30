@@ -1581,6 +1581,24 @@ enum SelfTest {
         c.expect(notes == "- Fixed X\n- Added Y", "trailing Full changelog line stripped")
         c.expect(UpdateLogic.displayNotes("  \n- Only item\n\n\n") == "- Only item", "surrounding blanks trimmed")
 
+        // -- Release notes blocks (headings / bullets / paragraphs) ---------
+        let blocks = UpdateLogic.noteBlocks("# Added\n- one\n- two\n\nPlain intro paragraph\nspans two lines\n## Fixed\n- three\n- \n\n### Deep heading")
+        let expected: [UpdateLogic.NoteBlock] = [
+            .heading(level: 1, text: "Added"),
+            .bullet(text: "one"),
+            .bullet(text: "two"),
+            .paragraph(text: "Plain intro paragraph\nspans two lines"),
+            .heading(level: 2, text: "Fixed"),
+            .bullet(text: "three"),
+            .bullet(text: ""),
+            .heading(level: 3, text: "Deep heading"),
+        ]
+        c.expect(blocks == expected, "note blocks parse headings, bullets, paragraphs (got \(blocks))")
+        c.expect(UpdateLogic.noteBlocks("* star bullet") == [.bullet(text: "star bullet")], "star bullets supported")
+        c.expect(UpdateLogic.noteBlocks("Full changelog: x") == [], "display-notes stripping applies before block parse")
+        c.expect(UpdateLogic.noteBlocks("#### Level four") == [.heading(level: 3, text: "Level four")], "heading level capped at 3")
+        c.expect(UpdateLogic.noteBlocks("# \n") == [], "empty heading dropped")
+
         // -- OS floor --------------------------------------------------------
         c.expect(UpdateLogic.meetsMinimumSystemVersion(required: nil, osMajor: 13, osMinor: 0, osPatch: 0), "missing LSMinimumSystemVersion passes")
         c.expect(UpdateLogic.meetsMinimumSystemVersion(required: "13.0", osMajor: 13, osMinor: 4, osPatch: 1), "13.0 required, 13.4.1 running passes")

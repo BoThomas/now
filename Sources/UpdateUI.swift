@@ -36,7 +36,7 @@ struct UpdateView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("now \(manifest.version)")
                         .font(.system(size: 17, weight: .semibold))
-                    Text("Released \(manifest.publishedAt.formatted(.dateTime.month(.abbreviated).day().year())) · you have \(UpdateLogic.currentVersion)")
+                    Text("Released \(manifest.publishedAt.formatted(.dateTime.month(.abbreviated).day().year())) · currently on \(UpdateLogic.currentVersion)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -47,10 +47,7 @@ struct UpdateView: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
                 ScrollView {
-                    Text(UpdateLogic.displayNotes(manifest.notes).isEmpty ? "Bug fixes and improvements." : UpdateLogic.displayNotes(manifest.notes))
-                        .font(.system(size: 12))
-                        .foregroundStyle(.primary.opacity(0.85))
-                        .textSelection(.enabled)
+                    NotesView(blocks: UpdateLogic.noteBlocks(manifest.notes))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(height: 160)
@@ -73,6 +70,48 @@ struct UpdateView: View {
             )
         }
         .frame(height: 380, alignment: .topLeading)
+    }
+
+    /// Release body rendered as headings / bullets / paragraphs — real
+    /// changelogs are multiple lists under headings, not one flat list.
+    private struct NotesView: View {
+        let blocks: [UpdateLogic.NoteBlock]
+
+        var body: some View {
+            if blocks.isEmpty {
+                Text("Bug fixes and improvements.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .textSelection(.enabled)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                        switch block {
+                        case .heading(let level, let text):
+                            Text(text)
+                                .font(.system(size: level == 1 ? 13 : 12, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .textSelection(.enabled)
+                        case .bullet(let text):
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text("•")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                Text(text.isEmpty ? " " : text)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.primary.opacity(0.85))
+                                    .textSelection(.enabled)
+                            }
+                        case .paragraph(let text):
+                            Text(text)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.primary.opacity(0.85))
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Up to date
@@ -138,18 +177,18 @@ struct UpdateView: View {
             .frame(width: 64, height: 64)
     }
 
-    /// Bottom bar: quiet "View on GitHub…" bottom-left, buttons bottom-right.
+    /// Bottom bar: quiet "View on GitHub…" badge bottom-left (the same
+    /// capsule style the Settings badges use — visibly clickable), buttons
+    /// bottom-right.
     @ViewBuilder
     private func footer(primaryTitle: String, primaryEnabled: Bool, primaryAction: @escaping () -> Void, cancelTitle: String?) -> some View {
         HStack(alignment: .bottom) {
-            Button {
-                NSWorkspace.shared.open(Links.releases)
-            } label: {
-                Text("View on GitHub…")
-                    .font(.caption)
+            BadgeLink(url: Links.releases) {
+                Text("View on GitHub")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
             }
-            .buttonStyle(.link)
-            .foregroundStyle(.secondary)
             Spacer()
             if let cancelTitle {
                 Button(cancelTitle) { controller.dismissWindow() }

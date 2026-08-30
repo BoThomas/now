@@ -82,7 +82,7 @@ codesign --force --deep --sign "$SIGNING_IDENTITY_SHA1" --entitlements now.entit
 SIZE=$(stat -f%z "$WORK/www/ok/now-v9.9.9.zip")
 PUB=$(date -u -v-2d +%Y-%m-%dT%H:%M:%SZ)
 cat > "$WORK/www/ok/api/repos/BoThomas/now/releases/latest" <<EOF
-{"tag_name":"v9.9.9","published_at":"$PUB","body":"- Forged demo release for UI review\n- Second bullet so the notes scroll nicely if you add more lines\n\nFull changelog: https://github.com/BoThomas/now/compare/v1.4.0...v9.9.9","assets":[{"name":"now-v9.9.9.zip","browser_download_url":"http://127.0.0.1:$PORT/ok/now-v9.9.9.zip","size":$SIZE}]}
+{"tag_name":"v9.9.9","published_at":"$PUB","body":"A short intro paragraph that spans the summary line.\n\n# Added\n- Update to vX menu item replaces Check for Updates\n- Release notes now render headings and multiple lists\n\n## Fixed\n- Old bundle lands in the Finder Trash (helper inherits HOME now)\n- Install row in Settings wraps when narrow\n\n## Changed\n- \"you have\" → \"currently on\"\n\nFull changelog: https://github.com/BoThomas/now/compare/v1.4.0...v9.9.9","assets":[{"name":"now-v9.9.9.zip","browser_download_url":"http://127.0.0.1:$PORT/ok/now-v9.9.9.zip","size":$SIZE}]}
 EOF
 
 print "• Serving on 127.0.0.1:$PORT"
