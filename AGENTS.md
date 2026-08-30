@@ -40,8 +40,9 @@ Always run the build + selftest after changes. A GUI smoke test (launch, check i
 
 `./release.sh` is the agent-friendly release pipeline: version bump (patch/minor/major or explicit `X.Y.Z`), prepends a CHANGELOG.md entry, sets Info.plist version/build, builds + selftests, commits, tags `vX.Y.Z`, pushes, and creates a GitHub release with `now-vX.Y.Z.zip` attached.
 
-- `./release.sh patch --notes $'- Fixed X\n- Added Y' --yes`
+- `./release.sh patch --notes $'### Added\n- Added X\n### Fixed\n- Fixed Y' --yes`
 - Flags: `--dry-run` (plan only), `--yes` (skip confirm). Releases are intentionally origin-only: `origin` and authenticated `gh` must both resolve to `BoThomas/now`. A release, including a dry run, also requires a clean `main` tracking and exactly synchronized with both the local and live `origin/main`, the exact stable signing identity, and no matching local or remote tag; explicit versions must increase. Preflights never fetch or mutate the repository.
+- Every non-empty changelog entry and GitHub release body must group bullets under recognized `###` headers (`Added`, `Changed`, `Improved`, `Fixed`, `Deprecated`, `Removed`, or `Security`). `release.sh` enforces this before mutating the repository; never publish flat release-note bullets.
 - README's Download section links to `/releases/latest`, so it always points at the newest release — no README edits needed per release.
 - Repo topics are already set on `BoThomas/now` — nothing to do per release.
 

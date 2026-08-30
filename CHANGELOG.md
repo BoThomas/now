@@ -1,10 +1,13 @@
 # Changelog
 ## [1.5.0] - 2026-08-31
 
-- Added automatic update checks and in-app installation
-- Added signed-update verification and automatic rollback when an updated app fails to start
-- Added update availability indicators in the menu and Settings
-- Improved release validation and updater test coverage
+### Added
+- Automatic update checks and in-app installation
+- Update availability indicators in the menu and Settings
+### Security
+- Signed-update verification and automatic rollback when an updated app fails to start
+### Improved
+- Release validation and updater test coverage
 
 ## [1.4.0] - 2026-08-29
 

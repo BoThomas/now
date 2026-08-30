@@ -13,7 +13,7 @@ Usage: ./release.sh [patch|minor|major|X.Y.Z] [options]
 
   patch|minor|major   version bump (default: patch; first release uses the current version)
   X.Y.Z               explicit version
-  --notes "..."       changelog entry, one bullet per line
+  --notes "..."       categorized changelog entry (`### Added`, `### Fixed`, etc.)
   --yes               skip the confirmation prompt
   --dry-run           verify prerequisites and print the plan, change nothing
 EOF
@@ -111,23 +111,37 @@ REMOTE_TAGS=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}") 
   die "could not check remote tag $TAG"
 [[ -z "$REMOTE_TAGS" ]] || die "remote tag $TAG already exists"
 
-if [[ -z "$NOTES" && "$DRY_RUN" == false && -t 0 ]]; then
-  print -n "Changelog notes for v$VERSION (single line, empty to skip): "
-  read -r "NOTES?"
-fi
-
 NOTES_ENTRY=""
 if [[ -n "${NOTES// }" ]]; then
+  CURRENT_SECTION=""
+  SECTION_HAS_ITEM=false
   while IFS= read -r line; do
     [[ -z "${line// }" ]] && continue
-    if [[ "$line" == "#"* ]]; then
+    if [[ "$line" == "### "* ]]; then
+      [[ -z "$CURRENT_SECTION" || "$SECTION_HAS_ITEM" == true ]] ||
+        die "changelog section '$CURRENT_SECTION' has no entries"
+      CURRENT_SECTION="${line#\#\#\# }"
+      case "$CURRENT_SECTION" in
+        Added|Changed|Improved|Fixed|Deprecated|Removed|Security) ;;
+        *) die "unsupported changelog section '$CURRENT_SECTION'" ;;
+      esac
+      SECTION_HAS_ITEM=false
       NOTES_ENTRY+="$line"$'\n'
+    elif [[ "$line" == "#"* ]]; then
+      die "changelog notes must use recognized ### section headers"
+    elif [[ -z "$CURRENT_SECTION" ]]; then
+      die "changelog entries must appear below a recognized ### section header"
     elif [[ "$line" == -* ]]; then
       NOTES_ENTRY+="$line"$'\n'
+      SECTION_HAS_ITEM=true
     else
       NOTES_ENTRY+="- $line"$'\n'
+      SECTION_HAS_ITEM=true
     fi
   done <<< "$NOTES"
+  [[ "$SECTION_HAS_ITEM" == true ]] || die "changelog section '$CURRENT_SECTION' has no entries"
+elif [[ "$DRY_RUN" == false ]]; then
+  die "--notes with categorized ### changelog sections is required"
 fi
 
 BUILD=$(( $(git rev-list --count HEAD) + 1 ))
