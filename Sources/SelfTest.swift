@@ -1210,6 +1210,12 @@ enum SelfTest {
         c.expect(AlertController.keyAction(modifiers: .command, keyCode: 18, characters: "1", snoozeable: true, hasFocusedControl: false) == .passThrough, "⌘1 passes through")
         c.expect(AlertController.keyAction(modifiers: plain, keyCode: 18, characters: "1", snoozeable: true, hasFocusedControl: true) == .joinIndex(1), "digits work with focused control too")
 
+        // Keystroke guard: fresh timer-fired panels swallow keys for a fixed
+        // window after appearing — in-flight typing must never join/snooze/close.
+        c.expect(AlertController.keystrokeGuardActive(presentedAt: now.addingTimeInterval(-0.4), now: now, interval: 1.0), "guard active within the interval")
+        c.expect(!AlertController.keystrokeGuardActive(presentedAt: now.addingTimeInterval(-1.0), now: now, interval: 1.0), "guard expired at the boundary")
+        c.expect(!AlertController.keystrokeGuardActive(presentedAt: now.addingTimeInterval(-4), now: now, interval: 1.0), "guard long expired")
+
         // Tomorrow 09:00 across both DST transitions (Berlin): calendar
         // arithmetic, not +86,400 s.
         let berlin = TimeZone(identifier: "Europe/Berlin")!

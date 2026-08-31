@@ -23,9 +23,23 @@ final class AlertController: ObservableObject {
     var policyDidChange: (() -> Void)?
     var store: AppStore?
 
+    /// Fresh timer-fired panels swallow ALL keystrokes for this long after
+    /// appearing: the panel steals key focus mid-sentence (see above), and
+    /// keystrokes already in flight from whatever the user was typing must
+    /// never trigger an action — Return joins a meeting, digits 1-9 join
+    /// cards, "s" snoozes, Escape closes. The shortcut-hint row stays
+    /// hidden until the guard expires, so its reveal doubles as the
+    /// "keyboard is live" signal. Previews are exempt (user-initiated).
+    static let keystrokeGuardInterval: TimeInterval = 1.0
+    /// True while that window runs. Any click in the panel ends it early.
+    @Published private(set) var isGuardingKeystrokes = false
+    /// Bumped on every guard start/end — a pending expiry from an older
+    /// panel must never disarm a newer one.
+    private var keystrokeGuardGeneration = 0
+
     var isOpen: Bool { panel != nil }
 
-    func present(_ events: [MeetingEvent], playSound: Bool = true) {
+    func present(_ events: [MeetingEvent], playSound: Bool = true, armKeystrokeGuard: Bool = true) {
         guard !events.isEmpty else { return }
         // A newly due reminder must never REPLACE a visible one (its events
         // would be permanently discarded — they are already marked alerted) —
@@ -51,6 +65,13 @@ final class AlertController: ObservableObject {
             panel.setFrame(screen.frame, display: true)
         }
         self.panel = panel
+        // Arm BEFORE the panel can become key — a keystroke landing in the
+        // same instant the panel appears is by definition not aimed at it.
+        if armKeystrokeGuard {
+            beginKeystrokeGuard()
+        } else {
+            endKeystrokeGuard()
+        }
         // A timer-fired panel can't take keyboard focus while we're a background
         // .accessory app — macOS ignores activate() without user interaction, and
         // keystrokes would invisibly go to the app hidden behind the overlay (think:
@@ -80,7 +101,7 @@ final class AlertController: ObservableObject {
             colorIndex: 0
         )
         isPreview = true
-        present([event])
+        present([event], armKeystrokeGuard: false)
         isPreview = true // present() resets it for real deliveries
     }
 
@@ -133,10 +154,42 @@ final class AlertController: ObservableObject {
         panel?.orderOut(nil)
         panel = nil
         policyDidChange?()
+        endKeystrokeGuard()
         if let monitor = monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil
         }
+    }
+
+    // MARK: - Keystroke guard
+
+    private func beginKeystrokeGuard() {
+        keystrokeGuardGeneration += 1
+        isGuardingKeystrokes = true
+        let presentedAt = Date()
+        let generation = keystrokeGuardGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.keystrokeGuardInterval) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.keystrokeGuardGeneration == generation else { return }
+                self.isGuardingKeystrokes = Self.keystrokeGuardActive(
+                    presentedAt: presentedAt,
+                    now: Date(),
+                    interval: Self.keystrokeGuardInterval
+                )
+            }
+        }
+    }
+
+    private func endKeystrokeGuard() {
+        keystrokeGuardGeneration += 1
+        isGuardingKeystrokes = false
+    }
+
+    /// Pure: whether the guard still applies at `now` for a panel presented
+    /// at `presentedAt`. Active strictly before the interval elapses — at the
+    /// boundary exactly the keyboard is live again.
+    nonisolated static func keystrokeGuardActive(presentedAt: Date, now: Date, interval: TimeInterval) -> Bool {
+        now.timeIntervalSince(presentedAt) < interval
     }
 
     /// Snooze re-fires while `now < event.end` (AppStore.tick) — a running meeting can still be snoozed.
@@ -203,8 +256,21 @@ final class AlertController: ObservableObject {
     }
 
     private func installMonitor() {
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        // Also watches leftMouseDown: any click in the panel is deliberate
+        // engagement — it ends the keystroke guard early so the keyboard is
+        // live for whatever follows the click.
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] event in
             guard let self = self, self.isOpen, !self.modalAlertActive else { return event }
+            if event.type == .leftMouseDown {
+                if self.isGuardingKeystrokes { self.endKeystrokeGuard() }
+                return event
+            }
+            // Keystroke guard: the first moments after a timer-fired panel
+            // appears, swallow EVERYTHING silently — keystrokes already in
+            // flight from whatever the user was typing when the panel stole
+            // key focus must never trigger an action (Return joins a
+            // meeting, digits join cards, "s" snoozes, Escape closes).
+            if self.isGuardingKeystrokes { return nil }
             let action = Self.keyAction(
                 modifiers: event.modifierFlags,
                 keyCode: event.keyCode,
@@ -341,9 +407,13 @@ struct AlertView: View {
                 .controlSize(.large)
                 .keyboardShortcut(.escape, modifiers: [])
             }
+            // Hidden while the keystroke guard runs; its fade-in is the
+            // "shortcuts are live" signal (preview panels show it at once).
             Text(hints.joined(separator: " · "))
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.35))
+                .opacity(controller.isGuardingKeystrokes ? 0 : 1)
+                .animation(.easeOut(duration: 0.25), value: controller.isGuardingKeystrokes)
         }
         .padding(.bottom, 10)
     }
