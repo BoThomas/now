@@ -1,4 +1,9 @@
 # Changelog
+## [1.6.0] - 2026-08-31
+
+### Improved
+- Reminder panels ignore keystrokes for the first second after appearing, so typing done just before a reminder pops up can't accidentally join, snooze, or dismiss a meeting — the shortcut hints fade in once the keyboard is live again
+
 ## [1.5.0] - 2026-08-31
 
 ### Added
@@ -75,3 +80,4 @@
 [1.3.0]: https://github.com/BoThomas/now/compare/v1.2.0...v1.3.0
 [1.4.0]: https://github.com/BoThomas/now/compare/v1.3.0...v1.4.0
 [1.5.0]: https://github.com/BoThomas/now/compare/v1.4.0...v1.5.0
+[1.6.0]: https://github.com/BoThomas/now/compare/v1.5.0...v1.6.0
