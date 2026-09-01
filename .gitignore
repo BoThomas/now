@@ -1,5 +1,7 @@
 outputs/
 .build/
+
+docs/local/
 .DS_Store
 *.p12
 *.pfx

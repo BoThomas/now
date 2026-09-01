@@ -65,6 +65,7 @@ final class AppStore: ObservableObject {
     private var knownNativeCalendarIDs: Set<UUID> = []
     private var previousEnabledNativeIDs: Set<UUID> = []
     private var previousSkipDeclined = true
+    private var previousRefreshMinutes = AppSettings().refreshMinutes
     private var nativeChangeDebounce: Timer?
     private var activeObserver: NSObjectProtocol?
 
@@ -79,11 +80,12 @@ final class AppStore: ObservableObject {
     private var refreshTimer: Timer?
     private var started = false
 
+    nonisolated static let transportDelegate = CalendarTransportDelegate()
     nonisolated static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 25
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: config)
+        return URLSession(configuration: config, delegate: transportDelegate, delegateQueue: nil)
     }()
 
     init() {
@@ -96,6 +98,7 @@ final class AppStore: ObservableObject {
         knownNativeCalendarIDs = Set(nativeCalendars.map(\.id))
         previousEnabledNativeIDs = Set(nativeCalendars.filter(\.isEnabled).map(\.id))
         previousSkipDeclined = settings.skipDeclined
+        previousRefreshMinutes = settings.refreshMinutes
     }
 
     deinit {
@@ -579,7 +582,10 @@ final class AppStore: ObservableObject {
 
     private func settingsChanged() {
         persist()
-        scheduleRefreshTimer()
+        if Self.refreshIntervalChanged(from: previousRefreshMinutes, to: settings.refreshMinutes) {
+            previousRefreshMinutes = settings.refreshMinutes
+            scheduleRefreshTimer()
+        }
         if !syncingLoginItem {
             syncLoginItem(settings.launchAtLogin)
         }
@@ -587,6 +593,10 @@ final class AppStore: ObservableObject {
             previousSkipDeclined = settings.skipDeclined
             fetchNativeEvents()
         }
+    }
+
+    nonisolated static func refreshIntervalChanged(from previous: Int, to current: Int) -> Bool {
+        previous != current
     }
 
     // MARK: - Login item (Launch at Login)
@@ -711,6 +721,24 @@ final class AppStore: ObservableObject {
             return state
         }
         return Persisted(subscriptions: [], settings: AppSettings())
+    }
+}
+
+/// Calendar subscriptions may start on HTTP only after explicit user consent.
+/// Once a request starts securely, redirects must not silently downgrade it to
+/// cleartext and expose the private token commonly embedded in an ICS URL.
+final class CalendarTransportDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    nonisolated static func allowsRedirect(from source: URL?, to destination: URL?) -> Bool {
+        guard let destination,
+              let destinationScheme = destination.scheme?.lowercased(),
+              destinationScheme == "http" || destinationScheme == "https" else { return false }
+        guard source?.scheme?.lowercased() == "https" else { return true }
+        return destinationScheme == "https"
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        let source = response.url ?? task.currentRequest?.url
+        completionHandler(Self.allowsRedirect(from: source, to: request.url) ? request : nil)
     }
 }
 

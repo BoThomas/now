@@ -967,7 +967,11 @@ enum LinkExtractor {
             for (text, rank) in fields {
                 guard let text, !text.isEmpty else { continue }
                 for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                    if let url = match.url { candidates.append((url, rank)) }
+                    if let url = match.url,
+                       let scheme = url.scheme?.lowercased(),
+                       scheme == "http" || scheme == "https" {
+                        candidates.append((url, rank))
+                    }
                 }
             }
         }

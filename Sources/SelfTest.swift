@@ -1143,6 +1143,26 @@ enum SelfTest {
         c.expect(LinkExtractor.displayLocation("  Room 4  ", link: zoom) == "Room 4", "real location wins over provider")
         c.expect(LinkExtractor.displayLocation(nil, link: zoom) == "Zoom", "missing location falls back to provider")
         c.expect(LinkExtractor.displayLocation(nil, link: nil) == nil, "missing location and link stays absent")
+
+        let mailOnly = link("""
+        BEGIN:VEVENT
+        UID:mailonly@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Email the organizer
+        DESCRIPTION:mailto:bob@example.com
+        END:VEVENT
+        """)
+        c.expect(mailOnly == nil, "mailto detector result is not a join link")
+
+        let phoneOnly = link("""
+        BEGIN:VEVENT
+        UID:phoneonly@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Call the organizer
+        DESCRIPTION:tel:+49123456789
+        END:VEVENT
+        """)
+        c.expect(phoneOnly == nil, "tel detector result is not a join link")
     }
 
     // MARK: - Reminder scheduling & alert behavior
@@ -1248,6 +1268,9 @@ enum SelfTest {
     // MARK: - Settings & login item
 
     static func settingsTests(_ c: inout Checker) {
+        c.expect(!AppStore.refreshIntervalChanged(from: 15, to: 15), "unrelated settings edits keep refresh cadence")
+        c.expect(AppStore.refreshIntervalChanged(from: 15, to: 30), "refresh interval edit reschedules cadence")
+
         // Decoded settings are validated/clamped into the UI's offered ranges.
         let junk = """
         {"leadSeconds": -50, "refreshMinutes": 7, "soundName": "Nope", "lateMinutes": 9999, "skipDeclined": false}
@@ -1546,6 +1569,15 @@ enum SelfTest {
         c.expect(UpdateFetch.isSuccessfulStatus(200) && UpdateFetch.isSuccessfulStatus(299), "2xx update status accepted")
         c.expect(!UpdateFetch.isSuccessfulStatus(300) && !UpdateFetch.isSuccessfulStatus(500), "non-2xx update status rejected")
         c.expect(UpdateTransport.session.delegate === UpdateTransport.delegate, "redirect-gated updater session is wired")
+        c.expect(AppStore.session.delegate === AppStore.transportDelegate, "redirect-gated calendar session is wired")
+        let secureFeed = URL(string: "https://calendar.example.com/private.ics")!
+        let secureCDN = URL(string: "https://cdn.example.com/private.ics")!
+        let insecureCDN = URL(string: "http://cdn.example.com/private.ics")!
+        let consentedHTTP = URL(string: "http://calendar.example.com/private.ics")!
+        c.expect(CalendarTransportDelegate.allowsRedirect(from: secureFeed, to: secureCDN), "calendar HTTPS redirect stays allowed")
+        c.expect(!CalendarTransportDelegate.allowsRedirect(from: secureFeed, to: insecureCDN), "calendar HTTPS-to-HTTP redirect blocked")
+        c.expect(CalendarTransportDelegate.allowsRedirect(from: consentedHTTP, to: secureCDN), "consented HTTP feed may upgrade to HTTPS")
+        c.expect(CalendarTransportDelegate.allowsRedirect(from: consentedHTTP, to: insecureCDN), "consented HTTP feed may redirect within HTTP")
         c.expect(UpdateFetch.allows(URL(string: "https://api.github.com/x")!, apiBaseOverride: nil), "production HTTPS transport accepted")
         c.expect(UpdateFetch.allows(URL(string: "https://objects.githubusercontent.com/x")!, apiBaseOverride: nil), "arbitrary HTTPS CDN accepted")
         c.expect(!UpdateFetch.allows(URL(string: "http://127.0.0.1:8000/x")!, apiBaseOverride: nil), "loopback HTTP rejected without explicit override")
