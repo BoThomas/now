@@ -1,4 +1,16 @@
 # Changelog
+## [1.6.1] - 2026-09-01
+
+### Fixed
+- The Join button can no longer pick up mailto: or tel: links from event descriptions
+- Reminder buttons stay readable when the panel loses focus in Light mode
+- Double-clicking the app in Finder reopens Settings instead of appearing to do nothing
+- Editing unrelated settings no longer restarts the auto-refresh countdown
+- Calendar feeds cannot be redirected from HTTPS down to unencrypted HTTP
+### Improved
+- Reminder previews behave exactly like the real thing: they arm the keystroke guard and reveal the shortcut hints the same way
+- "esc close" is now the last of the shortcut hints, with join/snooze leading
+
 ## [1.6.0] - 2026-08-31
 
 ### Improved
@@ -81,3 +93,4 @@
 [1.4.0]: https://github.com/BoThomas/now/compare/v1.3.0...v1.4.0
 [1.5.0]: https://github.com/BoThomas/now/compare/v1.4.0...v1.5.0
 [1.6.0]: https://github.com/BoThomas/now/compare/v1.5.0...v1.6.0
+[1.6.1]: https://github.com/BoThomas/now/compare/v1.6.0...v1.6.1
