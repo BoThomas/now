@@ -23,13 +23,13 @@ final class AlertController: ObservableObject {
     var policyDidChange: (() -> Void)?
     var store: AppStore?
 
-    /// Fresh timer-fired panels swallow ALL keystrokes for this long after
-    /// appearing: the panel steals key focus mid-sentence (see above), and
-    /// keystrokes already in flight from whatever the user was typing must
-    /// never trigger an action — Return joins a meeting, digits 1-9 join
-    /// cards, "s" snoozes, Escape closes. The shortcut-hint row stays
-    /// hidden until the guard expires, so its reveal doubles as the
-    /// "keyboard is live" signal. Previews are exempt (user-initiated).
+    /// Fresh panels swallow ALL keystrokes for this long after appearing:
+    /// the panel steals key focus mid-sentence (see above), and keystrokes
+    /// already in flight from whatever the user was typing must never
+    /// trigger an action — Return joins a meeting, digits 1-9 join cards,
+    /// "s" snoozes, Escape closes. The shortcut-hint row stays hidden until
+    /// the guard expires, so its reveal doubles as the "keyboard is live"
+    /// signal. Previews arm it too — they must show the real behavior.
     static let keystrokeGuardInterval: TimeInterval = 1.0
     /// True while that window runs. Any click in the panel ends it early.
     @Published private(set) var isGuardingKeystrokes = false
@@ -39,7 +39,7 @@ final class AlertController: ObservableObject {
 
     var isOpen: Bool { panel != nil }
 
-    func present(_ events: [MeetingEvent], playSound: Bool = true, armKeystrokeGuard: Bool = true) {
+    func present(_ events: [MeetingEvent], playSound: Bool = true) {
         guard !events.isEmpty else { return }
         // A newly due reminder must never REPLACE a visible one (its events
         // would be permanently discarded — they are already marked alerted) —
@@ -67,11 +67,7 @@ final class AlertController: ObservableObject {
         self.panel = panel
         // Arm BEFORE the panel can become key — a keystroke landing in the
         // same instant the panel appears is by definition not aimed at it.
-        if armKeystrokeGuard {
-            beginKeystrokeGuard()
-        } else {
-            endKeystrokeGuard()
-        }
+        beginKeystrokeGuard()
         // A timer-fired panel can't take keyboard focus while we're a background
         // .accessory app — macOS ignores activate() without user interaction, and
         // keystrokes would invisibly go to the app hidden behind the overlay (think:
@@ -101,7 +97,7 @@ final class AlertController: ObservableObject {
             colorIndex: 0
         )
         isPreview = true
-        present([event], armKeystrokeGuard: false)
+        present([event])
         isPreview = true // present() resets it for real deliveries
     }
 
@@ -372,7 +368,9 @@ struct AlertView: View {
         // Snooze stays available while any event is running (it re-fires until end).
         let snoozeable = events.contains { $0.end > Date() }
         let joinable = events.contains { $0.link != nil }
-        var hints = ["esc close"]
+        // "esc close" sits last (right edge): Escape is the least likely
+        // action, the join/snooze hints lead.
+        var hints: [String] = []
         if events.count > 1 {
             if joinable {
                 hints.append("return join first")
@@ -384,6 +382,7 @@ struct AlertView: View {
             hints.append(joinable ? "return join" : "return close")
         }
         if snoozeable { hints.append("s snooze") }
+        hints.append("esc close")
         return VStack(spacing: 16) {
             HStack(spacing: 16) {
                 if snoozeable {
@@ -408,7 +407,8 @@ struct AlertView: View {
                 .keyboardShortcut(.escape, modifiers: [])
             }
             // Hidden while the keystroke guard runs; its fade-in is the
-            // "shortcuts are live" signal (preview panels show it at once).
+            // "shortcuts are live" signal (previews guard too, so they show
+            // the real reveal).
             Text(hints.joined(separator: " · "))
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.35))
