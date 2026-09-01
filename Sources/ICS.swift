@@ -1053,6 +1053,20 @@ enum LinkExtractor {
         return host.replacingOccurrences(of: "www.", with: "")
     }
 
+    /// Human-facing location for the fullscreen reminder. Calendar providers
+    /// frequently put the conference URL itself in LOCATION; repeating that
+    /// long URL beside a Join button is not a useful place name, so show the
+    /// friendly provider instead. Real locations always win.
+    static func displayLocation(_ location: String?, link: URL?) -> String? {
+        if let location {
+            let trimmed = location.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, !isJoinLinkOnlyText(trimmed, link: link) {
+                return trimmed
+            }
+        }
+        return link.flatMap(providerName)
+    }
+
     static func looksLikeJoin(_ url: URL) -> Bool {
         guard url.scheme == "https" || url.scheme == "http" else { return false }
         let text = url.absoluteString.lowercased()

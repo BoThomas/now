@@ -171,6 +171,7 @@ struct MeetingEvent: Identifiable {
     /// user-picked near-black colors must not vanish.
     var readableColorOnBlack: Color { Color(nsColor: Palette.readable(nsColor, on: .onBlack)) }
     var readableNsColorOnBlack: NSColor { Palette.readable(nsColor, on: .onBlack) }
+    var alertButtonColor: Color { Color(nsColor: Palette.alertButtonColor(nsColor)) }
 
     init(uid: String, title: String, start: Date, end: Date, location: String?, notes: String?, link: URL?, calendarID: UUID, calendarName: String, colorIndex: Int, colorHex: String? = nil) {
         self.uid = uid

@@ -95,6 +95,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Finder sends a reopen event when the user double-clicks an app that is
+    /// already running. As an LSUIElement app we otherwise have no Dock window
+    /// to surface, making that double-click appear broken (especially when the
+    /// status item is hidden in a crowded menu bar).
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openSettings()
+        return true
+    }
+
     private func setupMainMenu() {
         let mainMenu = NSMenu()
 

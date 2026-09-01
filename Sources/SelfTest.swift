@@ -1137,6 +1137,12 @@ enum SelfTest {
         END:VEVENT
         """)
         c.expect(meet?.host == "meet.google.com", "meet.google.com root link counts as join, field order preserved")
+
+        let zoom = URL(string: "https://us02web.zoom.us/j/2786283001?pwd=secret")!
+        c.expect(LinkExtractor.displayLocation(zoom.absoluteString, link: zoom) == "Zoom", "URL-only location displays provider")
+        c.expect(LinkExtractor.displayLocation("  Room 4  ", link: zoom) == "Room 4", "real location wins over provider")
+        c.expect(LinkExtractor.displayLocation(nil, link: zoom) == "Zoom", "missing location falls back to provider")
+        c.expect(LinkExtractor.displayLocation(nil, link: nil) == nil, "missing location and link stays absent")
     }
 
     // MARK: - Reminder scheduling & alert behavior
@@ -1330,6 +1336,10 @@ enum SelfTest {
         c.expect(Palette.luminance(darkened) <= 0.83, "near-white darkened for light background (luminance \(Palette.luminance(darkened)))")
         let mid = Palette.nsColor(hex: "#3478F0") // system-blue-ish
         c.expect(Palette.readable(mid, on: .onBlack) === mid.usingColorSpace(.sRGB) ?? mid, "already-readable color unchanged")
+        let darkButton = Palette.alertButtonColor(.black)
+        c.expect(Palette.luminance(darkButton) >= 0.17, "alert button stays visible on black")
+        let lightButton = Palette.alertButtonColor(.white)
+        c.expect(Palette.luminance(lightButton) <= 0.31, "alert button keeps white label readable")
 
         // Permission-request reentrancy: repeated clicks start ONE request.
         var gate = AccessRequestGate()

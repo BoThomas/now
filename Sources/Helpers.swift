@@ -97,6 +97,23 @@ enum Palette {
         return .black
     }
 
+    /// Stable fullscreen Join-button fill. Unlike SwiftUI's native prominent
+    /// button treatment, this color is not transformed when the panel becomes
+    /// inactive. Keep it bright enough to separate from the black alert and
+    /// dark enough for the button's explicit white label.
+    static func alertButtonColor(_ color: NSColor) -> NSColor {
+        let onBlack = readable(color, on: .onBlack)
+        let maximumLuminance: CGFloat = 0.30 // white large text keeps >= 3:1 contrast
+        guard luminance(onBlack) > maximumLuminance else { return onBlack }
+        var amount: CGFloat = 0.05
+        while amount < 1 {
+            let mixed = blend(onBlack, toward: .black, amount: amount)
+            if luminance(mixed) <= maximumLuminance { return mixed }
+            amount += 0.05
+        }
+        return .black
+    }
+
     static func dotImage(color: NSColor, size: CGFloat = 12) -> NSImage {
         let image = NSImage(size: NSSize(width: size, height: size))
         image.lockFocus()

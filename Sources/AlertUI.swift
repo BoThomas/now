@@ -391,9 +391,7 @@ struct AlertView: View {
                     } label: {
                         Label("Snooze 1 min", systemImage: "clock.arrow.circlepath")
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.white)
-                    .controlSize(.large)
+                    .buttonStyle(AlertSecondaryButtonStyle())
                     .keyboardShortcut("s", modifiers: [])
                 }
                 Button {
@@ -401,9 +399,7 @@ struct AlertView: View {
                 } label: {
                     Label("Close", systemImage: "xmark")
                 }
-                .buttonStyle(.bordered)
-                .tint(.white)
-                .controlSize(.large)
+                .buttonStyle(AlertSecondaryButtonStyle())
                 .keyboardShortcut(.escape, modifiers: [])
             }
             // Hidden while the keystroke guard runs; its fade-in is the
@@ -446,11 +442,8 @@ struct SingleEventView: View {
             HStack(spacing: 20) {
                 Label(timeRangeText, systemImage: "clock")
                 Label(Fmt.duration(event.end.timeIntervalSince(event.start)), systemImage: "hourglass")
-                if let location = event.location, !location.isEmpty {
+                if let location = LinkExtractor.displayLocation(event.location, link: event.link) {
                     Label(location, systemImage: "mappin.and.ellipse")
-                        .lineLimit(1)
-                } else if let link = event.link, let provider = LinkExtractor.providerName(for: link) {
-                    Label(provider, systemImage: "mappin.and.ellipse")
                         .lineLimit(1)
                 }
             }
@@ -461,13 +454,8 @@ struct SingleEventView: View {
                     controller.join(link)
                 } label: {
                     Label("Join Meeting", systemImage: "video.fill")
-                        .font(.system(size: 21, weight: .semibold))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 4)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(readableAccent)
-                .controlSize(.large)
+                .buttonStyle(AlertJoinButtonStyle(color: event.alertButtonColor))
             }
         }
     }
@@ -536,9 +524,7 @@ struct MultiEventView: View {
                                 } label: {
                                     Label("Join", systemImage: "video.fill")
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(event.readableColorOnBlack)
-                                .controlSize(.large)
+                                .buttonStyle(AlertJoinButtonStyle(color: event.alertButtonColor, compact: true))
                             }
                         }
                         .padding(20)
@@ -555,5 +541,46 @@ struct MultiEventView: View {
         if now < event.start { return "starts in \(Fmt.mmss(event.start.timeIntervalSince(now)))" }
         if now < event.end { return "now" }
         return "finished"
+    }
+}
+
+/// The system `.borderedProminent` style changes both fill and label colors
+/// with the window's active state and the macOS Light/Dark appearance. A
+/// fullscreen alert deliberately remains visible while inactive, so own the
+/// complete appearance here instead of allowing a Light-mode inactive button
+/// to become black-on-black.
+struct AlertJoinButtonStyle: ButtonStyle {
+    let color: Color
+    var compact = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: compact ? 17 : 21, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, compact ? 16 : 20)
+            .padding(.vertical, compact ? 9 : 11)
+            .background(
+                Capsule().fill(color.opacity(configuration.isPressed ? 0.72 : 1))
+            )
+            .contentShape(Capsule())
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+    }
+}
+
+/// Stable secondary actions for the same reason as `AlertJoinButtonStyle`:
+/// native bordered controls fade into the black panel when an inactive alert
+/// inherits the system's Light appearance.
+struct AlertSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.white.opacity(configuration.isPressed ? 0.72 : 1))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .background(
+                Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.18 : 0.10))
+            )
+            .contentShape(Capsule())
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
     }
 }
