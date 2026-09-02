@@ -48,13 +48,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.terminateForUpdate()
         }
         // The helper relaunches us with NOW_UPDATE_ERROR when an install
-        // failed — tell the user and stop auto-offering that version.
+        // failed — tell the user and stop auto-offering that version. The
+        // env var is for THIS launch only: unset it immediately so a later
+        // retry's install helper can never pass a stale failure on to the
+        // successfully updated child.
         if let reason = ProcessInfo.processInfo.environment["NOW_UPDATE_ERROR"], !reason.isEmpty {
             updateController.handleInstallFailure(reason: reason)
+            unsetenv("NOW_UPDATE_ERROR")
         }
         windowRequestObserver = updateController.$windowContent.receive(on: RunLoop.main).sink { [weak self] (content: UpdateWindowContent?) in
-            guard content == nil, self?.updateController.windowContent == nil else { return }
-            self?.closeUpdateWindow()
+            guard let self else { return }
+            if content == nil {
+                guard self.updateController.windowContent == nil else { return }
+                self.closeUpdateWindow()
+            } else if let window = self.updateWindow {
+                // Content can change while the window is open (e.g. a staging
+                // failure swapping available → problem) — keep the title honest.
+                window.title = Self.updateWindowTitle(for: content)
+            }
         }
         menuBarController = MenuBarController(store: store, alerts: alertController, updates: updateController, openSettings: { [weak self] in
             self?.openSettings()
@@ -76,7 +87,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if store.subscriptions.isEmpty && !store.nativeCalendars.contains(where: \.isEnabled) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                 guard let self else { return }
-                if self.updateController.windowContent == nil {
+                // An install confirmation is pending (shown at +2 s) — let it
+                // own the screen and surface Settings when it closes.
+                if self.updateController.windowContent == nil, self.updateController.pendingInstalledVersion == nil {
                     self.openSettings()
                 } else {
                     self.pendingFirstRunSettings = true
@@ -84,9 +97,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         // Prove the normal AppKit/store startup path and main run loop stayed
-        // alive before the install helper releases the rollback backup.
+        // alive before the install helper releases the rollback backup — and
+        // only then confirm a successful install (the acknowledgement is the
+        // transaction's commit point; the helper may still roll back before
+        // it). A FAILED acknowledgement (injected fault, unwritable ack file)
+        // means the helper will roll back: the pending marker stays and no
+        // confirmation is shown — never a false "Update installed". Ordinary
+        // launches carry no helper contract and acknowledge as a no-op.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            NowApp.acknowledgeUpdatedStartup()
+            if NowApp.acknowledgeUpdatedStartup() {
+                self.updateController.startupHealthAcknowledged()
+            }
         }
     }
 
@@ -262,6 +283,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Update window
 
+    /// The shared update window's title follows its content: "Update now" is
+    /// an imperative for the offer/problem/up-to-date shapes, but wrong for
+    /// the post-install confirmation.
+    private static func updateWindowTitle(for content: UpdateWindowContent?) -> String {
+        if case .installed = content { return "Update Complete" }
+        return "Update now"
+    }
+
     /// Shows the update window — deferred while a reminder is showing: the
     /// alert is a .screenSaver-level fullscreen panel whose key monitor eats
     /// Return/Esc, so the window would sit underneath it, invisible.
@@ -273,13 +302,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if updateWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 424), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = "Update now"
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: UpdateView(controller: updateController))
             window.delegate = self
             window.center()
             updateWindow = window
         }
+        // Synchronously before EVERY show: the windowContent observer's
+        // retitle lands a runloop tick later, so a reused window would flash
+        // its previous title ("Update Complete") for that tick.
+        updateWindow?.title = Self.updateWindowTitle(for: updateController.windowContent)
         updateWindow?.makeKeyAndOrderFront(nil)
         updateController.updateWindowDidShow()
         syncActivationPolicy()
@@ -370,14 +402,21 @@ enum NowApp {
             try? report.write(toFile: reportPath, atomically: true, encoding: .utf8)
             exit(0)
         }
-        // Smoke-test child: the install helper relaunched us (via
-        // `open --env NOW_SMOKE_REPORT=…`) to prove the swap worked. Write
-        // the version report, run the launch cleanup the real app would run,
+        // Smoke-test child: the install helper relaunched us directly (the
+        // binary exec inherits the helper's environment, which is how the
+        // allow-listed NOW_SMOKE_REPORT arrives) to prove the swap worked.
+        // Write the version report (flagging a stale NOW_UPDATE_ERROR — the
+        // helper must never let a previous failed install's error env reach
+        // the updated child), run the launch cleanup the real app would run,
         // and never start the UI.
         if let reportPath = ProcessInfo.processInfo.environment["NOW_SMOKE_REPORT"], !reportPath.isEmpty {
             acknowledgeUpdatedStartup()
             UpdateStaging.cleanupLaunchArtifacts(bundlePath: Bundle.main.bundlePath)
-            try? UpdateLogic.currentVersion.write(toFile: reportPath, atomically: true, encoding: .utf8)
+            var report = UpdateLogic.currentVersion
+            if ProcessInfo.processInfo.environment["NOW_UPDATE_ERROR"]?.isEmpty == false {
+                report += "|stale-error"
+            }
+            try? report.write(toFile: reportPath, atomically: true, encoding: .utf8)
             exit(0)
         }
         // main() itself is nonisolated; everything below runs on the main thread.
@@ -720,13 +759,34 @@ enum NowApp {
 
     /// The installer accepts startup only from the exact child PID it launched
     /// and only for its unguessable token. This runs before every CLI/UI branch.
-    static func acknowledgeUpdatedStartup() {
+    /// Returns whether acknowledgement SUCCEEDED — false means this instance
+    /// was helper-launched but could NOT acknowledge (injected health fault,
+    /// a partial/malformed helper contract, or an unwritable ack file), so the
+    /// helper will roll back and the caller must not confirm a successful
+    /// install. Only a fully absent contract (both variables unset — an
+    /// ordinary launch) acknowledges as a no-op success.
+    @discardableResult
+    static func acknowledgeUpdatedStartup() -> Bool {
         let environment = ProcessInfo.processInfo.environment
-        guard environment["NOW_SMOKE_HELPER_FAULT"] != "health",
-              let token = environment["NOW_HEALTH_TOKEN"], !token.isEmpty,
-              let path = environment["NOW_HEALTH_ACK"], !path.isEmpty else { return }
-        let acknowledgement = "\(getpid()):\(token)"
-        try? acknowledgement.write(toFile: path, atomically: true, encoding: .utf8)
+        // Injected negative (smoke): this instance deliberately never
+        // acknowledges — the helper must roll back, so this is a failure.
+        if environment["NOW_SMOKE_HELPER_FAULT"] == "health" { return false }
+        let rawToken = environment["NOW_HEALTH_TOKEN"]
+        let rawPath = environment["NOW_HEALTH_ACK"]
+        // No helper contract at all: an ordinary launch — nothing to
+        // acknowledge, and a leftover install marker is a committed install.
+        if rawToken == nil && rawPath == nil { return true }
+        // Anything less than a complete, non-empty contract cannot be
+        // acknowledged (the helper would time out and roll back) — fail
+        // closed rather than report a no-helper success.
+        guard let token = rawToken, !token.isEmpty,
+              let path = rawPath, !path.isEmpty else { return false }
+        do {
+            try "\(getpid()):\(token)".write(toFile: path, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            return false
+        }
     }
 
     static func parseCLI(_ target: String) {

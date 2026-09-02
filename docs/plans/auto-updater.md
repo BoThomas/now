@@ -256,6 +256,18 @@ Static funcs (all pure, unit-tested):
    and record that version as `lastNotifiedVersion` so the failed version is never
    auto-offered again on this install (a manual check still re-offers). Without this
    the popup variant would nag about a version that just failed to install.
+8. **App-side, when relaunched by a successful update**: the running version equals
+   the persisted `pendingInstallVersion` (`UpdateLogic.justInstalledVersion`) —
+   detected at launch, but the marker is consumed and the update window's
+   *installed* variant shown ("now X is installed and running") only AFTER the
+   +2 s startup health acknowledgement SUCCEEDS (`acknowledgeUpdatedStartup()`
+   returns false for the injected health fault, a partial/empty helper
+   contract, or an unwritable ack file — then
+   the marker stays, nothing is shown, and the helper rolls back): that is the
+   transaction's commit point, and before it the helper may still roll back
+   (where the surviving marker is what suppresses re-offering the failed
+   version). The success child is launched with `env -u NOW_UPDATE_ERROR` so a
+   retry after a failed install can never be reported as another failure.
 
 ### UI (v1: automatic checks, manual installs)
 
@@ -269,9 +281,10 @@ space). Updates are discoverable in three places, escalating in intrusiveness:
 - **A manual check always answers with the window** — clicking a menu item dismisses
   the menu, so the transient item title can never be the feedback channel (it stays
   as a hint for the *next* menu open). Window variants: update-available /
-  up-to-date / couldn't-check.
+  up-to-date / couldn't-check / installed.
 - **Update window**: one small ~460 pt `[.titled, .closable]` `NSWindow` (transient,
-  no autosave), built like a mini-Settings card, three content states:
+  no autosave), built like a mini-Settings card, four content states (the fourth,
+  *installed*, is the one-time success confirmation after the post-update relaunch):
   - Header: AppIcon (64) + "**now 1.5.0**" semibold over a secondary caption
     "Released Aug 30, 2026 · you have 1.4.0".
   - "What's new" caption (the day-header small-semibold-secondary style), then the
@@ -288,7 +301,9 @@ space). Updates are discoverable in three places, escalating in intrusiveness:
     *not* needed. Full Keyboard Access users get standard Return/Space behavior free.
   - Up-to-date variant (manual): same shell, "You're up to date — now 1.4.0 is the
     latest version.", single OK. Error variant: reason caption + Try Again / Cancel.
-    One window class, three states. No sound, no bounce, no progress UI (pre-staged).
+    Installed variant: "Update installed — now X is installed and running.", single
+    OK, titled "Update Complete" (not "Update now"). One window class, four states.
+    No sound, no bounce, no progress UI (pre-staged).
 - **Settings**: General gains "Check for updates automatically" + "Check Now" +
   "Last checked \(Fmt.ago(…))" caption; while an update is staged the caption becomes
   "v1.5.0 is ready to install" + an "Install…" button opening the window. About

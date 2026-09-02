@@ -1748,6 +1748,56 @@ enum SelfTest {
         var noPending = UpdateState()
         noPending.lastNotifiedVersion = "1.3.0"
         c.expect(UpdateLogic.stateAfterInstallFailure(noPending).lastNotifiedVersion == "1.3.0", "failed install without pending version preserves notification")
+
+        c.expect(UpdateLogic.justInstalledVersion(pending: "1.5.0", currentVersion: "1.5.0") == "1.5.0", "relaunch as pending version counts as installed")
+        c.expect(UpdateLogic.justInstalledVersion(pending: "1.5.0", currentVersion: "1.4.0") == nil, "old version relaunch (failed install) is not a success")
+        c.expect(UpdateLogic.justInstalledVersion(pending: nil, currentVersion: "1.5.0") == nil, "no pending install is not a success")
+        var installedState = UpdateState()
+        installedState.pendingInstallVersion = "1.5.0"
+        installedState.lastNotifiedVersion = "1.5.0"
+        let afterInstall = UpdateLogic.stateAfterSuccessfulInstall(installedState)
+        c.expect(afterInstall.pendingInstallVersion == nil, "successful install clears pending marker")
+        c.expect(afterInstall.lastNotifiedVersion == "1.5.0", "successful install leaves notification memory untouched")
+        // The helper's success relaunch must strip a stale NOW_UPDATE_ERROR
+        // (inherited from an earlier failed install through spawnHelper's
+        // environment pass-through) — otherwise a successful retry would be
+        // processed as another failure at launch. update-smoke.sh case 13
+        // exercises this end to end.
+        c.expect(UpdateInstaller.helperScript.contains("env -u NOW_SMOKE_FAILURE_REPORT -u NOW_UPDATE_ERROR"), "success relaunch strips a stale NOW_UPDATE_ERROR from the child environment")
+
+        // Ack contract (`NowApp.acknowledgeUpdatedStartup`): a helper-launched
+        // instance that CANNOT acknowledge must report failure — AppDelegate
+        // then never calls `startupHealthAcknowledged()`, so the pending
+        // marker survives (for the rolled-back app's bookkeeping) and no
+        // success window is requested. Only a fully ABSENT contract (both
+        // variables unset — an ordinary launch) reports success; anything
+        // less fails closed.
+        let ackEnvKeys = ["NOW_SMOKE_HELPER_FAULT", "NOW_HEALTH_TOKEN", "NOW_HEALTH_ACK"]
+        func resetAckEnv() { for key in ackEnvKeys { unsetenv(key) } }
+        resetAckEnv()
+        c.expect(NowApp.acknowledgeUpdatedStartup(), "ordinary launch (no helper contract) acknowledges as no-op success")
+        setenv("NOW_SMOKE_HELPER_FAULT", "health", 1)
+        c.expect(!NowApp.acknowledgeUpdatedStartup(), "injected health fault is an acknowledgement failure")
+        unsetenv("NOW_SMOKE_HELPER_FAULT")
+        setenv("NOW_HEALTH_TOKEN", "selftest-token", 1)
+        c.expect(!NowApp.acknowledgeUpdatedStartup(), "token present but ack path absent is an acknowledgement failure")
+        resetAckEnv()
+        setenv("NOW_HEALTH_ACK", "/tmp/now-selftest-ack-unused", 1)
+        c.expect(!NowApp.acknowledgeUpdatedStartup(), "ack path present but token absent is an acknowledgement failure")
+        setenv("NOW_HEALTH_TOKEN", "", 1)
+        c.expect(!NowApp.acknowledgeUpdatedStartup(), "empty token is an acknowledgement failure")
+        resetAckEnv()
+        setenv("NOW_HEALTH_TOKEN", "selftest-token", 1)
+        setenv("NOW_HEALTH_ACK", "", 1)
+        c.expect(!NowApp.acknowledgeUpdatedStartup(), "empty ack path is an acknowledgement failure")
+        setenv("NOW_HEALTH_ACK", "/nonexistent-now-selftest-dir/health-ack", 1)
+        c.expect(!NowApp.acknowledgeUpdatedStartup(), "unwritable acknowledgement file is a failure")
+        let ackPath = FileManager.default.temporaryDirectory.appendingPathComponent("now-selftest-ack-\(UUID().uuidString)").path
+        setenv("NOW_HEALTH_ACK", ackPath, 1)
+        c.expect(NowApp.acknowledgeUpdatedStartup(), "writable acknowledgement file succeeds")
+        c.expect((try? String(contentsOfFile: ackPath, encoding: .utf8)) == "\(getpid()):selftest-token", "acknowledgement file contains pid:token")
+        resetAckEnv()
+        try? FileManager.default.removeItem(atPath: ackPath)
         let requestedOnly = UpdateLogic.stateAfterShowingUpdate(noPending, version: nil)
         c.expect(requestedOnly.lastNotifiedVersion == "1.3.0", "deferred update request does not record notification")
         let actuallyShown = UpdateLogic.stateAfterShowingUpdate(noPending, version: "1.5.0")

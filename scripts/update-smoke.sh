@@ -215,7 +215,7 @@ wait_for_file() {
   fail "$label (timeout 30s)"
 }
 
-print "• [1/12] Positive: forge → check → stage → swap → exact startup health acknowledgement"
+print "• [1/13] Positive: forge → check → stage → swap → exact startup health acknowledgement"
 rm -f "$WORK/report" "$WORK/helper-done"
 run_smoke ok NOW_SMOKE_REPORT="$WORK/report" NOW_SMOKE_HELPER_DONE="$WORK/helper-done" | tee "$WORK/log1"
 grep -q "SMOKE: INSTALLED v$SMOKE_VERSION" "$WORK/log1" || fail "positive run did not reach install"
@@ -231,7 +231,7 @@ BACKUP_LEFT=("$WORK/"now.app.old-*(N))
 [[ ${#BACKUP_LEFT} -eq 0 ]] || fail "stray now.app.old-* backup left behind"
 print "  OK — updated to $SMOKE_VERSION, old bundle trashed, staging clean"
 
-print "• [2/12] Negative: tampered (ad-hoc) zip must be refused"
+print "• [2/13] Negative: tampered (ad-hoc) zip must be refused"
 reset_install
 set +e
 run_smoke bad NOW_SMOKE_REPORT="$WORK/report2" > "$WORK/log2" 2>&1
@@ -242,7 +242,7 @@ grep -q "SMOKE: REFUSED .*signed with a trusted identity" "$WORK/log2" || fail "
 [[ "$(version_of "$WORK/now.app")" == "$ORIG_VERSION" ]] || fail "tampered zip modified the install"
 print "  OK — refused at the signature gate, install untouched"
 
-print "• [3/12] Negative: older tag reads as up-to-date"
+print "• [3/13] Negative: older tag reads as up-to-date"
 set +e
 run_smoke old > "$WORK/log3" 2>&1
 RC=$?
@@ -251,7 +251,7 @@ set -e
 grep -q "SMOKE: UPTODATE" "$WORK/log3" || fail "older tag not reported as up-to-date"
 print "  OK — no downgrade offered"
 
-print "• [4/12] Negative: 404 (no releases) reads as up-to-date"
+print "• [4/13] Negative: 404 (no releases) reads as up-to-date"
 set +e
 run_smoke missing > "$WORK/log4" 2>&1
 RC=$?
@@ -259,7 +259,7 @@ set -e
 [[ $RC -eq 3 ]] || fail "404: expected exit 3 (UPTODATE), got $RC: $(cat "$WORK/log4")"
 print "  OK — 404 is up-to-date, not an error"
 
-print "• [5/12] Negative: streaming archive cap stops a lying response"
+print "• [5/13] Negative: streaming archive cap stops a lying response"
 reset_install
 set +e
 run_smoke oversize NOW_SMOKE_ARCHIVE_LIMIT=65536 > "$WORK/log5" 2>&1
@@ -270,7 +270,7 @@ grep -q "SMOKE: REFUSED update archive larger than" "$WORK/log5" || fail "oversi
 [[ "$(version_of "$WORK/now.app")" == "$ORIG_VERSION" ]] || fail "oversize response modified the install"
 print "  OK — response stopped at the streaming byte limit"
 
-print "• [6/12] Negative: downloaded size must match the release manifest"
+print "• [6/13] Negative: downloaded size must match the release manifest"
 reset_install
 set +e
 run_smoke mismatch > "$WORK/log6" 2>&1
@@ -280,7 +280,7 @@ set -e
 grep -q "SMOKE: REFUSED download size .* expected" "$WORK/log6" || fail "size mismatch refused for the wrong reason: $(cat "$WORK/log6")"
 print "  OK — mismatched asset size refused"
 
-print "• [7/12] Negative: missing asset download must be an error"
+print "• [7/13] Negative: missing asset download must be an error"
 reset_install
 set +e
 run_smoke asset404 > "$WORK/log7" 2>&1
@@ -290,7 +290,7 @@ set -e
 grep -q "SMOKE: REFUSED download returned 404" "$WORK/log7" || fail "asset 404 refused for the wrong reason: $(cat "$WORK/log7")"
 print "  OK — missing release asset refused"
 
-print "• [8/12] Negative: old→backup failure reports and leaves old app intact"
+print "• [8/13] Negative: old→backup failure reports and leaves old app intact"
 reset_install
 rm -f "$WORK/failure-backup"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=backup NOW_SMOKE_FAILURE_REPORT="$WORK/failure-backup" > "$WORK/log8" 2>&1
@@ -302,7 +302,7 @@ BACKUP_FAILURE_LEFT=("$WORK/"now.app.old-*(N))
 [[ ${#BACKUP_FAILURE_LEFT} -eq 0 ]] || fail "backup failure left a backup bundle"
 print "  OK — old app relaunched with the backup failure"
 
-print "• [9/12] Negative: post-swap relaunch failure restores old app"
+print "• [9/13] Negative: post-swap relaunch failure restores old app"
 reset_install
 rm -f "$WORK/failure-relaunch"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=relaunch NOW_SMOKE_FAILURE_REPORT="$WORK/failure-relaunch" > "$WORK/log9" 2>&1
@@ -313,7 +313,7 @@ RELAUNCH_BACKUP_LEFT=("$WORK/"now.app.old-*(N))
 [[ ${#RELAUNCH_BACKUP_LEFT} -eq 0 ]] || fail "relaunch failure left a backup bundle"
 print "  OK — new app removed, old app restored and relaunched with the error"
 
-print "• [10/12] Negative: unacknowledged child exit restores old app before Trash"
+print "• [10/13] Negative: unacknowledged child exit restores old app before Trash"
 reset_install
 rm -f "$WORK/failure-health-exit" "$WORK/unhealthy-child"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=health NOW_SMOKE_REPORT="$WORK/unhealthy-child" NOW_SMOKE_FAILURE_REPORT="$WORK/failure-health-exit" > "$WORK/log10" 2>&1
@@ -326,7 +326,7 @@ TRASHED_HEALTH=("$WORK/home/.Trash/"now-old-*.app(N))
 [[ ${#TRASHED_HEALTH} -eq 1 ]] || fail "health-exit failure trashed the rollback backup"
 print "  OK — unacknowledged child exit restored and relaunched the old app"
 
-print "• [11/12] Negative: startup health timeout restores old app before Trash"
+print "• [11/13] Negative: startup health timeout restores old app before Trash"
 reset_install
 rm -f "$WORK/failure-health-timeout"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=health NOW_SMOKE_HEALTH_TIMEOUT=3 NOW_SMOKE_FAILURE_REPORT="$WORK/failure-health-timeout" > "$WORK/log11" 2>&1
@@ -339,7 +339,7 @@ TRASHED_HEALTH_TIMEOUT=("$WORK/home/.Trash/"now-old-*.app(N))
 [[ ${#TRASHED_HEALTH_TIMEOUT} -eq 1 ]] || fail "health timeout trashed the rollback backup"
 print "  OK — missing acknowledgement timed out, restored, and relaunched the old app"
 
-print "• [12/12] Negative: stuck quit — helper must bail, nothing moved"
+print "• [12/13] Negative: stuck quit — helper must bail, nothing moved"
 reset_install
 rm -f "$WORK/stuck-done"
 set +e
@@ -356,5 +356,21 @@ STUCK_STAGING_LEFT=("$WORK/".now-update-*(N))
 [[ ${#STUCK_STAGING_LEFT} -eq 0 ]] || fail "stuck quit left staging artifacts"
 print "  OK — helper bailed, app untouched"
 
+print "• [13/13] Stale NOW_UPDATE_ERROR must not reach the updated child"
+# A failed install relaunches the old app with NOW_UPDATE_ERROR in its
+# environment; that process's next install helper inherits the variable
+# (spawnHelper passes the environment through). The success relaunch must
+# strip it — otherwise the updated app processes the old failure at launch
+# and reports the successful retry as another failure.
+reset_install
+rm -f "$WORK/report13" "$WORK/helper-done13"
+run_smoke ok NOW_UPDATE_ERROR="stale from a failed install" NOW_SMOKE_REPORT="$WORK/report13" NOW_SMOKE_HELPER_DONE="$WORK/helper-done13" > "$WORK/log13" 2>&1
+grep -q "SMOKE: INSTALLED v$SMOKE_VERSION" "$WORK/log13" || fail "stale-error run did not reach install: $(cat "$WORK/log13")"
+wait_for_file "$WORK/report13" "relaunched child never reported (stale-error case)"
+[[ "$(cat "$WORK/report13")" == "$SMOKE_VERSION" ]] || fail "updated child inherited a stale failure env: $(cat "$WORK/report13")"
+[[ "$(version_of "$WORK/now.app")" == "$SMOKE_VERSION" ]] || fail "stale-error install did not complete"
+wait_for_file "$WORK/helper-done13" "stale-error helper never completed"
+print "  OK — updated child launched without the stale failure environment"
+
 print ""
-print "UPDATE SMOKE OK — health-gated swap, signature/streaming gates, downgrade/404, rollback, and stuck-quit verified"
+print "UPDATE SMOKE OK — health-gated swap, signature/streaming gates, downgrade/404, rollback, stuck-quit, and stale-error-env verified"
