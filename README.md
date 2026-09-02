@@ -35,6 +35,7 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 - One-click **Join** when a meeting link is found — detected in `CONFERENCE`/`URL` properties, location, notes, Outlook HTML descriptions, attachments, even the title (Zoom, Google Meet, Teams, WebEx, GoTo, RingCentral, Jitsi, … or any URL — native `zoommtg://` and `msteams:` links are converted automatically)
 - Live countdown, Snooze 1 min (re-appears even after the meeting has started), Close
 - Keyboard: `esc` close · `return` join · `s` snooze · `1`–`9` join a specific meeting when several appear
+- Optional local meeting detection prevents new reminders from interrupting an active call; browser calls are a separate best-effort opt-in. No audio is recorded.
 
 **Menu bar**
 - Live countdown to the next meeting — including late ones (`-3m`), for as long as you configure
@@ -48,6 +49,12 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 - Option to hide events you've declined
 
 **Settings** — lead time presets, 13 system alert sounds with preview, late-meeting visibility, menu bar countdown toggle, Launch at Login, reminder preview.
+
+### Meeting detection notes
+
+- Meeting detection reads local CoreAudio process metadata only. It does not record audio and does not need microphone permission.
+- Native meeting apps can be identified by process. For browser calls, macOS identifies the browser but not the responsible tab or website, so browser detection is off by default and may mistake recording or dictation for a meeting.
+- The option requires process-level audio metadata available on newer macOS versions. If the capability check fails, `now` leaves the option off and continues showing reminders normally.
 
 ### Apple Calendar permission notes
 
@@ -73,6 +80,7 @@ Builds `outputs/now.app` and `outputs/now.zip`. macOS 13+, arm64.
 ./outputs/now.app/Contents/MacOS/now --selftest            # parser unit tests
 ./outputs/now.app/Contents/MacOS/now --parse <url-or-file> # inspect any iCal feed
 ./outputs/now.app/Contents/MacOS/now --native [list]       # inspect Apple Calendar access
+./outputs/now.app/Contents/MacOS/now --meeting            # inspect active meeting audio metadata
 ./release.sh --dry-run                                     # release pipeline check
 ```
 

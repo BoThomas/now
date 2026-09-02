@@ -41,6 +41,8 @@ struct AppSettings: Codable, Equatable {
     var lateMinutes = 0
     var skipDeclined = true
     var automaticUpdateChecks = true
+    var suppressRemindersDuringMeetings = false
+    var includeBrowserMeetings = false
     /// Reserved for the v2 "Skip this version" UI — the updater already
     /// honors it in `decide`.
     var skippedUpdateVersion: String?
@@ -52,7 +54,7 @@ struct AppSettings: Codable, Equatable {
     static let allowedLateMinutes = [-1, 0, 5, 15, 30, 60]
 
     enum CodingKeys: String, CodingKey {
-        case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, lateMinutes, skipDeclined, automaticUpdateChecks, skippedUpdateVersion
+        case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, lateMinutes, skipDeclined, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
     }
 
     init() {}
@@ -79,6 +81,8 @@ struct AppSettings: Codable, Equatable {
         lateMinutes = Self.nearest(late, in: Self.allowedLateMinutes, default: 0)
         skipDeclined = try c.decodeIfPresent(Bool.self, forKey: .skipDeclined) ?? true
         automaticUpdateChecks = try c.decodeIfPresent(Bool.self, forKey: .automaticUpdateChecks) ?? true
+        suppressRemindersDuringMeetings = try c.decodeIfPresent(Bool.self, forKey: .suppressRemindersDuringMeetings) ?? false
+        includeBrowserMeetings = try c.decodeIfPresent(Bool.self, forKey: .includeBrowserMeetings) ?? false
         skippedUpdateVersion = try c.decodeIfPresent(String.self, forKey: .skippedUpdateVersion)
     }
 }

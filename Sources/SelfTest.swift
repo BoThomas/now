@@ -1203,6 +1203,18 @@ enum SelfTest {
         let snoozePending = [imminent.id: now.addingTimeInterval(30)]
         c.expect(AppStore.dueForAlert(events: [imminent], alerted: [imminent.id], snoozed: snoozePending, leadSeconds: 300, now: now).isEmpty, "pending snooze quiet")
 
+        // Active-meeting policy: defer before start, permanently dismiss from
+        // the event start onward, and fail open for inactive/unknown states.
+        let deferred = AppStore.meetingReminderDecision(due: [imminent], suppressionEnabled: true, activity: .meeting(.zoom), now: now)
+        c.expect(deferred.present.isEmpty && deferred.dismiss.isEmpty, "active meeting defers an imminent event")
+        let dismissed = AppStore.meetingReminderDecision(due: [running], suppressionEnabled: true, activity: .meeting(.zoom), now: now)
+        c.expect(dismissed.present.isEmpty && dismissed.dismiss.map(\.uid) == ["running"], "active meeting dismisses a started event")
+        let mixed = AppStore.meetingReminderDecision(due: [imminent, running], suppressionEnabled: true, activity: .meeting(.zoom), now: now)
+        c.expect(mixed.present.isEmpty && mixed.dismiss.map(\.uid) == ["running"], "active meeting handles mixed start boundaries")
+        c.expect(AppStore.meetingReminderDecision(due: [imminent], suppressionEnabled: true, activity: .inactive, now: now).present.count == 1, "inactive meeting detector presents")
+        c.expect(AppStore.meetingReminderDecision(due: [imminent], suppressionEnabled: true, activity: .unknown, now: now).present.count == 1, "unknown meeting detector fails open")
+        c.expect(AppStore.meetingReminderDecision(due: [imminent], suppressionEnabled: false, activity: .meeting(.zoom), now: now).present.count == 1, "disabled meeting suppression presents")
+
         // Newly due events merge into an open reminder instead of replacing it.
         let shown = event("shown", startIn: 60, duration: 1800)
         let merged = AlertController.mergedShown(existing: [shown], new: [shown, imminent])
@@ -1282,12 +1294,38 @@ enum SelfTest {
         c.expect(decoded?.lateMinutes == 60, "huge lateMinutes snaps to 60 (got \(String(describing: decoded?.lateMinutes)))")
         c.expect(decoded?.skipDeclined == false, "valid booleans preserved")
         c.expect(decoded?.automaticUpdateChecks == true && decoded?.skippedUpdateVersion == nil, "legacy settings use updater defaults")
+        c.expect(decoded?.suppressRemindersDuringMeetings == false && decoded?.includeBrowserMeetings == false, "legacy settings disable meeting suppression")
         let upper = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\": 99999, \"refreshMinutes\": 45, \"lateMinutes\": -3}".utf8))
         c.expect(upper?.leadSeconds == 7200, "oversized lead clamps to 7200")
         c.expect(upper?.refreshMinutes == 30 || upper?.refreshMinutes == 60, "45 min snaps to a picker value (got \(String(describing: upper?.refreshMinutes)))")
         c.expect(upper?.lateMinutes == -1, "-3 snaps to -1 (got \(String(describing: upper?.lateMinutes)))")
         let extremes = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"refreshMinutes\":-9223372036854775808,\"lateMinutes\":-9223372036854775808}".utf8))
         c.expect(extremes?.refreshMinutes == 5 && extremes?.lateMinutes == -1, "Int.min settings normalize without overflow")
+
+        let zoomOwners = [MeetingAudioOwner(pid: 10, bundleID: "us.zoom.xos")]
+        c.expect(MeetingActivityProbe.activity(owners: zoomOwners, includeBrowsers: false) == .meeting(.zoom), "Zoom input classifies as meeting")
+        let teamsOwners = [MeetingAudioOwner(pid: 11, bundleID: "com.microsoft.teams2.helper")]
+        c.expect(MeetingActivityProbe.activity(owners: teamsOwners, includeBrowsers: false) == .meeting(.teams), "Teams helper classifies as meeting")
+        let chromeOwners = [MeetingAudioOwner(pid: 12, bundleID: "com.google.Chrome.helper")]
+        c.expect(MeetingActivityProbe.activity(owners: chromeOwners, includeBrowsers: false) == .inactive, "browser input ignored by default")
+        c.expect(MeetingActivityProbe.activity(owners: chromeOwners, includeBrowsers: true) == .meeting(.browser), "browser input classifies when opted in")
+        let unrelatedOwners = [MeetingAudioOwner(pid: 13, bundleID: "com.example.recorder")]
+        c.expect(MeetingActivityProbe.activity(owners: unrelatedOwners, includeBrowsers: true) == .inactive, "unknown input owner does not suppress")
+        let unidentifiedOwners = [MeetingAudioOwner(pid: -1, bundleID: "")]
+        c.expect(MeetingActivityProbe.activity(owners: unidentifiedOwners, includeBrowsers: true) == .unknown, "unidentified active input owner is unknown, not inactive")
+
+        var debounce = MeetingActivityDebouncer()
+        c.expect(debounce.apply(.meeting(.zoom)) == .meeting(.zoom), "positive meeting snapshot applies immediately")
+        c.expect(debounce.apply(.inactive) == .meeting(.zoom), "first inactive snapshot is debounced")
+        c.expect(debounce.apply(.inactive) == .inactive, "second inactive snapshot clears meeting")
+        c.expect(debounce.apply(.meeting(.zoom)) == .meeting(.zoom) && debounce.apply(.unknown) == .unknown, "probe failure resets activity to unknown")
+
+        var meetingSettings = AppSettings()
+        meetingSettings.suppressRemindersDuringMeetings = true
+        meetingSettings.includeBrowserMeetings = true
+        let meetingData = try? JSONEncoder().encode(meetingSettings)
+        let meetingRoundTrip = meetingData.flatMap { try? JSONDecoder().decode(AppSettings.self, from: $0) }
+        c.expect(meetingRoundTrip?.suppressRemindersDuringMeetings == true && meetingRoundTrip?.includeBrowserMeetings == true, "meeting settings persist round-trip")
 
         // Palette positive modulo: any index (incl. extremes) maps without trapping.
         c.expect(Palette.nsColor(Int.min) == Palette.nsColor(Int.min % 10 + 10), "Int.min palette index safe")
