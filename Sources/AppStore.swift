@@ -3,6 +3,11 @@ import AppKit
 import EventKit
 import ServiceManagement
 
+struct MeetingReminderDecision {
+    let present: [MeetingEvent]
+    let dismiss: [MeetingEvent]
+}
+
 /// All app state is main-actor (AppKit/MainActor by design — see AGENTS.md).
 /// Pure, unit-tested decision logic is `nonisolated` so the selftest can drive
 /// it without constructing an `AppStore` (and its `EKEventStore`).
@@ -46,6 +51,10 @@ final class AppStore: ObservableObject {
     /// failed or partial attempt never updates this (it is what "Last synced"
     /// in the UI means).
     @Published private(set) var lastRefresh: Date?
+    @Published private(set) var meetingActivity: MeetingActivity = .unknown
+    @Published private(set) var meetingDetectionChecking = false
+    @Published private(set) var meetingDetectionAvailable: Bool? = MeetingActivityProbe.platformPotentiallySupported ? nil : false
+    @Published private(set) var meetingDetectionError: String?
     @Published private(set) var pausedUntil: Date? {
         didSet { persist() }
     }
@@ -59,6 +68,7 @@ final class AppStore: ObservableObject {
 
     /// Owns the single long-lived EKEventStore (see NativeCalendarSource docs).
     let nativeSource = NativeCalendarSource()
+    private let meetingActivitySource = MeetingActivitySource()
     private var nativeEvents: [MeetingEvent] = []
     /// Every calendar that ever fed us native events this session — used to tell native
     /// events apart from ICS ones by `calendarID` even after the calendar is removed.
@@ -66,8 +76,10 @@ final class AppStore: ObservableObject {
     private var previousEnabledNativeIDs: Set<UUID> = []
     private var previousSkipDeclined = true
     private var previousRefreshMinutes = AppSettings().refreshMinutes
+    private var previousIncludeBrowserMeetings = false
     private var nativeChangeDebounce: Timer?
     private var activeObserver: NSObjectProtocol?
+    private var meetingEnableGeneration = 0
 
     private var alerted: Set<String> = []
     private var snoozed: [String: Date] = [:]
@@ -99,6 +111,7 @@ final class AppStore: ObservableObject {
         previousEnabledNativeIDs = Set(nativeCalendars.filter(\.isEnabled).map(\.id))
         previousSkipDeclined = settings.skipDeclined
         previousRefreshMinutes = settings.refreshMinutes
+        previousIncludeBrowserMeetings = settings.includeBrowserMeetings
     }
 
     deinit {
@@ -113,6 +126,13 @@ final class AppStore: ObservableObject {
         started = true
         refreshNativeAuthorization()
         nativeSource.onStoreChange = { [weak self] in self?.scheduleNativeStoreRefresh() }
+        meetingActivitySource.onActivityChange = { [weak self] activity in
+            self?.meetingActivity = activity
+            if activity != .unknown { self?.meetingDetectionError = nil }
+        }
+        meetingActivitySource.onProbeFailure = { [weak self] message in
+            self?.meetingDetectionError = message
+        }
         activeObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -129,6 +149,9 @@ final class AppStore: ObservableObject {
             MainActor.assumeIsolated { self?.tick() }
         }
         syncLoginItem(settings.launchAtLogin)
+        if settings.suppressRemindersDuringMeetings {
+            setMeetingSuppressionEnabled(true)
+        }
         refresh()
     }
 
@@ -405,6 +428,55 @@ final class AppStore: ObservableObject {
         NSSound(named: NSSound.Name(settings.soundName))?.play()
     }
 
+    func setMeetingSuppressionEnabled(_ enabled: Bool) {
+        meetingEnableGeneration += 1
+        let requestGeneration = meetingEnableGeneration
+        meetingDetectionError = nil
+
+        guard enabled else {
+            meetingDetectionChecking = false
+            settings.suppressRemindersDuringMeetings = false
+            meetingActivitySource.stop()
+            return
+        }
+        guard MeetingActivityProbe.platformPotentiallySupported else {
+            meetingDetectionAvailable = false
+            settings.suppressRemindersDuringMeetings = false
+            meetingDetectionError = "Meeting detection requires macOS 14 or later."
+            return
+        }
+
+        meetingDetectionChecking = true
+        meetingActivity = .unknown
+        meetingActivitySource.checkCapability { [weak self] result in
+            guard let self, requestGeneration == self.meetingEnableGeneration else { return }
+            self.meetingDetectionChecking = false
+            switch result {
+            case .success(let owners):
+                self.meetingDetectionAvailable = true
+                self.settings.suppressRemindersDuringMeetings = true
+                self.meetingActivitySource.start(
+                    includeBrowsers: self.settings.includeBrowserMeetings,
+                    initialOwners: owners)
+            case .failure(let error):
+                if case .processListUnavailable = error {
+                    self.meetingDetectionAvailable = false
+                } else {
+                    // Enumeration can fail while CoreAudio's process list is
+                    // changing. Keep the toggle retryable for transient errors.
+                    self.meetingDetectionAvailable = nil
+                }
+                self.settings.suppressRemindersDuringMeetings = false
+                self.meetingDetectionError = error.message
+                self.meetingActivitySource.stop()
+            }
+        }
+    }
+
+    func refreshMeetingActivityAfterWake() {
+        meetingActivitySource.refreshAfterWake()
+    }
+
     func refresh() {
         fetchNativeEvents()
         let enabled = subscriptions.filter(\.isEnabled)
@@ -548,11 +620,30 @@ final class AppStore: ObservableObject {
         if isPaused { return }
         let due = Self.dueForAlert(events: events, alerted: alerted, snoozed: snoozed, leadSeconds: settings.leadSeconds, now: now)
         guard !due.isEmpty else { return }
-        due.forEach {
+        let decision = Self.meetingReminderDecision(
+            due: due,
+            suppressionEnabled: settings.suppressRemindersDuringMeetings,
+            activity: meetingActivity,
+            now: now)
+        decision.dismiss.forEach {
             alerted.insert($0.id)
             snoozed.removeValue(forKey: $0.id)
         }
-        onAlert?(due)
+        guard !decision.present.isEmpty else { return }
+        decision.present.forEach {
+            alerted.insert($0.id)
+            snoozed.removeValue(forKey: $0.id)
+        }
+        onAlert?(decision.present)
+    }
+
+    nonisolated static func meetingReminderDecision(due: [MeetingEvent], suppressionEnabled: Bool, activity: MeetingActivity, now: Date) -> MeetingReminderDecision {
+        guard suppressionEnabled, case .meeting = activity else {
+            return MeetingReminderDecision(present: due, dismiss: [])
+        }
+        return MeetingReminderDecision(
+            present: [],
+            dismiss: due.filter { now >= $0.start })
     }
 
     /// Pure, clock-driven reminder-scheduling decision: which events fire a
@@ -592,6 +683,12 @@ final class AppStore: ObservableObject {
         if settings.skipDeclined != previousSkipDeclined {
             previousSkipDeclined = settings.skipDeclined
             fetchNativeEvents()
+        }
+        if settings.includeBrowserMeetings != previousIncludeBrowserMeetings {
+            previousIncludeBrowserMeetings = settings.includeBrowserMeetings
+            if settings.suppressRemindersDuringMeetings {
+                meetingActivitySource.setIncludeBrowsers(settings.includeBrowserMeetings)
+            }
         }
     }
 

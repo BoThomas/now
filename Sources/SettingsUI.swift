@@ -1020,6 +1020,7 @@ struct SettingsView: View {
     @EnvironmentObject var alerts: AlertController
     @EnvironmentObject var updates: UpdateController
     @State private var showAddSheet = false
+    @State private var showBrowserMeetingInfo = false
     @StateObject private var commandHints = CommandHoldTracker()
     @State private var selectedSection: SettingsSection = .calendars
     /// While a sidebar jump animates, the scroll-position tracker is paused —
@@ -1454,6 +1455,50 @@ struct SettingsView: View {
             }
             Stepper(value: $store.settings.leadSeconds, in: 0...7200, step: 15) {
                 Text("Fine tune: \(Fmt.leadTime(store.settings.leadSeconds))")
+            }
+            Divider()
+            Toggle("Don't interrupt me while I'm in a meeting", isOn: Binding(
+                get: { store.settings.suppressRemindersDuringMeetings },
+                set: { store.setMeetingSuppressionEnabled($0) }
+            ))
+            .disabled(store.meetingDetectionChecking || !MeetingActivityProbe.platformPotentiallySupported || store.meetingDetectionAvailable == false)
+            Text("Uses local audio activity from meeting apps. No audio is recorded.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if store.meetingDetectionChecking {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking local meeting detection...")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            if let error = store.meetingDetectionError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else if !MeetingActivityProbe.platformPotentiallySupported {
+                Text("This option requires macOS 14 or later.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if store.settings.suppressRemindersDuringMeetings {
+                HStack(spacing: 6) {
+                    Toggle("Include meetings in browsers", isOn: $store.settings.includeBrowserMeetings)
+                    Button {
+                        showBrowserMeetingInfo.toggle()
+                    } label: {
+                        Image(systemName: "info.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .popover(isPresented: $showBrowserMeetingInfo, arrowEdge: .trailing) {
+                        Text("macOS can identify the browser using the microphone, but not the responsible tab or website. This covers Google Meet and other web calls, but voice recording, dictation, or another site using the microphone can also be mistaken for a meeting.")
+                            .font(.callout)
+                            .padding(14)
+                            .frame(width: 320, alignment: .leading)
+                    }
+                }
+                .padding(.leading, 18)
             }
             Divider()
             Toggle("Play sound", isOn: $store.settings.soundEnabled)

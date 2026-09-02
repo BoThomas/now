@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             // Main queue delivery — hop into our MainActor context.
             MainActor.assumeIsolated {
+                self?.store.refreshMeetingActivityAfterWake()
                 self?.store.refresh()
                 self?.updateController.checkMaybeAutomatic()
             }
@@ -348,6 +349,10 @@ enum NowApp {
             nativeCLI(subcommand)
             exit(0)
         }
+        if arguments.contains("--meeting") {
+            meetingCLI()
+            exit(0)
+        }
         if let index = arguments.firstIndex(of: "--update-check") {
             let base = updateCLIValue(after: index, arguments: arguments)
             updateCheckCLI(base)
@@ -466,6 +471,36 @@ enum NowApp {
         case .denied: return "denied"
         case .authorized: return "authorized"
         default: return "unknown(\(status.rawValue))"
+        }
+    }
+
+    /// Read-only CoreAudio diagnostics for field-verifying meeting clients.
+    /// Prints process metadata only; it never opens or records an audio stream.
+    static func meetingCLI() {
+        switch MeetingActivityProbe.snapshot() {
+        case .failure(let error):
+            print("MEETING DETECTION UNAVAILABLE: \(error.message)")
+        case .success(let owners):
+            if owners.isEmpty {
+                print("ACTIVE INPUT OWNERS: none")
+            } else {
+                print("ACTIVE INPUT OWNERS (\(owners.count)):")
+                for owner in owners {
+                    let pid = owner.pid >= 0 ? String(owner.pid) : "unknown"
+                    let bundleID = owner.bundleID.isEmpty ? "unknown" : owner.bundleID
+                    print("  pid=\(pid) bundle=\(bundleID)")
+                }
+            }
+            print("NATIVE APPS: \(describeMeetingActivity(MeetingActivityProbe.activity(owners: owners, includeBrowsers: false)))")
+            print("WITH BROWSERS: \(describeMeetingActivity(MeetingActivityProbe.activity(owners: owners, includeBrowsers: true)))")
+        }
+    }
+
+    static func describeMeetingActivity(_ activity: MeetingActivity) -> String {
+        switch activity {
+        case .inactive: return "inactive"
+        case .meeting(let provider): return "meeting (\(provider.name))"
+        case .unknown: return "unknown"
         }
     }
 
