@@ -935,26 +935,15 @@ enum RRULEExpander {
 // MARK: - Meeting links
 
 enum LinkExtractor {
-    static let meetingHosts = ["zoom.us", "zoom.com", "meet.google.com", "hangouts.google.com", "teams.microsoft.com", "teams.live.com", "webex.com", "gotomeet.me", "goto.com", "meet.jit.si", "whereby.com", "discord.gg", "discord.com", "slack.com", "chime.aws", "8x8.vc", "bluejeans.com", "facetime.apple.com", "ringcentral.com", "join.me", "dialpad.com", "uberconference.com", "freeconferencecall.com", "meeting.zoho.com"]
-
-    /// Path/query fragments that mark a URL as a join link even on unknown hosts
-    /// (self-hosted Jitsi, internal Zoom-like gateways, …). Includes
-    /// host-prefix forms for providers whose join pages are always at the root
-    /// (Google Meet links have no /join path segment at all).
-    static let joinHints = ["/j/", "/join", "meetup-join", "confno=", "pwd=", "/meet/", "/w/",
-                            "meet.google.com/", "hangouts.google.com/", "meet.jit.si/",
-                            "discord.gg/", "whereby.com/", "facetime.apple.com/"]
-
     static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
-    /// Picks the join link for an event. Priority: explicit CONFERENCE/URL
-    /// properties, then URLs found in LOCATION → DESCRIPTION → X-ALT-DESC →
-    /// SUMMARY → ATTACH. Among detected URLs, join-like URLs outrank unrelated
-    /// pages on known providers (a Zoom recording link never beats a real join
-    /// link); the field priority breaks ties within the same tier.
+    /// Picks a meeting join link for an event. Structured conference properties
+    /// are authoritative. Every other field, including URL, must contain a URL
+    /// with a recognized provider shape or an explicit generic join path; an
+    /// arbitrary event/document/recording URL must never be labelled "Join".
     static func link(from event: ParsedEvent) -> URL? {
         if let conference = event.conference, let url = joinURL(conference) { return url }
-        if let urlValue = event.url, let url = joinURL(urlValue) { return url }
+        if let urlValue = event.url, let url = joinURL(urlValue), isMeetingLink(url) { return url }
         var candidates: [(url: URL, field: Int)] = []
         let fields: [(String?, Int)] = [
             (event.location, 0),
@@ -969,27 +958,15 @@ enum LinkExtractor {
                 for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
                     if let url = match.url,
                        let scheme = url.scheme?.lowercased(),
-                       scheme == "http" || scheme == "https" {
+                       (scheme == "http" || scheme == "https"),
+                       isMeetingLink(url) {
                         candidates.append((url, rank))
                     }
                 }
             }
         }
-        func quality(_ url: URL) -> Int {
-            let known = isKnownMeetingHost(url)
-            let joinish = looksLikeJoin(url)
-            if known && joinish { return 3 }
-            if joinish { return 2 }
-            if known { return 1 }
-            return 0
-        }
         return candidates
-            .sorted { lhs, rhs in
-                let lq = quality(lhs.url)
-                let rq = quality(rhs.url)
-                if lq != rq { return lq > rq }
-                return lhs.field < rhs.field
-            }
+            .sorted { $0.field < $1.field }
             .first?.url
     }
 
@@ -1026,11 +1003,6 @@ enum LinkExtractor {
             return comps.url
         }
         return nil
-    }
-
-    static func isKnownMeetingHost(_ url: URL) -> Bool {
-        guard let host = url.host?.lowercased() else { return false }
-        return meetingHosts.contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
     /// Friendly service name for a join link ("Zoom", "Google Meet", …), used as the
@@ -1071,10 +1043,62 @@ enum LinkExtractor {
         return link.flatMap(providerName)
     }
 
-    static func looksLikeJoin(_ url: URL) -> Bool {
-        guard url.scheme == "https" || url.scheme == "http" else { return false }
-        let text = url.absoluteString.lowercased()
-        return joinHints.contains { text.contains($0) }
+    /// Conservative URL classifier. Provider homepages, recordings and support
+    /// pages are not meetings merely because they live on a meeting provider.
+    /// Unknown/self-hosted services remain supported through explicit join path
+    /// shapes such as `/join/42`, `/meet/room` and `/j/123`.
+    static func isMeetingLink(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              let host = url.host?.lowercased(), !host.isEmpty else { return false }
+        let path = url.path.lowercased()
+        let segments = path.split(separator: "/").map(String.init)
+
+        if segments.contains(where: { $0 == "j" || $0 == "join" || $0 == "meet" || $0 == "meetup-join" }) {
+            return true
+        }
+
+        if host == "meet.google.com" || host.hasSuffix(".meet.google.com") {
+            let code = path.split(separator: "/").first.map(String.init) ?? ""
+            let groups = code.split(separator: "-")
+            return groups.count == 3 && groups.allSatisfy { !$0.isEmpty }
+        }
+        if host == "hangouts.google.com" || host.hasSuffix(".hangouts.google.com") {
+            return path.split(separator: "/").count >= 2
+        }
+        if host == "zoom.us" || host.hasSuffix(".zoom.us") || host == "zoom.com" || host.hasSuffix(".zoom.com") {
+            return path.hasPrefix("/my/") || path.hasPrefix("/wc/join/") || path.hasPrefix("/w/")
+        }
+        if host == "teams.microsoft.com" || host.hasSuffix(".teams.microsoft.com") ||
+           host == "teams.live.com" || host.hasSuffix(".teams.live.com") {
+            return path.hasPrefix("/l/meetup/")
+        }
+        if host == "meet.jit.si" || host.hasSuffix(".meet.jit.si") ||
+           host == "whereby.com" || host.hasSuffix(".whereby.com") ||
+           host == "facetime.apple.com" || host.hasSuffix(".facetime.apple.com") ||
+           host == "discord.gg" || host.hasSuffix(".discord.gg") {
+            return !path.split(separator: "/").isEmpty
+        }
+        if host == "gotomeet.me" || host.hasSuffix(".gotomeet.me") || host == "meet.goto.com" ||
+           host == "8x8.vc" || host.hasSuffix(".8x8.vc") || host == "join.me" || host.hasSuffix(".join.me") {
+            return !path.split(separator: "/").isEmpty
+        }
+        if host == "bluejeans.com" || host.hasSuffix(".bluejeans.com") {
+            let room = path.split(separator: "/").first.map(String.init) ?? ""
+            return !room.isEmpty && room.allSatisfy(\.isNumber)
+        }
+        if host == "meetings.dialpad.com" || host.hasSuffix(".meetings.dialpad.com") {
+            return path.hasPrefix("/room/")
+        }
+        if host == "app.chime.aws" || host.hasSuffix(".app.chime.aws") {
+            return path.hasPrefix("/meetings/")
+        }
+        if host == "app.slack.com" || host.hasSuffix(".app.slack.com") {
+            return path.hasPrefix("/huddle/")
+        }
+        if host == "freeconferencecall.com" || host.hasSuffix(".freeconferencecall.com") {
+            return path.hasPrefix("/wall/")
+        }
+        return false
     }
 
     /// True when every non-empty line of `text` is either Apple's conference decoration

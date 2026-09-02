@@ -412,6 +412,9 @@ struct UpcomingEventList: View {
                                     if let link = event.link {
                                         joinButton(link, compact: true)
                                             .padding(.leading, 68)
+                                    } else {
+                                        noLinkLabel
+                                            .padding(.leading, 68)
                                     }
                                 }
                             } else {
@@ -420,6 +423,8 @@ struct UpcomingEventList: View {
                                     Spacer(minLength: 4)
                                     if let link = event.link {
                                         joinButton(link, compact: false)
+                                    } else {
+                                        noLinkLabel
                                     }
                                 }
                             }
@@ -478,6 +483,13 @@ struct UpcomingEventList: View {
         .buttonStyle(.link)
         .cursor(.pointingHand)
         .help("Open \(link.absoluteString)")
+    }
+
+    private var noLinkLabel: some View {
+        Label("No link", systemImage: "chain.slash")
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .help("No meeting link found")
     }
 
     /// Contrast-safe tint for link text: user-picked near-background colors

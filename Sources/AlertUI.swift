@@ -251,6 +251,17 @@ final class AlertController: ObservableObject {
         }
     }
 
+    /// Join decisions are kept separate from key classification so mixed
+    /// link/linkless cards have a directly testable keyboard contract.
+    nonisolated static func primaryJoinURL(in events: [MeetingEvent]) -> URL? {
+        events.compactMap(\.link).first
+    }
+
+    nonisolated static func indexedJoinURL(in events: [MeetingEvent], number: Int) -> URL? {
+        guard events.indices.contains(number - 1) else { return nil }
+        return events[number - 1].link
+    }
+
     private func installMonitor() {
         // Also watches leftMouseDown: any click in the panel is deliberate
         // engagement — it ends the keystroke guard early so the keyboard is
@@ -279,7 +290,7 @@ final class AlertController: ObservableObject {
                 self.close()
                 return nil
             case .joinOrClose:
-                if let url = self.shownEvents.compactMap(\.link).first {
+                if let url = Self.primaryJoinURL(in: self.shownEvents) {
                     self.join(url)
                 } else {
                     self.close()
@@ -288,8 +299,7 @@ final class AlertController: ObservableObject {
             case .joinIndex(let number):
                 // "3" joins the third card; out of range or link-less events
                 // are swallowed quietly.
-                if shownEvents.indices.contains(number - 1),
-                   let url = self.shownEvents[number - 1].link {
+                if let url = Self.indexedJoinURL(in: self.shownEvents, number: number) {
                     self.join(url)
                 }
                 return nil
@@ -373,13 +383,13 @@ struct AlertView: View {
         var hints: [String] = []
         if events.count > 1 {
             if joinable {
-                hints.append("return join first")
-                hints.append("1-\(min(events.count, 9)) join")
+                hints.append("return join first available")
+                hints.append("numbered cards join")
             } else {
-                hints.append("return close")
+                hints.append("return dismiss")
             }
         } else {
-            hints.append(joinable ? "return join" : "return close")
+            hints.append(joinable ? "return join" : "return dismiss")
         }
         if snoozeable { hints.append("s snooze") }
         hints.append("esc close")
@@ -394,13 +404,15 @@ struct AlertView: View {
                     .buttonStyle(AlertSecondaryButtonStyle())
                     .keyboardShortcut("s", modifiers: [])
                 }
-                Button {
-                    controller.close()
-                } label: {
-                    Label("Close", systemImage: "xmark")
+                if events.count != 1 || events[0].link != nil {
+                    Button {
+                        controller.close()
+                    } label: {
+                        Label("Close", systemImage: "xmark")
+                    }
+                    .buttonStyle(AlertSecondaryButtonStyle())
+                    .keyboardShortcut(.escape, modifiers: [])
                 }
-                .buttonStyle(AlertSecondaryButtonStyle())
-                .keyboardShortcut(.escape, modifiers: [])
             }
             // Hidden while the keystroke guard runs; its fade-in is the
             // "shortcuts are live" signal (previews guard too, so they show
@@ -456,6 +468,26 @@ struct SingleEventView: View {
                     Label("Join Meeting", systemImage: "video.fill")
                 }
                 .buttonStyle(AlertJoinButtonStyle(color: event.alertButtonColor))
+            } else {
+                VStack(spacing: 12) {
+                    Label("No meeting link found", systemImage: "chain.slash")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.58))
+                    if let notes = displayNotes {
+                        Text(notes)
+                            .font(.system(size: 16))
+                            .foregroundStyle(.white.opacity(0.62))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(5)
+                            .frame(maxWidth: 680)
+                    }
+                    Button {
+                        controller.close()
+                    } label: {
+                        Label("Dismiss Reminder", systemImage: "checkmark")
+                    }
+                    .buttonStyle(AlertJoinButtonStyle(color: event.alertButtonColor))
+                }
             }
         }
     }
@@ -464,6 +496,11 @@ struct SingleEventView: View {
     /// The countdown/prominent controls use a contrast-safe variant so a
     /// user-picked near-black calendar color stays visible on the black panel.
     var readableAccent: Color { event.readableColorOnBlack }
+
+    var displayNotes: String? {
+        guard let notes = event.notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty else { return nil }
+        return notes
+    }
 
     var statusText: String {
         if now < event.start {
@@ -498,14 +535,19 @@ struct MultiEventView: View {
                 VStack(spacing: 14) {
                     ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
                         HStack(spacing: 20) {
-                            // Numbered badge: keys 1-9 join that card, and the
-                            // number doubles as the calendar-color dot (contrast-
-                            // safe fill for dark calendar colors).
+                            // Joinable cards show their 1-9 shortcut; linkless
+                            // cards use an explicit chain-slash status instead.
                             ZStack {
-                                Circle().fill(Color(nsColor: event.readableNsColorOnBlack))
-                                Text("\(index + 1)")
-                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(.white)
+                                Circle().fill(event.link == nil ? Color.white.opacity(0.12) : Color(nsColor: event.readableNsColorOnBlack))
+                                if event.link != nil {
+                                    Text("\(index + 1)")
+                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(.white)
+                                } else {
+                                    Image(systemName: "chain.slash")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(.white.opacity(0.62))
+                                }
                             }
                             .frame(width: 20, height: 20)
                             VStack(alignment: .leading, spacing: 4) {
@@ -525,6 +567,10 @@ struct MultiEventView: View {
                                     Label("Join", systemImage: "video.fill")
                                 }
                                 .buttonStyle(AlertJoinButtonStyle(color: event.alertButtonColor, compact: true))
+                            } else {
+                                Label("No link", systemImage: "chain.slash")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.48))
                             }
                         }
                         .padding(20)
