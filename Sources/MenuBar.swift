@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
@@ -15,6 +16,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var menuIsTracking = false
     private var lastUpdateSignature = ""
     private var trackingObservers: [Any] = []
+    private var eventPopover: NSPopover?
 
     init(store: AppStore, alerts: AlertController, updates: UpdateController, openSettings: @escaping () -> Void, quit: @escaping () -> Void) {
         self.store = store
@@ -200,11 +202,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func eventMenuItem(for event: MeetingEvent, timeFont: NSFont, tabLocation: CGFloat) -> NSMenuItem {
-        // No-link events get an enabled, information-only row (a disabled item
-        // would wrongly suggest the event itself is unavailable).
-        let item = NSMenuItem(title: "", action: event.link == nil ? #selector(informationalAction) : #selector(joinAction), keyEquivalent: "")
+        // Linkless events stay enabled: selecting one opens its useful event
+        // details rather than pretending to be a Join action or doing nothing.
+        let item = NSMenuItem(title: "", action: event.link == nil ? #selector(showEventDetailsAction) : #selector(joinAction), keyEquivalent: "")
         item.target = self
-        item.representedObject = event.link
+        item.representedObject = event
         item.image = Palette.dotImage(color: event.nsColor)
         item.toolTip = Self.tooltipText(for: event)
         let paragraph = NSMutableParagraphStyle()
@@ -218,17 +220,75 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             title += "  ·  \(Fmt.barCountdown(to: event.start))"
         }
         text.append(NSAttributedString(string: title, attributes: titleAttributes))
+        if event.link == nil {
+            text.append(NSAttributedString(string: "  ", attributes: titleAttributes))
+            let attachment = NSTextAttachment()
+            if let image = NSImage(systemSymbolName: "chain.slash", accessibilityDescription: "No meeting link") {
+                image.isTemplate = true
+                attachment.image = image
+                attachment.bounds = CGRect(x: 0, y: -2, width: 11, height: 11)
+                text.append(NSAttributedString(attachment: attachment))
+            }
+            text.append(NSAttributedString(string: " No link", attributes: [
+                .font: NSFont.systemFont(ofSize: 10),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph,
+            ]))
+            item.setAccessibilityLabel("\(event.title.isEmpty ? "Untitled" : event.title), no meeting link")
+        }
         item.attributedTitle = text
         return item
     }
 
     @objc private func joinAction(_ sender: NSMenuItem) {
-        if let url = sender.representedObject as? URL { NSWorkspace.shared.open(url) }
+        if let event = sender.representedObject as? MeetingEvent, let url = event.link {
+            NSWorkspace.shared.open(url)
+        }
     }
 
-    /// Enabled no-op for no-link rows: selecting them must not look like a
-    /// broken action, but there is nothing to open.
-    @objc private func informationalAction() {}
+    @objc private func showEventDetailsAction(_ sender: NSMenuItem) {
+        guard let event = sender.representedObject as? MeetingEvent else { return }
+        // Let menu tracking finish before anchoring a transient popover to the
+        // status item; presenting it synchronously is immediately dismissed by
+        // the click that selected the menu item.
+        DispatchQueue.main.async { [weak self] in self?.showEventDetails(event) }
+    }
+
+    private func showEventDetails(_ event: MeetingEvent) {
+        guard let button = statusItem.button else { return }
+        eventPopover?.close()
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+        popover.contentSize = NSSize(width: 360, height: 280)
+        popover.contentViewController = NSHostingController(rootView: LinklessEventPopover(
+            event: event,
+            copyText: Self.eventDetailsText(for: event),
+            close: { [weak self] in self?.eventPopover?.close() }
+        ))
+        eventPopover = popover
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        // Status-menu selection does not necessarily activate an accessory app.
+        // Make the details popover key so its controls are immediately live and
+        // it does not require a throwaway first click merely to activate.
+        NSApp.activate(ignoringOtherApps: true)
+        popover.contentViewController?.view.window?.makeKey()
+    }
+
+    nonisolated static func eventDetailsText(for event: MeetingEvent) -> String {
+        var lines = [
+            event.title.isEmpty ? "Untitled event" : event.title,
+            "\(event.start.formatted(date: .abbreviated, time: .shortened)) – \(Fmt.time.string(from: event.end))",
+            "Calendar: \(event.calendarName)",
+        ]
+        if let location = event.location?.trimmingCharacters(in: .whitespacesAndNewlines), !location.isEmpty {
+            lines.append("Location: \(location)")
+        }
+        if let notes = event.notes?.trimmingCharacters(in: .whitespacesAndNewlines), !notes.isEmpty {
+            lines.append("Notes: \(notes)")
+        }
+        return lines.joined(separator: "\n")
+    }
 
     @objc private func pauseAction(_ sender: NSMenuItem) {
         switch sender.tag {
@@ -272,5 +332,77 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Routes through the custom flow (confirm when Settings is key, close
         // a showing alert) — never a bare terminate that would bypass both.
         quitHandler()
+    }
+}
+
+private struct LinklessEventPopover: View {
+    let event: MeetingEvent
+    let copyText: String
+    let close: () -> Void
+
+    private var location: String? {
+        guard let value = event.location?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
+    }
+
+    private var notes: String? {
+        guard let value = event.notes?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
+    }
+
+    private var mapsURL: URL? {
+        guard let location, URL(string: location)?.scheme == nil else { return nil }
+        var components = URLComponents(string: "https://maps.apple.com/")
+        components?.queryItems = [URLQueryItem(name: "q", value: location)]
+        return components?.url
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 10) {
+                Circle().fill(event.color).frame(width: 9, height: 9).padding(.top, 6)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(event.title.isEmpty ? "Untitled event" : event.title)
+                        .font(.system(size: 17, weight: .semibold))
+                        .lineLimit(2)
+                    Text(event.calendarName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            Label("No meeting link found", systemImage: "chain.slash")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            Label("\(event.start.formatted(date: .abbreviated, time: .shortened)) – \(Fmt.time.string(from: event.end))", systemImage: "clock")
+                .font(.system(size: 12))
+            if let location {
+                Label(location, systemImage: "mappin.and.ellipse")
+                    .font(.system(size: 12))
+                    .lineLimit(2)
+            }
+            if let notes {
+                Text(notes)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Spacer(minLength: 0)
+            HStack {
+                Button("Copy Details") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(copyText, forType: .string)
+                }
+                if let mapsURL {
+                    Button("Open in Maps") { NSWorkspace.shared.open(mapsURL) }
+                }
+                Spacer()
+                Button("Close", action: close)
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(18)
+        .frame(minWidth: 360, maxWidth: 360, minHeight: 240, maxHeight: 360)
     }
 }

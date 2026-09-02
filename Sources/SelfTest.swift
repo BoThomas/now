@@ -1089,8 +1089,8 @@ enum SelfTest {
                 now: inWindowNow).events
             return events.first?.link
         }
-        // A known-provider non-join page (recording) loses to an actual join
-        // link on an unknown host.
+        // A known-provider non-join page (recording) is ignored; an actual join
+        // link on an unknown host remains usable.
         let ranked = link("""
         BEGIN:VEVENT
         UID:rank@test
@@ -1101,6 +1101,72 @@ enum SelfTest {
         END:VEVENT
         """)
         c.expect(ranked?.host == "meet.corp.example.com", "join URL on unknown host beats known-host non-join page (got \(ranked?.host ?? "nil"))")
+
+        // Arbitrary URLs are event context, not Join actions — including URL:
+        // properties and pages hosted by otherwise-known meeting providers.
+        let unrelatedURLProperty = link("""
+        BEGIN:VEVENT
+        UID:unrelated-url@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Read before planning
+        URL:https://docs.example.com/planning/brief
+        DESCRIPTION:Background at https://example.com/reference
+        END:VEVENT
+        """)
+        c.expect(unrelatedURLProperty == nil, "unrelated URL property and notes links ignored")
+        let providerRecording = link("""
+        BEGIN:VEVENT
+        UID:recording@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Watch recording
+        LOCATION:https://zoom.us/rec/share/xyz
+        END:VEVENT
+        """)
+        c.expect(providerRecording == nil, "known-provider recording is not a meeting link")
+        let providerHomepage = link("""
+        BEGIN:VEVENT
+        UID:homepage@test
+        DTSTART:20260826T100000Z
+        SUMMARY:https://zoom.us/support
+        END:VEVENT
+        """)
+        c.expect(providerHomepage == nil, "known-provider support page is not a meeting link")
+
+        // Structured CONFERENCE data is authoritative even for an internal
+        // provider whose URL shape cannot be inferred safely.
+        let structuredConference = link("""
+        BEGIN:VEVENT
+        UID:structured@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Internal conference
+        CONFERENCE;VALUE=URI:https://conference.corp.example/room/alpha
+        END:VEVENT
+        """)
+        c.expect(structuredConference?.host == "conference.corp.example", "structured conference property trusted")
+
+        // Provider-specific roots are accepted only when they have a plausible
+        // room/code shape; generic internal join paths stay supported.
+        c.expect(LinkExtractor.isMeetingLink(URL(string: "https://meet.google.com/abc-defg-hij")!), "Google Meet code accepted")
+        c.expect(!LinkExtractor.isMeetingLink(URL(string: "https://meet.google.com/")!), "Google Meet homepage rejected")
+        c.expect(LinkExtractor.isMeetingLink(URL(string: "https://company.example/join/42")!), "generic join path accepted")
+        c.expect(!LinkExtractor.isMeetingLink(URL(string: "https://company.example/joining-notes")!), "join-like path substring rejected")
+        c.expect(!LinkExtractor.isMeetingLink(URL(string: "https://company.example/meeting-agenda")!), "meeting prose path rejected")
+        c.expect(LinkExtractor.isMeetingLink(URL(string: "https://us02web.zoom.us/my/alice")!), "Zoom personal room accepted")
+        c.expect(!LinkExtractor.isMeetingLink(URL(string: "https://zoom.us/rec/share/xyz")!), "Zoom recording classifier rejected")
+        let providerShapes = [
+            "https://meet.goto.com/123456789",
+            "https://meet.jit.si/EngineeringSync",
+            "https://whereby.com/planning-room",
+            "https://8x8.vc/company/room",
+            "https://bluejeans.com/123456789",
+            "https://meetings.dialpad.com/room/team-sync",
+            "https://app.chime.aws/meetings/abc",
+            "https://app.slack.com/huddle/T123/C456",
+            "https://freeconferencecall.com/wall/alice",
+        ]
+        c.expect(providerShapes.allSatisfy { LinkExtractor.isMeetingLink(URL(string: $0)!) }, "supported provider join shapes accepted")
+        c.expect(!LinkExtractor.isMeetingLink(URL(string: "https://bluejeans.com/products")!), "provider product page rejected")
+        c.expect(!LinkExtractor.isMeetingLink(URL(string: "https://app.slack.com/client/T123/C456")!), "Slack channel page rejected")
 
         // Documented field priority: location beats description for equal
         // join-quality links; ATTACH ranks below both.
@@ -1235,6 +1301,25 @@ enum SelfTest {
         c.expect(AlertController.keyAction(modifiers: plain, keyCode: 19, characters: "2", snoozeable: false, hasFocusedControl: false) == .joinIndex(2), "plain 2 joins second card")
         c.expect(AlertController.keyAction(modifiers: .command, keyCode: 18, characters: "1", snoozeable: true, hasFocusedControl: false) == .passThrough, "⌘1 passes through")
         c.expect(AlertController.keyAction(modifiers: plain, keyCode: 18, characters: "1", snoozeable: true, hasFocusedControl: true) == .joinIndex(1), "digits work with focused control too")
+
+        // Mixed reminders: Return uses the first available link, while card
+        // numbers preserve visual row identity and linkless rows do nothing.
+        let joinURL = URL(string: "https://zoom.us/j/123")!
+        let linkedStart = now.addingTimeInterval(60)
+        let linked = MeetingEvent(uid: "linked", title: "Linked", start: linkedStart, end: linkedStart.addingTimeInterval(1800),
+                                  location: nil, notes: nil, link: joinURL, calendarID: cal, calendarName: "Cal", colorIndex: 0)
+        let mixed = [shown, linked, imminent]
+        c.expect(AlertController.primaryJoinURL(in: mixed) == joinURL, "Return finds first available link in mixed reminder")
+        c.expect(AlertController.indexedJoinURL(in: mixed, number: 1) == nil, "linkless card number has no action")
+        c.expect(AlertController.indexedJoinURL(in: mixed, number: 2) == joinURL, "linked card number joins its row")
+        c.expect(AlertController.indexedJoinURL(in: mixed, number: 4) == nil, "out-of-range card number has no action")
+
+        let copiedDetails = MenuBarController.eventDetailsText(for: MeetingEvent(
+            uid: "details", title: "Planning", start: now, end: now.addingTimeInterval(1800),
+            location: "Room 4", notes: "Bring the draft", link: nil,
+            calendarID: cal, calendarName: "Work", colorIndex: 0
+        ))
+        c.expect(copiedDetails.contains("Planning") && copiedDetails.contains("Calendar: Work") && copiedDetails.contains("Location: Room 4") && copiedDetails.contains("Notes: Bring the draft"), "linkless detail copy includes event context")
 
         // Keystroke guard: fresh timer-fired panels swallow keys for a fixed
         // window after appearing — in-flight typing must never join/snooze/close.

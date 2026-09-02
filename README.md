@@ -32,13 +32,14 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 
 **Reminders**
 - Fullscreen takeover N seconds/minutes before an event starts (presets incl. Just in time + fine tune)
-- One-click **Join** when a meeting link is found — detected in `CONFERENCE`/`URL` properties, location, notes, Outlook HTML descriptions, attachments, even the title (Zoom, Google Meet, Teams, WebEx, GoTo, RingCentral, Jitsi, … or any URL — native `zoommtg://` and `msteams:` links are converted automatically)
+- One-click **Join** when a meeting link is found — detected conservatively in conference properties, provider-specific URLs, location, notes, Outlook HTML descriptions, attachments, and titles (native `zoommtg://` and `msteams:` links are converted automatically; unrelated event and document URLs are ignored)
+- Linkless reminders remain useful: event details and notes stay visible, with copy and location actions from the menu bar
 - Live countdown, Snooze 1 min (re-appears even after the meeting has started), Close
 - Keyboard: `esc` close · `return` join · `s` snooze · `1`–`9` join a specific meeting when several appear
 
 **Menu bar**
 - Live countdown to the next meeting — including late ones (`-3m`), for as long as you configure
-- Upcoming event list (click to join), pause reminders (1 h / 3 h / until tomorrow 9:00 / indefinitely), refresh, reminder preview
+- Upcoming event list (click to join or inspect a linkless event), pause reminders (1 h / 3 h / until tomorrow 9:00 / indefinitely), refresh, reminder preview
 
 **Calendars**
 - Any shared iCal/ICS feed: Google secret address, Outlook publish-to-web, iCloud webcal, church.tools, …
