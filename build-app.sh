@@ -35,6 +35,7 @@ export SWIFT_MODULE_CACHE_PATH="$MODULE_CACHE"
 swiftc -parse-as-library -swift-version 5 -sdk "$SDK_PATH" -target arm64-apple-macos13.0 Sources/*.swift \
   -o "$APP/Contents/MacOS/$EXECUTABLE" \
   -framework SwiftUI -framework AppKit -framework ServiceManagement -framework EventKit -framework CoreAudio
+strip -x "$APP/Contents/MacOS/$EXECUTABLE"
 
 swiftc -sdk "$SDK_PATH" -target arm64-apple-macos13.0 make-icon.swift -o .build/make-icon
 .build/make-icon "$ICONSET"
