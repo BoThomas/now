@@ -1309,6 +1309,30 @@ enum SelfTest {
         let chromeOwners = [MeetingAudioOwner(pid: 12, bundleID: "com.google.Chrome.helper")]
         c.expect(MeetingActivityProbe.activity(owners: chromeOwners, includeBrowsers: false) == .inactive, "browser input ignored by default")
         c.expect(MeetingActivityProbe.activity(owners: chromeOwners, includeBrowsers: true) == .meeting(.browser), "browser input classifies when opted in")
+        let heliumOwners = [MeetingAudioOwner(pid: 14, bundleID: "net.imput.helium.helper")]
+        c.expect(MeetingActivityProbe.activity(owners: heliumOwners, includeBrowsers: false) == .inactive, "Helium input ignored by default")
+        c.expect(MeetingActivityProbe.activity(owners: heliumOwners, includeBrowsers: true) == .meeting(.browser), "Helium input classifies when opted in")
+        let modernBrowserIDs = [
+            "company.thebrowser.dia.helper",
+            "company.thebrowser.Browser.helper",
+            "com.brave.Browser.helper",
+            "ai.perplexity.comet.helper",
+            "com.openai.atlas.web",
+            "com.browseros.BrowserOS.helper.renderer",
+            "com.opera.Neon.helper",
+            "org.ladybird.Ladybird",
+            "org.chromium.Chromium.helper",
+            "com.vivaldi.Vivaldi.helper",
+            "com.kagi.kagimacOS.WebContent",
+            "app.zen-browser.plugincontainer",
+            "com.sigmaos.sigmaos.macos.WebContent",
+            "com.duckduckgo.macos.browser.WebContent",
+            "io.gitlab.librewolf-community.librewolf"
+        ]
+        for bundleID in modernBrowserIDs {
+            let owners = [MeetingAudioOwner(pid: 15, bundleID: bundleID)]
+            c.expect(MeetingActivityProbe.activity(owners: owners, includeBrowsers: true) == .meeting(.browser), "modern browser classifies: \(bundleID)")
+        }
         let unrelatedOwners = [MeetingAudioOwner(pid: 13, bundleID: "com.example.recorder")]
         c.expect(MeetingActivityProbe.activity(owners: unrelatedOwners, includeBrowsers: true) == .inactive, "unknown input owner does not suppress")
         let unidentifiedOwners = [MeetingAudioOwner(pid: -1, bundleID: "")]

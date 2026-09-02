@@ -118,9 +118,24 @@ enum MeetingActivityProbe {
                 "com.apple.webkit",
                 "org.mozilla.firefox",
                 "company.thebrowser.browser",
+                "company.thebrowser.dia",
                 "com.brave.browser",
                 "com.microsoft.edgemac",
-                "com.operasoftware.opera"
+                "com.operasoftware.opera",
+                "com.opera.neon",
+                "net.imput.helium",
+                "ai.perplexity.comet",
+                "com.openai.atlas",
+                "com.browseros.browseros",
+                "org.ladybird.ladybird",
+                "org.chromium.chromium",
+                "com.vivaldi.vivaldi",
+                "com.kagi.kagimacos",
+                "app.zen-browser",
+                "com.sigmaos.sigmaos.macos",
+                "com.duckduckgo.macos.browser",
+                "io.gitlab.librewolf-community",
+                "net.librewolf.librewolf"
             ]
             if bundleIDs.contains(where: { bundleID in browserPrefixes.contains(where: bundleID.hasPrefix) }) {
                 return .meeting(.browser)
