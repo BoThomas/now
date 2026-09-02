@@ -289,6 +289,22 @@ enum UpdateLogic {
         return state
     }
 
+    /// A successful install relaunches the app AS the pending version: when
+    /// the running version matches the pending marker, the update landed and
+    /// the relaunched app confirms it with the installed window. The failure
+    /// path can never match — it restores and relaunches the OLD version
+    /// (with `NOW_UPDATE_ERROR`) instead.
+    static func justInstalledVersion(pending: String?, currentVersion: String) -> String? {
+        guard let pending, pending == currentVersion else { return nil }
+        return pending
+    }
+
+    static func stateAfterSuccessfulInstall(_ old: UpdateState) -> UpdateState {
+        var state = old
+        state.pendingInstallVersion = nil
+        return state
+    }
+
     static func stateAfterShowingUpdate(_ old: UpdateState, version: String?) -> UpdateState {
         guard let version else { return old }
         var state = old
@@ -784,10 +800,12 @@ enum UpdateStaging {
 enum UpdateInstaller {
     /// The helper contract (parameters arrive via environment, never
     /// interpolated): wait for the old PID to die (bounded), move old →
-    /// backup, staged → app, launch its executable, wait for an exact PID/token
-    /// health acknowledgement, then trash the old bundle. Every mutation-
-    /// time failure renames the failed new app aside, restores a valid bundle,
-    /// and relaunches the OLD app with
+    /// backup, staged → app, launch its executable (stripping any stale
+    /// NOW_UPDATE_ERROR inherited from an earlier failed install — a
+    /// successful retry must never be reported as another failure), wait for
+    /// an exact PID/token health acknowledgement, then trash the old bundle.
+    /// Every mutation-time failure renames the failed new app aside,
+    /// restores a valid bundle, and relaunches the OLD app with
     /// `NOW_UPDATE_ERROR` so it can tell the user; if even that fails, the
     /// browser opens the releases page. Rollback never deletes the app path
     /// before the backup has been restored.
@@ -827,7 +845,7 @@ enum UpdateInstaller {
     mv "$NOW_APP_PATH" "$NOW_BACKUP_PATH" || fail "backup move failed"
     mv "$NOW_STAGED_APP" "$NOW_APP_PATH" || fail "install move failed"
     [ "${NOW_SMOKE_HELPER_FAULT:-}" = "relaunch" ] && fail "relaunch failed"
-    env -u NOW_SMOKE_FAILURE_REPORT "$NOW_APP_PATH/Contents/MacOS/now" >/dev/null 2>&1 &
+    env -u NOW_SMOKE_FAILURE_REPORT -u NOW_UPDATE_ERROR "$NOW_APP_PATH/Contents/MacOS/now" >/dev/null 2>&1 &
     new_pid=$!
     health_end=$(( $(date +%s) + ${NOW_SMOKE_HEALTH_TIMEOUT:-30} ))
     while :; do
@@ -905,10 +923,13 @@ enum UpdateInstaller {
 
 // MARK: - Controller (MainActor)
 
-/// What the update window shows. One window class, three content shapes.
+/// What the update window shows. One window class, four content shapes.
 enum UpdateWindowContent: Equatable {
     case available(UpdateManifest)
     case upToDate
+    /// The helper relaunched us as a freshly installed version — one-time
+    /// confirmation that the update worked.
+    case installed(version: String)
     /// Any refusal/failure: fetch error (retryable), install guard refusal,
     /// or the NOW_UPDATE_ERROR relaunch path.
     case problem(title: String, message: String, retry: UpdateRetry?)
@@ -946,6 +967,10 @@ final class UpdateController: ObservableObject {
     var onWindowRequest: (() -> Void)?
     var onTerminateForUpdate: (() -> Void)?
 
+    /// Detected at launch when the running version equals the pending-install
+    /// marker; consumed (and confirmed to the user) only after the startup
+    /// health acknowledgement — the install's commit point.
+    private(set) var pendingInstalledVersion: String?
     private(set) var state = UpdateState()
     private var stagedRoot: URL?
     private var checkTimer: Timer?
@@ -969,13 +994,15 @@ final class UpdateController: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
-        // A successful install relaunches us AS the pending version — clear
-        // the marker so a later failed update can't mark the wrong version
-        // as already-notified.
-        if state.pendingInstallVersion == UpdateLogic.currentVersion {
-            state.pendingInstallVersion = nil
-            saveState()
-        }
+        // A successful install relaunches us AS the pending version — DETECT
+        // the marker now, but consume it only once startup has been health-
+        // acknowledged (`startupHealthAcknowledged`, +2 s): until then the
+        // install helper can still roll back to the old version, and the
+        // surviving marker is exactly what lets that rolled-back app suppress
+        // re-offering the failed version. (The failed-install relaunch runs
+        // the OLD app with NOW_UPDATE_ERROR and shows the problem window —
+        // the two paths never overlap.)
+        pendingInstalledVersion = UpdateLogic.justInstalledVersion(pending: state.pendingInstallVersion, currentVersion: UpdateLogic.currentVersion)
         UpdateStaging.cleanupLaunchArtifacts(bundlePath: Bundle.main.bundlePath)
         // Launch +10 s: past the startup burst, before the user leaves.
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
@@ -985,6 +1012,20 @@ final class UpdateController: ObservableObject {
         checkTimer = AppStore.commonTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkMaybeAutomatic() }
         }
+    }
+
+    /// The GUI app just wrote its startup health acknowledgement — the
+    /// install transaction's commit point. Only now is a pending-install
+    /// marker proof of success: consume it and confirm to the user. (Called
+    /// from AppDelegate right after `NowApp.acknowledgeUpdatedStartup()`;
+    /// before this, the helper may still roll back and relaunch the OLD app,
+    /// where the marker must survive so the failed version isn't re-offered.)
+    func startupHealthAcknowledged() {
+        pendingInstalledVersion = nil
+        guard let installed = UpdateLogic.justInstalledVersion(pending: state.pendingInstallVersion, currentVersion: UpdateLogic.currentVersion) else { return }
+        state = UpdateLogic.stateAfterSuccessfulInstall(state)
+        saveState()
+        windowContent = .installed(version: installed)
     }
 
     /// Automatic trigger (launch timer / 24 h timer / wake) — honors the

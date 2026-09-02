@@ -1,10 +1,11 @@
 import SwiftUI
 import AppKit
 
-/// The update window content — one window class, three states (available /
-/// up to date / problem). Plain SwiftUI keyboard shortcuts are safe here:
-/// both buttons always exist, so the alert's vanishing-button keyMonitor
-/// machinery is deliberately not used. No HTML/JS in release notes, ever.
+/// The update window content — one window class, four states (available /
+/// up to date / installed / problem). Plain SwiftUI keyboard shortcuts are
+/// safe here: both buttons always exist, so the alert's vanishing-button
+/// keyMonitor machinery is deliberately not used. No HTML/JS in release
+/// notes, ever.
 struct UpdateView: View {
     @ObservedObject var controller: UpdateController
 
@@ -15,6 +16,8 @@ struct UpdateView: View {
                 availableView(manifest)
             case .upToDate:
                 upToDateView
+            case .installed(let version):
+                installedView(version)
             case .problem(let title, let message, let retry):
                 problemView(title: title, message: message, retry: retry)
             case nil:
@@ -128,6 +131,43 @@ struct UpdateView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
+            }
+            Spacer(minLength: 8)
+            footer(
+                primaryTitle: "OK",
+                primaryEnabled: true,
+                primaryAction: { controller.dismissWindow() },
+                cancelTitle: nil
+            )
+        }
+        .frame(height: 380, alignment: .topLeading)
+    }
+
+    // MARK: - Installed
+
+    /// One-time confirmation shown once a successful install's startup has
+    /// been health-acknowledged (the commit point) — until then the app is
+    /// quietly back, leaving the user to guess whether the update worked.
+    private func installedView(_ version: String) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
+                appIcon
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Update installed")
+                        .font(.system(size: 17, weight: .semibold))
+                    Text("now \(version) is installed and running.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.green)
+                Text("Signature verified · update installed")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
             footer(
