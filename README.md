@@ -5,7 +5,7 @@
 
 Native macOS menu bar app for meeting reminders, inspired by [inyourface.app](https://inyourface.app).
 
-Add the shared iCal (ICS) links of your calendars — or connect Apple Calendar directly — and `now` takes over the whole screen right before a meeting starts, using a big one-click join button when it finds a meeting link!
+Add your calendars with shared iCal links or Apple Calendar directly; `now` takes over the whole screen right before a meeting starts, with a big one-click **Join** button when it finds a meeting link.
 
 <table>
   <tr>
@@ -20,51 +20,42 @@ Add the shared iCal (ICS) links of your calendars — or connect Apple Calendar 
   <a href="https://github.com/BoThomas/now/releases/latest"><img src="https://img.shields.io/badge/⬇_Download-Latest_Release-2478D0?style=for-the-badge" alt="Download latest release"></a>
 </p>
 
-Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/releases/latest), unzip, and move `now.app` to /Applications.
+Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/releases/latest), unzip, and move `now.app` to `/Applications`.
 
-> Release builds are signed with a stable self-signed identity (not notarized with Apple), so macOS Gatekeeper shows a warning on first launch. Any one of these fixes it — only needed once:
+> Release builds are signed but not notarized, so Gatekeeper warns on first launch. Do this once:
 >
-> 1. Click **Done** in the warning dialog, then open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
-> 2. Right-click `now.app` → **Open** → **Open**.
-> 3. In Terminal: `xattr -cr /Applications/now.app`
+> - **System Settings → Privacy & Security → Open Anyway**
+> - or, right-click `now.app` → **Open** → **Open**
+> - or, `xattr -cr /Applications/now.app` in Terminal
 
 ## Features
 
 **Reminders**
-- Fullscreen takeover N seconds/minutes before an event starts (presets incl. Just in time + fine tune)
-- One-click **Join** when a meeting link is found — detected conservatively in conference properties, provider-specific URLs, location, notes, Outlook HTML descriptions, attachments, and titles (native `zoommtg://` and `msteams:` links are converted automatically; unrelated event and document URLs are ignored)
-- Linkless reminders remain useful: event details and notes stay visible, with copy and location actions from the menu bar
-- Live countdown, Snooze 1 min (re-appears even after the meeting has started), Close
-- Keyboard: `esc` close · `return` join · `s` snooze · `1`–`9` join a specific meeting when several appear
-- Optional local meeting detection prevents new reminders from interrupting an active call; browser calls are a separate best-effort opt-in. No audio is recorded.
+- Fullscreen reminder just before a meeting starts.
+- One-click **Join** (Zoom, Meet, Teams, Webex, any meeting link).
+- Keyboard shortcuts: `esc` close, `return` join, `s` snooze, `1`-`9` join a specific meeting.
+- Mute reminders by title or regex; muted meetings stay visible and joinable.
+- Optional "don't interrupt me while I'm in a meeting" mode (no audio recorded).
+- Choose between different alert sounds.
 
 **Menu bar**
-- Live countdown to the next meeting — including late ones (`-3m`), for as long as you configure
-- Upcoming event list (click to join or inspect a linkless event), pause reminders (1 h / 3 h / until tomorrow 9:00 / indefinitely), refresh, reminder preview
+- Live countdown to the next meeting, including late ones (`-3m`).
+- Upcoming events grouped by day: click to join, hover for details.
+- Pause reminders, refresh (⌘R), reminder preview.
 
 **Calendars**
-- Any shared iCal/ICS feed: Google secret address, Outlook publish-to-web, iCloud webcal, church.tools, …
-- **Apple Calendar integration:** use any calendar configured in Calendar.app — iCloud, Google, Exchange/Outlook, Yahoo, generic CalDAV, "On My Mac" — with no links at all. Grant access once in Settings → *Apple Calendars*. Native calendars update near-instantly (they react to Calendar.app changes live, instead of waiting for the next feed poll) and recurring events, cancellations and moved instances just work.
-- Recurring events: RRULE with daily/weekly/monthly/yearly frequency, INTERVAL, COUNT, UNTIL, BYDAY, EXDATE, and moved or cancelled instances
-- Per-calendar color and upcoming-event list with join links, sync status and errors, refresh interval (5–60 min) plus refresh on wake
-- Per-calendar title filters mute reminders for matching meeting titles (full-title or regex) while keeping those meetings visible and joinable
-- Option to hide events you've declined
+- Any shared iCal/ICS feed: Google, Outlook, iCloud, CalDAV, …
+- **Apple Calendar**, no links needed; changes show up near-instantly.
+- Recurring events, including moved and cancelled instances.
+- Per-calendar color, on/off switch, title filters.
+- Hide events you've declined.
 
-**Settings** — lead time presets, 13 system alert sounds with preview, late-meeting visibility, menu bar countdown toggle, Launch at Login, reminder preview.
+**General**
+- In-app auto-updates.
+- Launch at Login.
+- Native Swift, no Electron.
 
-### Meeting detection notes
-
-- Meeting detection reads local CoreAudio process metadata only. It does not record audio and does not need microphone permission.
-- Native meeting apps can be identified by process. For browser calls, macOS identifies the browser but not the responsible tab or website, so browser detection is off by default and may mistake recording or dictation for a meeting.
-- The option requires process-level audio metadata available on newer macOS versions. If the capability check fails, `now` leaves the option off and continues showing reminders normally.
-
-### Apple Calendar permission notes
-
-- Permission is only requested when you click **Grant Access…** in Settings → *Apple Calendars* — never at launch. Calendar data never leaves your Mac.
-- If you later deny it, re-enable in **System Settings → Privacy & Security → Calendars**.
-- The app is signed with a stable self-signed identity ("now Developer"), and macOS keys the Calendar grant to the code signature — that identity stays the same across releases, so the grant survives app updates. Local dev builds made *without* that identity fall back to ad-hoc signing and will be re-asked once per build. If a grant seems stuck, run `tccutil reset Calendars com.thomasboch.now` and grant again.
-- If you enable the same calendar twice (as an ICS link *and* via Apple Calendar), its events will show up twice — keep one of the two.
-- `now` reads calendar events only; you may also see Calendar.app's own notifications for the same meetings — turn those off per-calendar in Calendar.app if you get double reminders.
+</details>
 
 ## Building from source
 
@@ -90,6 +81,4 @@ See [AGENTS.md](AGENTS.md) for development notes and the release workflow.
 
 ## Author & License
 
-[Thomas Boch](https://thomasboch.com) · [GitHub](https://github.com/BoThomas)
-
-MIT — see [LICENSE](LICENSE).
+[Thomas Boch](https://thomasboch.com) · [GitHub](https://github.com/BoThomas) · [MIT license](LICENSE)
