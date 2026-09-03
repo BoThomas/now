@@ -192,6 +192,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if let notes = event.notes, !notes.isEmpty, !isJustJoinLink(notes, event: event), !LinkExtractor.isJoinLinkOnlyText(notes, link: event.link) {
             lines.append("Notes: \(Fmt.wrapped(notes, width: 72, maxLines: 4))")
         }
+        if event.isMuted {
+            lines.append("Reminders muted (title filter)")
+        }
         return lines.joined(separator: "\n")
     }
 
@@ -207,7 +210,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: "", action: event.link == nil ? #selector(showEventDetailsAction) : #selector(joinAction), keyEquivalent: "")
         item.target = self
         item.representedObject = event
-        item.image = Palette.dotImage(color: event.nsColor)
+        // Muted rows keep their calendar dot, faded. The title itself keeps its
+        // NATIVE color — explicit foreground colors break menu selection
+        // highlighting (hard-won constraint); muting is signaled by the dot plus
+        // compact trailing state icons.
+        item.image = Palette.dotImage(color: event.isMuted ? event.nsColor.withAlphaComponent(0.35) : event.nsColor)
         item.toolTip = Self.tooltipText(for: event)
         let paragraph = NSMutableParagraphStyle()
         paragraph.tabStops = [NSTextTab(textAlignment: .right, location: tabLocation, options: [:])]
@@ -215,26 +222,44 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let titleAttributes: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 0), .paragraphStyle: paragraph]
         let text = NSMutableAttributedString(string: Fmt.time.string(from: event.start), attributes: timeAttributes)
         text.append(NSAttributedString(string: "\t", attributes: titleAttributes))
-        var title = " \(Fmt.ellipsized(event.title.isEmpty ? "Untitled" : event.title, limit: 48))"
-        if event.start <= Date() {
-            title += "  ·  \(Fmt.barCountdown(to: event.start))"
-        }
+        let title = " \(Fmt.ellipsized(event.title.isEmpty ? "Untitled" : event.title, limit: 48))"
         text.append(NSAttributedString(string: title, attributes: titleAttributes))
-        if event.link == nil {
-            text.append(NSAttributedString(string: "  ", attributes: titleAttributes))
-            let attachment = NSTextAttachment()
-            if let image = NSImage(systemSymbolName: "chain.slash", accessibilityDescription: "No meeting link") {
-                image.isTemplate = true
-                attachment.image = image
-                attachment.bounds = CGRect(x: 0, y: -2, width: 11, height: 11)
-                text.append(NSAttributedString(attachment: attachment))
-            }
-            text.append(NSAttributedString(string: " No link", attributes: [
+        if event.start <= Date() {
+            text.append(NSAttributedString(string: "  \(Fmt.barCountdown(to: event.start))", attributes: [
                 .font: NSFont.systemFont(ofSize: 10),
                 .foregroundColor: NSColor.secondaryLabelColor,
                 .paragraphStyle: paragraph,
             ]))
-            item.setAccessibilityLabel("\(event.title.isEmpty ? "Untitled" : event.title), no meeting link")
+        }
+        var accessibilityLabel = event.title.isEmpty ? "Untitled" : event.title
+        if event.isMuted {
+            let attachment = NSTextAttachment()
+            if let image = NSImage(systemSymbolName: "bell.slash", accessibilityDescription: "Reminders muted") {
+                image.isTemplate = true
+                attachment.image = image
+                // y = -1 centers the 11pt box on the 13pt menu font's cap height
+                // (y = -2 sat visibly low — bell glyphs carry their mass low).
+                attachment.bounds = CGRect(x: 0, y: -1, width: 11, height: 11)
+                text.append(NSAttributedString(string: "  ", attributes: titleAttributes))
+                text.append(NSAttributedString(attachment: attachment))
+            }
+            accessibilityLabel += ", reminders muted"
+        }
+        if event.link == nil {
+            text.append(NSAttributedString(string: "  ", attributes: titleAttributes))
+            let attachment = NSTextAttachment()
+            let configuration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+            if let base = NSImage(systemSymbolName: "personalhotspot.slash", accessibilityDescription: "No meeting link"),
+               let image = base.withSymbolConfiguration(configuration) {
+                image.isTemplate = true
+                attachment.image = image
+                attachment.bounds = CGRect(x: 0, y: -1, width: 12, height: 12)
+                text.append(NSAttributedString(attachment: attachment))
+            }
+            accessibilityLabel += ", no meeting link"
+        }
+        if event.isMuted || event.link == nil {
+            item.setAccessibilityLabel(accessibilityLabel)
         }
         item.attributedTitle = text
         return item
@@ -371,15 +396,27 @@ private struct LinklessEventPopover: View {
                 }
                 Spacer(minLength: 0)
             }
-            Label("No meeting link found", systemImage: "chain.slash")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-            Label("\(event.start.formatted(date: .abbreviated, time: .shortened)) – \(Fmt.time.string(from: event.end))", systemImage: "clock")
-                .font(.system(size: 12))
+            HStack(spacing: 8) {
+                Image(systemName: "personalhotspot.slash")
+                    .frame(width: 14)
+                Text("No meeting link found")
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Image(systemName: "clock")
+                    .frame(width: 14)
+                Text("\(event.start.formatted(date: .abbreviated, time: .shortened)) – \(Fmt.time.string(from: event.end))")
+            }
+            .font(.system(size: 12))
             if let location {
-                Label(location, systemImage: "mappin.and.ellipse")
-                    .font(.system(size: 12))
-                    .lineLimit(2)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .frame(width: 14)
+                    Text(location)
+                        .lineLimit(2)
+                }
+                .font(.system(size: 12))
             }
             if let notes {
                 Text(notes)

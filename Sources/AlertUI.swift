@@ -127,12 +127,13 @@ final class AlertController: ObservableObject {
     }
 
     /// Drops cards whose event vanished from the store (cancelled, calendar
-    /// removed/disabled, occurrence deleted) and picks up refreshed copies of
-    /// changed events. A rescheduled meeting gets a NEW id, so its old card
-    /// drops and the new time earns its own reminder when due again. Pure.
+    /// removed/disabled, occurrence deleted) or became title-muted, and picks up
+    /// refreshed copies of changed events. A rescheduled meeting gets a NEW id,
+    /// so its old card drops and the new time earns its own reminder when due
+    /// again. Pure.
     nonisolated static func reconciledShownEvents(shown: [MeetingEvent], current: [MeetingEvent]) -> [MeetingEvent] {
         let byID = Dictionary(uniqueKeysWithValues: current.map { ($0.id, $0) })
-        return shown.compactMap { byID[$0.id] }
+        return shown.compactMap { byID[$0.id] }.filter { !$0.isMuted }
     }
 
     /// Called from `AppStore.commitEvents` so an open alert tracks reality.
@@ -470,7 +471,7 @@ struct SingleEventView: View {
                 .buttonStyle(AlertJoinButtonStyle(color: event.alertButtonColor))
             } else {
                 VStack(spacing: 12) {
-                    Label("No meeting link found", systemImage: "chain.slash")
+                    Label("No meeting link found", systemImage: "personalhotspot.slash")
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(.white.opacity(0.58))
                     if let notes = displayNotes {
@@ -544,7 +545,7 @@ struct MultiEventView: View {
                                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                                         .foregroundStyle(.white)
                                 } else {
-                                    Image(systemName: "chain.slash")
+                                    Image(systemName: "personalhotspot.slash")
                                         .font(.system(size: 10, weight: .semibold))
                                         .foregroundStyle(.white.opacity(0.62))
                                 }
@@ -568,7 +569,7 @@ struct MultiEventView: View {
                                 }
                                 .buttonStyle(AlertJoinButtonStyle(color: event.alertButtonColor, compact: true))
                             } else {
-                                Label("No link", systemImage: "chain.slash")
+                                Label("No link", systemImage: "personalhotspot.slash")
                                     .font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(.white.opacity(0.48))
                             }

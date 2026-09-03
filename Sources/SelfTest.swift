@@ -35,12 +35,14 @@ enum SelfTest {
         fetchMergeTests(&fetch)
         var bookkeeping = Checker()
         bookkeepingTests(&bookkeeping)
+        var filters = Checker()
+        titleFilterTests(&filters)
         var updates = Checker()
         updateTests(&updates)
         let sections: [(String, Checker)] = [
             ("parser", parser), ("durations", durations), ("recurrence", recurrence), ("zones", zones),
             ("overrides", overrides), ("compliance", compliance), ("links", links), ("reminders", reminders),
-            ("settings", settings), ("fetch", fetch), ("bookkeeping", bookkeeping), ("updates", updates),
+            ("settings", settings), ("fetch", fetch), ("bookkeeping", bookkeeping), ("updates", updates), ("filters", filters),
         ]
         let all = sections.flatMap { $0.1.failures }
         if all.isEmpty {
@@ -1656,6 +1658,190 @@ enum SelfTest {
         let normalized = AppStore.normalizedEvents([tie1, e2, tie1, tie2])
         c.expect(normalized.count == 3, "duplicate ids deduped")
         c.expect(normalized.first?.id == tie2.id, "equal starts ordered by title tie-breaker")
+    }
+
+    // MARK: - Title filters (muted meetings)
+
+    static func titleFilterTests(_ c: inout Checker) {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+        // Exact matching: whole-title, case-insensitive, whitespace-trimmed.
+        let exact = TitleFilterRule(pattern: "  Weekly Standup \n", mode: .exact)
+        c.expect(exact.matches(title: "Weekly Standup"), "exact rule matches same title (trimmed)")
+        c.expect(exact.matches(title: "weekly standup"), "exact rule is case-insensitive")
+        c.expect(!exact.matches(title: "Weekly Standup — extra"), "exact rule requires the whole title")
+        c.expect(!exact.matches(title: "Standup"), "exact rule rejects different title")
+        c.expect(!exact.matches(title: ""), "exact rule never matches an empty title")
+        c.expect(exact.isValid, "exact rule with content is valid")
+
+        // Regex: search semantics, anchors, inline case flag, literal escapes.
+        c.expect(TitleFilterRule(pattern: "^1:1 with .+$", mode: .regex).matches(title: "1:1 with Alice"), "regex searches with anchors")
+        c.expect(!TitleFilterRule(pattern: "^1:1", mode: .regex).matches(title: "Prep 1:1"), "anchored regex rejects other positions")
+        c.expect(TitleFilterRule(pattern: "(?i)standup", mode: .regex).matches(title: "WEEKLY STANDUP"), "regex honors inline (?i)")
+        c.expect(TitleFilterRule(pattern: "a\\.b", mode: .regex).matches(title: "xa.bz"), "regex escapes literal dots")
+        c.expect(!TitleFilterRule(pattern: "(?i)standup", mode: .regex).matches(title: "Retro"), "regex rejects non-matching title")
+
+        // Invalid / empty / over-length patterns are inert, never fatal.
+        let invalid = TitleFilterRule(pattern: "([unclosed", mode: .regex)
+        c.expect(!invalid.isValid && !invalid.matches(title: "anything"), "invalid regex is flagged and inert")
+        let blank = TitleFilterRule(pattern: "   ", mode: .exact)
+        c.expect(!blank.isValid && !blank.matches(title: "x"), "empty pattern is inert")
+        let overlength = TitleFilterRule(pattern: String(repeating: "a", count: TitleFilterRule.maxRegexPatternLength + 1), mode: .regex)
+        c.expect(!overlength.isValid && !overlength.matches(title: String(repeating: "a", count: 600)), "over-length regex pattern is invalid and inert")
+        // Exact rules carry no length cap: equality is cheap, and truncating a
+        // title would silently break "whole title" semantics.
+        let longTitle = String(repeating: "t", count: 600)
+        c.expect(TitleFilterRule(pattern: longTitle, mode: .exact).matches(title: longTitle), "very long exact rule still matches")
+
+        // Rule lists: any-match, ordered selection, prepared-matcher equivalence.
+        let rules = [
+            TitleFilterRule(pattern: "Standup", mode: .exact),
+            TitleFilterRule(pattern: "^Focus.*Block$", mode: .regex),
+            TitleFilterRule(pattern: "Standup", mode: .regex), // second Standup matcher (regex flavor)
+        ]
+        c.expect(TitleFilterRule.matches(title: "STANDUP", rules: rules), "rule list matches via exact rule (case-insensitive)")
+        c.expect(TitleFilterRule.matches(title: "Focus Deep Block", rules: rules), "rule list matches via regex")
+        c.expect(!TitleFilterRule.matches(title: "Retro", rules: rules), "rule list rejects non-matching title")
+        c.expect(TitleFilterRule.matchingRules(title: "Standup", rules: rules).map(\.pattern) == ["Standup", "Standup"], "matchingRules returns the matching subset in list order")
+        c.expect(TitleFilterRule.matchingRules(title: "Retro", rules: rules).isEmpty, "matchingRules empty when nothing matches")
+        let matcher = TitleFilterMatcher(rules: rules)
+        c.expect(matcher.matches(title: "STANDUP") && matcher.matches(title: "Focus Deep Block") && !matcher.matches(title: "Retro"), "prepared matcher equals per-rule matching")
+
+        // Toggle helpers: add (deduped), selective remove, normalization caps.
+        let added = TitleFilterRule.addingExact(title: "  Retro \n", rules: rules)
+        c.expect(added.count == rules.count + 1 && added.last?.pattern == "Retro" && added.last?.mode == .exact, "addingExact appends a trimmed exact rule")
+        c.expect(TitleFilterRule.addingExact(title: "standup", rules: rules).count == rules.count, "addingExact dedupes case-insensitive duplicates")
+        c.expect(TitleFilterRule.addingExact(title: "  ", rules: rules).count == rules.count, "addingExact ignores empty titles")
+        c.expect(TitleFilterRule.removing(ids: [rules[0].id], from: rules).map(\.pattern) == ["^Focus.*Block$", "Standup"], "removing drops exactly the selected ids")
+        let many = (0..<60).map { TitleFilterRule(pattern: "rule\($0)", mode: .exact) }
+        c.expect(TitleFilterRule.normalized(many).count == TitleFilterRule.maxRulesPerCalendar, "normalization caps the rule count")
+        let messy = [
+            TitleFilterRule(pattern: "  x  ", mode: .exact),
+            TitleFilterRule(pattern: "X", mode: .exact),
+            TitleFilterRule(pattern: "", mode: .exact),
+            TitleFilterRule(pattern: "y", mode: .regex),
+            TitleFilterRule(pattern: "y", mode: .regex),
+            invalid, // invalid regex is KEPT (editable persisted state), just inert
+        ]
+        c.expect(TitleFilterRule.normalized(messy).map(\.pattern) == ["x", "y", "([unclosed"], "normalization trims, drops empties, dedupes, keeps invalid regexes")
+
+        // Decoding: defaults for missing keys, per-entry failure containment,
+        // old JSON without the key, cap enforcement, invalid-regex persistence.
+        func decodeSubscription(_ json: String) -> CalendarSubscription? {
+            guard let data = json.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(CalendarSubscription.self, from: data)
+        }
+        c.expect(decodeSubscription(#"{"name":"Work","url":"https://x.example/cal.ics"}"#)?.titleFilters.isEmpty ?? false, "subscriptions decode without titleFilters key (backward compat)")
+        let malformed = decodeSubscription(#"{"name":"Work","url":"https://x.example/cal.ics","titleFilters":[{"pattern":"OK"},{"id":123,"pattern":"bad"}]}"#)
+        c.expect(malformed?.titleFilters.map(\.pattern) == ["OK"], "one malformed rule entry never fails the calendar record")
+        let defaults = decodeSubscription(#"{"name":"Work","url":"https://x.example/cal.ics","titleFilters":[{"pattern":"Retro"}]}"#)
+        c.expect(defaults?.titleFilters.first?.mode == .exact, "missing mode decodes to exact (the default)")
+        let missingFieldsData = #"{"mode":"exact"}"#.data(using: .utf8)!
+        let missingFieldsA = try? JSONDecoder().decode(TitleFilterRule.self, from: missingFieldsData)
+        let missingFieldsB = try? JSONDecoder().decode(TitleFilterRule.self, from: missingFieldsData)
+        c.expect(missingFieldsA?.pattern == "" && missingFieldsA?.id != missingFieldsB?.id, "missing pattern is inert and missing ids receive fresh UUIDs")
+        let overCapJSON = "[" + (0..<60).map { #"{"pattern":"r\#($0)"}"# }.joined(separator: ",") + "]"
+        c.expect(decodeSubscription(#"{"name":"Work","url":"https://x.example/cal.ics","titleFilters":\#(overCapJSON)}"#)?.titleFilters.count == TitleFilterRule.maxRulesPerCalendar, "decode truncates over-cap rule lists")
+        let nativeData = #"{"ekIdentifier":"EK-1","name":"Home","titleFilters":[{"pattern":"G(y","mode":"regex"},{"pattern":"Quiet hours"}]}"#.data(using: .utf8)!
+        let native = try? JSONDecoder().decode(NativeCalendar.self, from: nativeData)
+        c.expect(native?.titleFilters.count == 2 && native?.titleFilters.first?.isValid == false, "native calendar decodes rules; invalid regex stays inert but persisted")
+        let roundTrip = try? JSONDecoder().decode([TitleFilterRule].self, from: JSONEncoder().encode(rules))
+        c.expect(roundTrip == rules, "title filter rules round-trip through codable")
+
+        // mergeICS computes muted from LIVE rules — a fetch that started before
+        // a rule edit lands with the new flags applied (never the stale snapshot).
+        var liveSub = CalendarSubscription(name: "M", url: "https://m.example/cal.ics", colorIndex: 0)
+        func fetchEvent(_ uid: String, title: String) -> MeetingEvent {
+            MeetingEvent(uid: uid, title: title, start: now.addingTimeInterval(600), end: now.addingTimeInterval(2400),
+                         location: nil, notes: nil, link: nil, calendarID: liveSub.id, calendarName: "Cal", colorIndex: 0)
+        }
+        let fetchSnapshot = liveSub // rules are added AFTER the fetch started
+        liveSub.titleFilters = [TitleFilterRule(pattern: "Standup", mode: .exact)]
+        let subscriptionFlags = TitleFilterMatcher.applying(
+            to: [fetchEvent("flag-s", title: "Standup"), fetchEvent("flag-r", title: "Retro")],
+            subscriptions: [liveSub])
+        c.expect(subscriptionFlags.map(\.isMuted) == [true, false], "subscription reconcile helper applies and clears derived muted flags")
+        var nativeForFlags = NativeCalendar(ekIdentifier: "EK-FLAGS", name: "Native")
+        nativeForFlags.titleFilters = [TitleFilterRule(pattern: "Retro", mode: .exact)]
+        let staleMutedNative = MeetingEvent(uid: "native-s", title: "Standup", start: now.addingTimeInterval(600), end: now.addingTimeInterval(2400),
+                                            location: nil, notes: nil, link: nil, calendarID: nativeForFlags.id, calendarName: "Native", colorIndex: 0, isMuted: true)
+        let nativeRetro = MeetingEvent(uid: "native-r", title: "Retro", start: now.addingTimeInterval(900), end: now.addingTimeInterval(2700),
+                                       location: nil, notes: nil, link: nil, calendarID: nativeForFlags.id, calendarName: "Native", colorIndex: 0)
+        let nativeFlags = TitleFilterMatcher.applying(to: [staleMutedNative, nativeRetro], nativeCalendars: [nativeForFlags])
+        c.expect(nativeFlags.map(\.isMuted) == [false, true], "native reconcile helper clears stale flags and applies current rules")
+        let fetched = AppStore.mergeICS(current: [], results: [
+            FetchResult(subscription: fetchSnapshot, events: [fetchEvent("s1", title: "Standup"), fetchEvent("s2", title: "Retro")], error: nil),
+        ], live: [liveSub], previousErrors: [:])
+        c.expect(fetched.events.filter(\.isMuted).map(\.uid) == ["s1"], "mergeICS flags muted events from live rules (not the fetch snapshot)")
+        // Cached events of untouched subscriptions get refreshed flags too.
+        var otherSub = CalendarSubscription(name: "N", url: "https://n.example/cal.ics", colorIndex: 1)
+        otherSub.titleFilters = [TitleFilterRule(pattern: "Retro", mode: .exact)]
+        let retroEvent = MeetingEvent(uid: "s2", title: "Retro", start: now.addingTimeInterval(600), end: now.addingTimeInterval(2400),
+                                      location: nil, notes: nil, link: nil, calendarID: otherSub.id, calendarName: "Cal", colorIndex: 0)
+        let cached = AppStore.mergeICS(current: [retroEvent], results: [], live: [otherSub], previousErrors: [:])
+        c.expect(cached.events.filter(\.isMuted).map(\.uid) == ["s2"], "mergeICS refreshes muted flags of kept cached events")
+
+        // dueForAlert never fires muted events — the pure seam tick() shares.
+        var mutedDue = fetchEvent("m1", title: "Standup")
+        mutedDue.isMuted = true
+        c.expect(AppStore.dueForAlert(events: [mutedDue], alerted: [], snoozed: [:], leadSeconds: 300, now: now).isEmpty, "muted event inside its window never fires")
+        c.expect(AppStore.dueForAlert(events: [mutedDue], alerted: [mutedDue.id], snoozed: [mutedDue.id: now.addingTimeInterval(-5)], leadSeconds: 300, now: now).isEmpty, "muted event with expired snooze still never fires")
+
+        // Unmute ratchet: silences muted→unmuted transitions whose lead window
+        // already started (rule edits, title changes on refresh, native rebuilds
+        // — anything that keeps the id), and clears snoozes so the silence holds.
+        let ratchetCal = UUID()
+        func ratchetEvent(_ uid: String, muted: Bool, startIn: TimeInterval) -> MeetingEvent {
+            var event = MeetingEvent(uid: uid, title: uid, start: now.addingTimeInterval(startIn), end: now.addingTimeInterval(startIn + 1800),
+                                     location: nil, notes: nil, link: nil, calendarID: ratchetCal, calendarName: "Cal", colorIndex: 0)
+            event.isMuted = muted
+            return event
+        }
+        let mutedRunning = ratchetEvent("r", muted: true, startIn: -60)
+        let unmutedRunning = ratchetEvent("r", muted: false, startIn: -60)
+        c.expect(mutedRunning.id == unmutedRunning.id, "same uid/calendar/start share an id (title-edit refresh keeps id)")
+        let ratcheted = AppStore.ratchetSilence(previous: [mutedRunning], current: [unmutedRunning], alerted: [], snoozed: [unmutedRunning.id: now.addingTimeInterval(-5)], leadSeconds: 300, now: now)
+        c.expect(ratcheted.alerted == [unmutedRunning.id] && ratcheted.snoozed[unmutedRunning.id] == nil, "muted→unmuted inside the window is silenced and its snooze cleared")
+        let unmutedFuture = ratchetEvent("f", muted: false, startIn: 3600)
+        let futureOutcome = AppStore.ratchetSilence(previous: [ratchetEvent("f", muted: true, startIn: 3600)], current: [unmutedFuture], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
+        c.expect(!futureOutcome.alerted.contains(unmutedFuture.id), "unmute before the lead window alerts normally")
+        let endedOutcome = AppStore.ratchetSilence(previous: [ratchetEvent("e", muted: true, startIn: -3600)], current: [ratchetEvent("e", muted: false, startIn: -3600)], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
+        c.expect(endedOutcome.alerted.isEmpty, "ended event is not ratcheted")
+        let freshOutcome = AppStore.ratchetSilence(previous: [], current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
+        c.expect(freshOutcome.alerted.isEmpty, "brand-new unmuted events keep late-delivery behavior")
+        let stableOutcome = AppStore.ratchetSilence(previous: [unmutedRunning], current: [unmutedRunning], alerted: [unmutedRunning.id], snoozed: [:], leadSeconds: 300, now: now)
+        c.expect(stableOutcome.alerted == [unmutedRunning.id] && stableOutcome.snoozed.isEmpty, "repeated commits leave the ratchet stable")
+
+        var retainedMuted: [String: Bool] = [:]
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [mutedRunning], previousIDs: [])
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], previousIDs: [mutedRunning.id])
+        let afterOneMiss = AppStore.ratchetSilence(previous: [], fallbackMutedByID: retainedMuted, current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
+        c.expect(afterOneMiss.alerted == [unmutedRunning.id], "one transient omission preserves muted state for the unmute ratchet")
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], previousIDs: [])
+        let afterTwoMisses = AppStore.ratchetSilence(previous: [], fallbackMutedByID: retainedMuted, current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
+        c.expect(afterTwoMisses.alerted.isEmpty, "two consecutive omissions expire retained muted state")
+
+        let mutedNearest = ratchetEvent("nearest", muted: true, startIn: -30)
+        let future = ratchetEvent("future", muted: false, startIn: 600)
+        c.expect(AppStore.nextEvent(events: [mutedNearest, future], lateMinutes: 0, now: now)?.id == future.id, "nextEvent skips a muted running meeting")
+        let running = ratchetEvent("running", muted: false, startIn: -60)
+        c.expect(AppStore.nextEvent(events: [future, running], lateMinutes: 0, now: now)?.id == running.id, "nextEvent preserves running-before-future priority")
+        c.expect(AppStore.nextEvent(events: [mutedNearest], lateMinutes: 0, now: now)?.id == nil, "nextEvent is empty when every visible meeting is muted")
+
+        // The full snooze sequence: alert → snooze → mute → snooze expires →
+        // unmute mid-window → still no reminder.
+        var sequence = ratchetEvent("seq", muted: false, startIn: -120)
+        let sequenceMuted = ratchetEvent("seq", muted: true, startIn: -120)
+        var step = AppStore.ratchetSilence(previous: [sequence], current: [sequenceMuted], alerted: [sequence.id], snoozed: [sequence.id: now.addingTimeInterval(-5)], leadSeconds: 300, now: now)
+        step = AppStore.ratchetSilence(previous: [sequenceMuted], current: [sequence], alerted: step.alerted, snoozed: step.snoozed, leadSeconds: 300, now: now)
+        sequence.isMuted = false
+        c.expect(AppStore.dueForAlert(events: [sequence], alerted: step.alerted, snoozed: step.snoozed, leadSeconds: 300, now: now).isEmpty, "snoozed→muted→unmuted mid-window never re-fires")
+
+        // An open alert panel drops cards whose events became muted.
+        let shownMuted = ratchetEvent("shown", muted: false, startIn: 120)
+        let nowMuted = ratchetEvent("shown", muted: true, startIn: 120)
+        let otherCard = ratchetEvent("other", muted: false, startIn: 120)
+        c.expect(AlertController.reconciledShownEvents(shown: [shownMuted, otherCard], current: [nowMuted, otherCard]).map(\.uid) == ["other"], "reconciliation drops muted cards, keeps the rest")
     }
 
     // MARK: - Auto-updater

@@ -347,6 +347,11 @@ struct UpcomingEventList: View {
     let events: [MeetingEvent]
     let error: String?
     let colorHex: String
+    /// This calendar's title-filter rules — drive the per-row mute toggle
+    /// (its state is derived: "does any rule match this title?").
+    let rules: [TitleFilterRule]
+    let onMute: (MeetingEvent) -> Void
+    let onRemoveRules: (Set<UUID>) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     private static let collapsedLimit = 8
@@ -409,23 +414,19 @@ struct UpcomingEventList: View {
                             if compactLinks {
                                 VStack(alignment: .leading, spacing: 4) {
                                     eventSummary(event)
-                                    if let link = event.link {
-                                        joinButton(link, compact: true)
-                                            .padding(.leading, 68)
-                                    } else {
-                                        noLinkLabel
-                                            .padding(.leading, 68)
+                                    HStack(alignment: .top, spacing: 6) {
+                                        trailingDetail(event, compact: true)
+                                        Spacer(minLength: 4)
+                                        MuteToggleButton(event: event, rules: rules, onMute: onMute, onRemoveRules: onRemoveRules)
                                     }
+                                    .padding(.leading, 68)
                                 }
                             } else {
                                 HStack(alignment: .top, spacing: 8) {
                                     eventSummary(event)
                                     Spacer(minLength: 4)
-                                    if let link = event.link {
-                                        joinButton(link, compact: false)
-                                    } else {
-                                        noLinkLabel
-                                    }
+                                    trailingDetail(event, compact: false)
+                                    MuteToggleButton(event: event, rules: rules, onMute: onMute, onRemoveRules: onRemoveRules)
                                 }
                             }
                         }
@@ -452,6 +453,19 @@ struct UpcomingEventList: View {
         .onPreferenceChange(UpcomingEventListWidthKey.self) { availableWidth = $0 }
     }
 
+    /// Join link / no-link label on the trailing edge; dimmed (but still
+    /// clickable) when the event is muted — muting silences reminders, not joining.
+    @ViewBuilder
+    private func trailingDetail(_ event: MeetingEvent, compact: Bool) -> some View {
+        if let link = event.link {
+            joinButton(link, compact: compact)
+                .opacity(event.isMuted ? 0.55 : 1)
+        } else {
+            noLinkLabel
+                .opacity(event.isMuted ? 0.55 : 1)
+        }
+    }
+
     private func hostText(_ link: URL) -> String {
         (link.host ?? "").replacingOccurrences(of: "www.", with: "")
     }
@@ -468,6 +482,7 @@ struct UpcomingEventList: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(minWidth: 80, alignment: .leading)
         }
+        .opacity(event.isMuted ? 0.45 : 1)
     }
 
     private func joinButton(_ link: URL, compact: Bool) -> some View {
@@ -486,7 +501,7 @@ struct UpcomingEventList: View {
     }
 
     private var noLinkLabel: some View {
-        Label("No link", systemImage: "chain.slash")
+        Text("No link")
             .font(.system(size: 10))
             .foregroundStyle(.secondary)
             .help("No meeting link found")
@@ -497,6 +512,151 @@ struct UpcomingEventList: View {
     private var linkColor: Color {
         let target: Palette.ContrastTarget = colorScheme == .dark ? .onBlack : .onWhite
         return Color(nsColor: Palette.readable(Palette.nsColor(hex: colorHex), on: target))
+    }
+}
+
+/// Per-event mute toggle. Its state is DERIVED — "does any rule of this
+/// calendar match this event's title?" via the same pure matcher the reminder
+/// pipeline uses — so hand-added, hand-edited, or hand-removed rules keep it in
+/// sync with zero bookkeeping. Unmuted + click adds an exact-title rule
+/// immediately; muted + click opens the confirmation popover (selective removal).
+private struct MuteToggleButton: View {
+    let event: MeetingEvent
+    let rules: [TitleFilterRule]
+    let onMute: (MeetingEvent) -> Void
+    let onRemoveRules: (Set<UUID>) -> Void
+    @State private var showUnmutePopover = false
+    @State private var popoverGeneration = 0
+
+    private var hasTitle: Bool {
+        !event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var matching: [TitleFilterRule] {
+        TitleFilterRule.matchingRules(title: event.title, rules: rules)
+    }
+
+    private var atRuleCap: Bool {
+        rules.count >= TitleFilterRule.maxRulesPerCalendar
+    }
+
+    private var helpText: String {
+        if !hasTitle { return "This meeting has no title to match" }
+        if !event.isMuted && atRuleCap { return "Rule limit reached (\(TitleFilterRule.maxRulesPerCalendar)) — remove a rule first" }
+        if event.isMuted {
+            return matching.count == 1
+                ? "Muted by 1 rule — click to unmute"
+                : "Muted by \(matching.count) rules — click to unmute"
+        }
+        return "Mute reminders for “\(Fmt.ellipsized(event.title, limit: 60))” — matches every event with this title in this calendar"
+    }
+
+    var body: some View {
+        Button {
+            if event.isMuted {
+                popoverGeneration += 1
+                showUnmutePopover = true
+            } else {
+                onMute(event)
+            }
+        } label: {
+            // Muted: crossed bell (filled, accent). Not muted: outline bell.
+            // offset(y: -1): bell glyphs carry their mass low — a small optical
+            // lift keeps the icon centered against the 11pt row text.
+            Image(systemName: event.isMuted ? "bell.slash.fill" : "bell.slash")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(event.isMuted ? Color.accentColor : Color.secondary)
+                .frame(width: 14, height: 14)
+                .offset(y: -1)
+        }
+        .buttonStyle(.borderless)
+        .cursor(.pointingHand)
+        .disabled(!hasTitle || (!event.isMuted && atRuleCap))
+        .help(helpText)
+        .accessibilityLabel(event.isMuted ? "Unmute \(event.title.isEmpty ? "Untitled" : event.title) (muted)" : "Mute reminders for \(event.title.isEmpty ? "Untitled" : event.title)")
+        .popover(isPresented: $showUnmutePopover, arrowEdge: .bottom) {
+            UnmuteRulePopover(
+                title: event.title,
+                rules: matching,
+                onCancel: { showUnmutePopover = false },
+                onRemove: { ids in
+                    onRemoveRules(ids)
+                    showUnmutePopover = false
+                }
+            )
+                .id(popoverGeneration)
+        }
+    }
+}
+
+private struct UnmuteRulePopover: View {
+    let title: String
+    let rules: [TitleFilterRule]
+    let onCancel: () -> Void
+    let onRemove: (Set<UUID>) -> Void
+    @State private var selectedRuleIDs: Set<UUID>
+
+    init(title: String, rules: [TitleFilterRule], onCancel: @escaping () -> Void, onRemove: @escaping (Set<UUID>) -> Void) {
+        self.title = title
+        self.rules = rules
+        self.onCancel = onCancel
+        self.onRemove = onRemove
+        _selectedRuleIDs = State(initialValue: Set(rules.map(\.id)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Unmute “\(Fmt.ellipsized(title, limit: 60))”")
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(2)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(rules) { rule in
+                        HStack(spacing: 8) {
+                            Button {
+                                if selectedRuleIDs.contains(rule.id) {
+                                    selectedRuleIDs.remove(rule.id)
+                                } else {
+                                    selectedRuleIDs.insert(rule.id)
+                                }
+                            } label: {
+                                Image(systemName: selectedRuleIDs.contains(rule.id) ? "checkmark.square.fill" : "square")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(selectedRuleIDs.contains(rule.id) ? Color.accentColor : Color.secondary)
+                                    .id(selectedRuleIDs.contains(rule.id))
+                            }
+                            .buttonStyle(.plain)
+                            .cursor(.pointingHand)
+                            .accessibilityLabel((selectedRuleIDs.contains(rule.id) ? "Deselect rule " : "Select rule ") + Fmt.ellipsized(rule.pattern, limit: 40))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(Fmt.ellipsized(rule.pattern, limit: 48))
+                                    .font(.system(size: 11))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text(rule.mode == .regex ? "Regex" : "Full title")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 1)
+                    }
+                }
+            }
+            .frame(height: min(CGFloat(rules.count) * 36, 240))
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Remove") {
+                    onRemove(selectedRuleIDs)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selectedRuleIDs.isEmpty)
+            }
+        }
+        .padding(14)
+        .frame(width: 320, alignment: .leading)
     }
 }
 
@@ -511,10 +671,15 @@ struct SubscriptionRow: View {
     let error: String?
     let warning: String?
     let existingURLs: [String]
+    let onMute: (MeetingEvent) -> Void
+    let onRemoveRules: (Set<UUID>) -> Void
+    let onSaveRules: ([TitleFilterRule]) -> Void
     let onDelete: () -> Void
     let onEdited: () -> Void
     @State private var expanded = false
     @State private var showEditSheet = false
+    @State private var showFilterSheet = false
+    @State private var filterSheetGeneration = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -524,14 +689,14 @@ struct SubscriptionRow: View {
                 HStack(spacing: 12) {
                     leadingControls
                     titleBlock
-                    Spacer()
+                    expandSpace
                     rowButtons
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 12) {
                         leadingControls
                         titleBlock
-                        Spacer()
+                        expandSpace
                     }
                     HStack(spacing: 12) {
                         Spacer()
@@ -540,7 +705,14 @@ struct SubscriptionRow: View {
                 }
             }
             if expanded && subscription.isEnabled {
-                UpcomingEventList(events: events, error: error, colorHex: subscription.colorHex)
+                UpcomingEventList(
+                    events: events,
+                    error: error,
+                    colorHex: subscription.colorHex,
+                    rules: subscription.titleFilters,
+                    onMute: onMute,
+                    onRemoveRules: onRemoveRules
+                )
             }
         }
         .padding(10)
@@ -575,6 +747,19 @@ struct SubscriptionRow: View {
         }
     }
 
+    /// Clickable dead space between the title block and the action buttons —
+    /// the same expand/collapse as the chevron, deliberately WITHOUT any visual
+    /// affordance of its own (no hover highlight, cursor stays default).
+    private var expandSpace: some View {
+        Color.clear
+            .frame(maxWidth: .infinity, minHeight: 20)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard subscription.isEnabled else { return }
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            }
+    }
+
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(subscription.name).font(.system(size: 13, weight: .semibold))
@@ -591,6 +776,7 @@ struct SubscriptionRow: View {
 
     private var rowButtons: some View {
         HStack(spacing: 12) {
+            filterButton
             Button {
                 showEditSheet = true
             } label: {
@@ -623,6 +809,48 @@ struct SubscriptionRow: View {
         }
     }
 
+    /// Muted-meetings rule editor entry. The live count is an overlay badge (not
+    /// flow text) so the icon's layout box stays identical to the neighboring
+    /// edit/trash icons — mixed image+text labels sit visibly higher otherwise.
+    private var filterButton: some View {
+        Button {
+            filterSheetGeneration += 1
+            showFilterSheet = true
+        } label: {
+            // offset(y: 2): optical nudge so the circle glyph centers on the
+            // neighboring edit/trash icons (renders high otherwise). The badge
+            // is an overlay — decoration only, never part of the layout box.
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .overlay(alignment: .bottomTrailing) {
+                    if !subscription.titleFilters.isEmpty {
+                        Text("\(subscription.titleFilters.count)")
+                            .font(.system(size: 8, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 3)
+                            .frame(minWidth: 11, minHeight: 11)
+                            .background(Capsule().fill(Color.accentColor))
+                            .offset(x: 5, y: 4)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .offset(y: 2)
+        }
+        .buttonStyle(.borderless)
+        .help(subscription.titleFilters.isEmpty ? "Muted meetings — none yet" : "Muted meetings (\(subscription.titleFilters.count) rules)")
+        .accessibilityLabel("Muted meetings rules for \(subscription.name)")
+        .sheet(isPresented: $showFilterSheet) {
+            TitleFilterEditorSheet(
+                calendarName: subscription.name,
+                rules: subscription.titleFilters,
+                events: events
+            ) { rules in
+                onSaveRules(rules)
+            }
+            .id(filterSheetGeneration)
+        }
+    }
+
     /// Sanitized feed URL for display outside the editor: shared iCal links
     /// embed secret tokens in path/query, so rows show only the host. The full
     /// URL remains visible (and editable) inside the edit sheet.
@@ -634,15 +862,25 @@ struct SubscriptionRow: View {
 }
 
 /// One calendar from EventKit: toggle = use it, color = tint for its events
-/// (seeded from the calendar's own color on first enable), chevron = upcoming events.
+/// (seeded from the calendar's own color on first enable), funnel = muted-meeting
+/// rules, chevron = upcoming events.
 struct NativeCalendarRow: View {
     let info: NativeCalendarInfo
     let isOn: Bool
     let colorHex: String
     let events: [MeetingEvent]
+    /// Rules of the persisted record (empty when the calendar was never enabled —
+    /// then there is no record and no rule storage yet).
+    let rules: [TitleFilterRule]
+    let calendarID: UUID?
     let onToggle: (Bool) -> Void
     let onColor: (String) -> Void
+    let onMute: (MeetingEvent) -> Void
+    let onRemoveRules: (Set<UUID>) -> Void
+    let onSaveRules: ([TitleFilterRule]) -> Void
     @State private var expanded = false
+    @State private var showFilterSheet = false
+    @State private var filterSheetGeneration = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -651,23 +889,30 @@ struct NativeCalendarRow: View {
                 HStack(spacing: 12) {
                     leadingControls
                     titleBlock
-                    Spacer()
-                    expandButton
+                    expandSpace
+                    actionButtons
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 12) {
                         leadingControls
                         titleBlock
-                        Spacer()
+                        expandSpace
                     }
                     HStack {
                         Spacer()
-                        expandButton
+                        actionButtons
                     }
                 }
             }
             if expanded && isOn {
-                UpcomingEventList(events: events, error: nil, colorHex: colorHex)
+                UpcomingEventList(
+                    events: events,
+                    error: nil,
+                    colorHex: colorHex,
+                    rules: rules,
+                    onMute: onMute,
+                    onRemoveRules: onRemoveRules
+                )
             }
         }
         .padding(10)
@@ -675,6 +920,72 @@ struct NativeCalendarRow: View {
         .onChange(of: isOn) { enabled in
             if !enabled { expanded = false }
         }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 12) {
+            filterButton
+            expandButton
+        }
+    }
+
+    /// Muted-meetings rule editor. Needs a persisted record (our stable UUID) —
+    /// a never-enabled calendar has none, so the button waits for first enable.
+    /// Disabled-but-previously-enabled calendars keep editing their rules.
+    /// The count is an overlay badge so the icon aligns with the chevron.
+    private var filterButton: some View {
+        Button {
+            filterSheetGeneration += 1
+            showFilterSheet = true
+        } label: {
+            // offset(y: 2): optical nudge so the circle glyph centers on the
+            // neighboring chevron (renders high otherwise). The badge is an
+            // overlay — decoration only, never part of the layout box.
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .overlay(alignment: .bottomTrailing) {
+                    if !rules.isEmpty {
+                        Text("\(rules.count)")
+                            .font(.system(size: 8, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 3)
+                            .frame(minWidth: 11, minHeight: 11)
+                            .background(Capsule().fill(Color.accentColor))
+                            .offset(x: 5, y: 4)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .offset(y: 2)
+        }
+        .buttonStyle(.borderless)
+        .disabled(calendarID == nil)
+        .help(calendarID == nil ? "Enable the calendar first" : (rules.isEmpty ? "Muted meetings — none yet" : "Muted meetings (\(rules.count) rules)"))
+        .accessibilityLabel("Muted meetings rules for \(info.title)")
+        .sheet(isPresented: $showFilterSheet) {
+            if calendarID != nil {
+                TitleFilterEditorSheet(
+                    calendarName: info.title,
+                    rules: rules,
+                    events: events
+                ) { rules in
+                    onSaveRules(rules)
+                }
+                .id(filterSheetGeneration)
+            }
+        }
+    }
+
+    /// Clickable dead space between the title block and the action buttons —
+    /// the same expand/collapse as the chevron, deliberately WITHOUT any visual
+    /// affordance of its own (no hover highlight, cursor stays default).
+    private var expandSpace: some View {
+        Color.clear
+            .frame(maxWidth: .infinity, minHeight: 20)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard isOn else { return }
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            }
     }
 
     private var leadingControls: some View {
@@ -725,6 +1036,165 @@ struct NativeCalendarRow: View {
         .disabled(!isOn)
         .help(isOn ? "Show upcoming events" : "Calendar disabled")
         .accessibilityLabel(expanded ? "Hide events for \(info.title)" : "Show events for \(info.title)")
+    }
+}
+
+/// Transactional rule editor (sheet, same pattern as `EditCalendarView`): edits
+/// a LOCAL draft; Save commits the whole list atomically, Cancel/Esc discards
+/// it. Keystrokes never touch persisted rules — no didSet churn, no transient
+/// unmute flashes while typing a regex. Empty rows drop at Save; invalid regex
+/// or over-length patterns BLOCK Save (visible validation, never silent).
+struct TitleFilterEditorSheet: View {
+    let calendarName: String
+    /// This calendar's upcoming events — powers the "mutes N of M" feedback line.
+    let events: [MeetingEvent]
+    let onSave: ([TitleFilterRule]) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: [TitleFilterRule]
+
+    init(calendarName: String, rules: [TitleFilterRule], events: [MeetingEvent], onSave: @escaping ([TitleFilterRule]) -> Void) {
+        self.calendarName = calendarName
+        self.events = events
+        self.onSave = onSave
+        _draft = State(initialValue: rules)
+    }
+
+    /// Rows that carry content but are invalid — they block Save. Empty rows are
+    /// NOT errors: they are "not a rule yet" and drop out at Save.
+    private var rowErrors: [UUID: String] {
+        var errors: [UUID: String] = [:]
+        for rule in draft {
+            let trimmed = rule.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if rule.mode == .regex {
+                if trimmed.count > TitleFilterRule.maxRegexPatternLength {
+                    errors[rule.id] = "Pattern too long (max \(TitleFilterRule.maxRegexPatternLength) characters)"
+                } else if (try? NSRegularExpression(pattern: trimmed)) == nil {
+                    errors[rule.id] = "Invalid regular expression"
+                }
+            }
+        }
+        return errors
+    }
+
+    /// What Save would commit: the draft minus empty rows (the store runs the
+    /// shared normalization — trim, dedupe, cap — on top).
+    private var effectiveRules: [TitleFilterRule] {
+        draft.filter { !$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    /// Counted with ONE matcher over all rules so events matched by several
+    /// rules are counted once (per-rule sums double-counted).
+    private var feedbackText: String? {
+        guard !events.isEmpty else { return nil }
+        let matcher = TitleFilterMatcher(rules: TitleFilterRule.normalized(effectiveRules))
+        let count = events.filter { matcher.matches(title: $0.title) }.count
+        if count == 0 { return "Your current filters don't mute any of the \(events.count) upcoming meetings." }
+        return "Your current filters mute \(count) of \(events.count) upcoming meetings."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Muted Meetings: \(calendarName)")
+                .font(.title2.bold())
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("Meetings whose title matches get no reminder. They stay in your lists, grayed out.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let feedback = feedbackText {
+                Text(feedback)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Group {
+                    if draft.isEmpty {
+                        emptyState
+                    } else if draft.count <= 6 {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach($draft) { $rule in
+                                ruleRow($rule)
+                            }
+                        }
+                        .padding(.vertical, 3)
+                    } else {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach($draft) { $rule in
+                                    ruleRow($rule)
+                                }
+                            }
+                            .padding(.vertical, 3)
+                        }
+                        .frame(height: 360)
+                    }
+                }
+                Button {
+                    draft.append(TitleFilterRule(pattern: "", mode: .exact))
+                } label: {
+                    Label("Add Rule", systemImage: "plus")
+                }
+                .disabled(draft.count >= TitleFilterRule.maxRulesPerCalendar)
+                .help(draft.count >= TitleFilterRule.maxRulesPerCalendar ? "Rule limit reached (\(TitleFilterRule.maxRulesPerCalendar))" : "Add a title rule")
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") {
+                    onSave(effectiveRules)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!rowErrors.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+    }
+
+    private var emptyState: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "bell.slash").font(.title3).foregroundStyle(.secondary)
+            Text("No muted meetings")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+    }
+
+    private func ruleRow(_ rule: Binding<TitleFilterRule>) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                TextField(rule.wrappedValue.mode == .regex ? "e.g. (?i)^Standup .*$" : "Full meeting title", text: rule.pattern)
+                    .textFieldStyle(.roundedBorder)
+                Picker("", selection: rule.mode) {
+                    Text("Title").tag(TitleFilterRule.MatchMode.exact)
+                    Text("Regex").tag(TitleFilterRule.MatchMode.regex)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 110)
+                .labelsHidden()
+                .accessibilityLabel("Match mode for \(Fmt.ellipsized(rule.wrappedValue.pattern, limit: 24))")
+                Button {
+                    draft.removeAll { $0.id == rule.wrappedValue.id }
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Remove rule")
+                .accessibilityLabel("Remove rule \(Fmt.ellipsized(rule.wrappedValue.pattern, limit: 24))")
+            }
+            if let error = rowErrors[rule.wrappedValue.id] {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
     }
 }
 
@@ -1268,7 +1738,14 @@ struct SettingsView: View {
                             events: upcomingEvents(for: subscription),
                             error: store.errors[subscription.id],
                             warning: store.warnings[subscription.id],
-                            existingURLs: store.subscriptions.map(\.url)
+                            existingURLs: store.subscriptions.map(\.url),
+                            onMute: { event in store.toggleMute(for: event) },
+                            onRemoveRules: { ids in
+                                store.setTitleFilters(calendarID: subscription.id, rules: TitleFilterRule.removing(ids: ids, from: subscription.titleFilters))
+                            },
+                            onSaveRules: { rules in
+                                store.setTitleFilters(calendarID: subscription.id, rules: rules)
+                            }
                         ) {
                             confirmDelete(subscription)
                         } onEdited: {
@@ -1400,8 +1877,21 @@ struct SettingsView: View {
             isOn: isOn,
             colorHex: persisted?.colorHex ?? info.colorHex,
             events: visible,
+            rules: persisted?.titleFilters ?? [],
+            calendarID: calendarID,
             onToggle: { on in store.setNativeCalendarEnabled(info, enabled: on) },
-            onColor: { hex in store.setNativeCalendarColor(info, hex: hex) }
+            onColor: { hex in store.setNativeCalendarColor(info, hex: hex) },
+            onMute: { event in store.toggleMute(for: event) },
+            onRemoveRules: { ids in
+                if let calendarID {
+                    store.setTitleFilters(calendarID: calendarID, rules: TitleFilterRule.removing(ids: ids, from: persisted?.titleFilters ?? []))
+                }
+            },
+            onSaveRules: { rules in
+                if let calendarID {
+                    store.setTitleFilters(calendarID: calendarID, rules: rules)
+                }
+            }
         )
     }
 
@@ -1411,10 +1901,10 @@ struct SettingsView: View {
         return store.events.filter { $0.calendarID == calendarID && store.isVisible($0, at: now) }
     }
 
-    /// Enabled native calendars whose EventKit counterpart vanished (account removed).
+    /// Persisted native calendars whose EventKit counterpart vanished (account removed).
     @ViewBuilder private var staleNativeRows: some View {
         let available = Set(store.nativeCalendarInfos.map(\.ekIdentifier))
-        let stale = store.nativeCalendars.filter { !available.contains($0.ekIdentifier) && $0.isEnabled }
+        let stale = store.nativeCalendars.filter { !available.contains($0.ekIdentifier) }
         if !stale.isEmpty {
             ForEach(stale) { native in
                 HStack(spacing: 8) {
@@ -1423,6 +1913,11 @@ struct SettingsView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                     Spacer()
+                    if !native.titleFilters.isEmpty {
+                        Text("\(native.titleFilters.count) muted \(native.titleFilters.count == 1 ? "rule" : "rules")")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
                     Button("Forget") {
                         store.forgetNativeCalendar(native.id)
                     }
