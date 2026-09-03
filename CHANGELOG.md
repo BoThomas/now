@@ -1,4 +1,17 @@
 # Changelog
+## [1.7.0] - 2026-09-03
+
+### Added
+- Per-calendar title filters can mute reminders by exact title or regular expression while keeping matching meetings visible and joinable
+- Optional local meeting detection prevents new reminders from interrupting active calls, with separate best-effort browser detection
+### Improved
+- Linkless events now retain useful details, notes, copy actions, and locations throughout the app
+- Meeting-link detection is more conservative, avoiding unrelated event and document URLs
+- Successful in-app updates now show a one-time confirmation after startup is verified
+- Release builds are smaller
+### Fixed
+- Retrying an update after a failed installation no longer carries the previous failure into the updated app
+
 ## [1.6.1] - 2026-09-01
 
 ### Fixed
@@ -94,3 +107,4 @@
 [1.5.0]: https://github.com/BoThomas/now/compare/v1.4.0...v1.5.0
 [1.6.0]: https://github.com/BoThomas/now/compare/v1.5.0...v1.6.0
 [1.6.1]: https://github.com/BoThomas/now/compare/v1.6.0...v1.6.1
+[1.7.0]: https://github.com/BoThomas/now/compare/v1.6.1...v1.7.0
