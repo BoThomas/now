@@ -1,5 +1,7 @@
 # now
 
+<img src="docs/screenshots/now-icon.png" width="96" align="right" alt="now app icon">
+
 [![Release](https://img.shields.io/github/v/release/BoThomas/now?sort=semver)](https://github.com/BoThomas/now/releases/latest)
 [![License](https://img.shields.io/github/license/BoThomas/now?style=flat)](https://github.com/BoThomas/now/blob/main/LICENSE)
 
