@@ -8,9 +8,11 @@ struct CalendarSubscription: Codable, Identifiable, Equatable {
     var colorIndex: Int = 0
     var colorHex: String = ""
     var isEnabled = true
+    /// Title filters: matching meetings get no reminder (stay visible, grayed).
+    var titleFilters: [TitleFilterRule] = []
 
     enum CodingKeys: String, CodingKey {
-        case id, name, url, colorIndex, colorHex, isEnabled
+        case id, name, url, colorIndex, colorHex, isEnabled, titleFilters
     }
 
     init(name: String, url: String, colorIndex: Int) {
@@ -28,6 +30,9 @@ struct CalendarSubscription: Codable, Identifiable, Equatable {
         colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
         colorHex = try c.decodeIfPresent(String.self, forKey: .colorHex) ?? Palette.hex(for: colorIndex)
         isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        // Per-entry failable: one malformed rule must never fail the whole
+        // subscription record (which would evict it from persisted state).
+        titleFilters = TitleFilterRule.normalized((try? c.decode([FailableDecoded<TitleFilterRule>].self, forKey: .titleFilters).compactMap(\.value)) ?? [])
     }
 }
 
@@ -97,9 +102,11 @@ struct NativeCalendar: Codable, Identifiable, Equatable {
     var colorHex: String = ""
     var colorIndex: Int = 0
     var isEnabled = true
+    /// Title filters: matching meetings get no reminder (stay visible, grayed).
+    var titleFilters: [TitleFilterRule] = []
 
     enum CodingKeys: String, CodingKey {
-        case id, ekIdentifier, name, colorHex, colorIndex, isEnabled
+        case id, ekIdentifier, name, colorHex, colorIndex, isEnabled, titleFilters
     }
 
     init(ekIdentifier: String, name: String, colorHex: String = "", colorIndex: Int = 0, isEnabled: Bool = true) {
@@ -118,6 +125,7 @@ struct NativeCalendar: Codable, Identifiable, Equatable {
         colorHex = try c.decodeIfPresent(String.self, forKey: .colorHex) ?? ""
         colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
         isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        titleFilters = TitleFilterRule.normalized((try? c.decode([FailableDecoded<TitleFilterRule>].self, forKey: .titleFilters).compactMap(\.value)) ?? [])
     }
 }
 
@@ -168,6 +176,11 @@ struct MeetingEvent: Identifiable {
     let calendarName: String
     let colorIndex: Int
     var colorHex: String
+    /// Derived state (like `colorHex`): a title filter of this event's calendar
+    /// matches. Recomputed at the same re-tint points — never persisted, never
+    /// set by hand outside those sites. Muted events stay visible (grayed) and
+    /// never alert (`dueForAlert` skips them).
+    var isMuted: Bool = false
 
     var nsColor: NSColor { Palette.nsColor(hex: colorHex) }
     var color: Color { Color(nsColor: nsColor) }
@@ -177,7 +190,7 @@ struct MeetingEvent: Identifiable {
     var readableNsColorOnBlack: NSColor { Palette.readable(nsColor, on: .onBlack) }
     var alertButtonColor: Color { Color(nsColor: Palette.alertButtonColor(nsColor)) }
 
-    init(uid: String, title: String, start: Date, end: Date, location: String?, notes: String?, link: URL?, calendarID: UUID, calendarName: String, colorIndex: Int, colorHex: String? = nil) {
+    init(uid: String, title: String, start: Date, end: Date, location: String?, notes: String?, link: URL?, calendarID: UUID, calendarName: String, colorIndex: Int, colorHex: String? = nil, isMuted: Bool = false) {
         self.uid = uid
         self.title = title
         self.start = start
@@ -189,6 +202,7 @@ struct MeetingEvent: Identifiable {
         self.calendarName = calendarName
         self.colorIndex = colorIndex
         self.colorHex = colorHex ?? Palette.hex(for: colorIndex)
+        self.isMuted = isMuted
         self.id = "\(calendarID.uuidString)-\(uid)-\(Int(start.timeIntervalSince1970))"
     }
 }

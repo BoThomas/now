@@ -192,6 +192,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if let notes = event.notes, !notes.isEmpty, !isJustJoinLink(notes, event: event), !LinkExtractor.isJoinLinkOnlyText(notes, link: event.link) {
             lines.append("Notes: \(Fmt.wrapped(notes, width: 72, maxLines: 4))")
         }
+        if event.isMuted {
+            lines.append("Reminders muted (title filter)")
+        }
         return lines.joined(separator: "\n")
     }
 
@@ -207,7 +210,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: "", action: event.link == nil ? #selector(showEventDetailsAction) : #selector(joinAction), keyEquivalent: "")
         item.target = self
         item.representedObject = event
-        item.image = Palette.dotImage(color: event.nsColor)
+        // Muted rows keep their calendar dot, faded. The title itself keeps its
+        // NATIVE color — explicit foreground colors break menu selection
+        // highlighting (hard-won constraint); muting is signaled by the dot plus
+        // a small trailing annotation, matching the existing no-link treatment.
+        item.image = Palette.dotImage(color: event.isMuted ? event.nsColor.withAlphaComponent(0.35) : event.nsColor)
         item.toolTip = Self.tooltipText(for: event)
         let paragraph = NSMutableParagraphStyle()
         paragraph.tabStops = [NSTextTab(textAlignment: .right, location: tabLocation, options: [:])]
@@ -220,6 +227,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             title += "  ·  \(Fmt.barCountdown(to: event.start))"
         }
         text.append(NSAttributedString(string: title, attributes: titleAttributes))
+        var accessibilityLabel = event.title.isEmpty ? "Untitled" : event.title
+        if event.isMuted {
+            let attachment = NSTextAttachment()
+            if let image = NSImage(systemSymbolName: "bell.slash", accessibilityDescription: "Reminders muted") {
+                image.isTemplate = true
+                attachment.image = image
+                // y = -1 centers the 11pt box on the 13pt menu font's cap height
+                // (y = -2 sat visibly low — bell glyphs carry their mass low).
+                attachment.bounds = CGRect(x: 0, y: -1, width: 11, height: 11)
+                text.append(NSAttributedString(string: "  ", attributes: titleAttributes))
+                text.append(NSAttributedString(attachment: attachment))
+            }
+            text.append(NSAttributedString(string: " Muted", attributes: [
+                .font: NSFont.systemFont(ofSize: 10),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph,
+            ]))
+            accessibilityLabel += ", reminders muted"
+        }
         if event.link == nil {
             text.append(NSAttributedString(string: "  ", attributes: titleAttributes))
             let attachment = NSTextAttachment()
@@ -234,7 +260,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 .foregroundColor: NSColor.secondaryLabelColor,
                 .paragraphStyle: paragraph,
             ]))
-            item.setAccessibilityLabel("\(event.title.isEmpty ? "Untitled" : event.title), no meeting link")
+            accessibilityLabel += ", no meeting link"
+        }
+        if event.isMuted || event.link == nil {
+            item.setAccessibilityLabel(accessibilityLabel)
         }
         item.attributedTitle = text
         return item

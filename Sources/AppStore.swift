@@ -182,8 +182,21 @@ final class AppStore: ObservableObject {
     }
 
     var nextEvent: MeetingEvent? {
-        let now = Date()
-        let visible = events.filter { isVisible($0, at: now) }
+        Self.nextEvent(events: events, lateMinutes: settings.lateMinutes, now: Date())
+    }
+
+    /// Pure status-item selection: muted events never own the countdown, while
+    /// running meetings retain priority over future meetings.
+    nonisolated static func nextEvent(events: [MeetingEvent], lateMinutes: Int, now: Date) -> MeetingEvent? {
+        // Muted events never alert, so they never own the countdown either
+        // (running-before-future priority preserved over what remains).
+        let visible = events.filter { event in
+            guard !event.isMuted else { return false }
+            if now < event.start { return true }
+            if lateMinutes < 0 { return false }
+            if lateMinutes == 0 { return now < event.end }
+            return now < event.start.addingTimeInterval(TimeInterval(lateMinutes) * 60)
+        }
         return visible.first { $0.start <= now } ?? visible.first
     }
 
@@ -196,6 +209,33 @@ final class AppStore: ObservableObject {
     func removeSubscription(_ id: UUID) {
         subscriptions.removeAll { $0.id == id }
         refresh()
+    }
+
+    // MARK: - Title filters (muted meetings)
+
+    /// Row-toggle add path: adds an exact-title rule for `event`'s calendar.
+    /// The owning calendar is resolved by `calendarID` (subscriptions first,
+    /// native second); unknown calendar or empty title → no-op (the UI disables
+    /// the button for empty titles anyway).
+    func toggleMute(for event: MeetingEvent) {
+        guard !event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if let index = subscriptions.firstIndex(where: { $0.id == event.calendarID }) {
+            setTitleFilters(calendarID: event.calendarID, rules: TitleFilterRule.addingExact(title: event.title, rules: subscriptions[index].titleFilters))
+        } else if let index = nativeCalendars.firstIndex(where: { $0.id == event.calendarID }) {
+            setTitleFilters(calendarID: event.calendarID, rules: TitleFilterRule.addingExact(title: event.title, rules: nativeCalendars[index].titleFilters))
+        }
+    }
+
+    /// Commits a full rule list for one calendar (editor Save, popover Remove).
+    /// Normalizes (trim, dedupe, cap); the didSet persist + reconcile recomputes
+    /// every affected event's muted flag in place.
+    func setTitleFilters(calendarID: UUID, rules: [TitleFilterRule]) {
+        let normalized = TitleFilterRule.normalized(rules)
+        if let index = subscriptions.firstIndex(where: { $0.id == calendarID }) {
+            subscriptions[index].titleFilters = normalized
+        } else if let index = nativeCalendars.firstIndex(where: { $0.id == calendarID }) {
+            nativeCalendars[index].titleFilters = normalized
+        }
     }
 
     // MARK: - Native calendars (EventKit)
@@ -288,15 +328,17 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Native events for currently-enabled native calendars, tinted per current settings.
+    /// Native events for currently-enabled native calendars, tinted per current
+    /// settings and re-flagged against current title-filter rules.
     private func coloredNativeSnapshot() -> [MeetingEvent] {
         let byID = Dictionary(uniqueKeysWithValues: nativeCalendars.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
         let enabled = Set(nativeCalendars.filter(\.isEnabled).map(\.id))
-        return nativeEvents.filter { enabled.contains($0.calendarID) }.map { event in
+        let tinted = nativeEvents.filter { enabled.contains($0.calendarID) }.map { event in
             var copy = event
             if let hex = byID[event.calendarID] { copy.colorHex = hex }
             return copy
         }
+        return TitleFilterMatcher.applying(to: tinted, nativeCalendars: nativeCalendars)
     }
 
     /// Recombine the ICS half of `events` (untouched) with the current native snapshot.
@@ -356,9 +398,15 @@ final class AppStore: ObservableObject {
     nonisolated static func mergeICS(current: [MeetingEvent], results: [FetchResult], live: [CalendarSubscription], previousErrors: [UUID: String], previousWarnings: [UUID: String] = [:], latestRequestIDs: [UUID: Int] = [:]) -> (events: [MeetingEvent], errors: [UUID: String], warnings: [UUID: String], allSucceeded: Bool) {
         let liveByID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0) })
         let colorByID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
-        var events = current.filter { event in
-            guard let subscription = liveByID[event.calendarID] else { return false }
-            return subscription.isEnabled
+        // Muted flags come from the LIVE rules — a fetch that started before a
+        // rule edit must land with the new flags applied, exactly like colors.
+        let matchers = TitleFilterMatcher.byCalendar(subscriptions: live)
+        var events = current.compactMap { event -> MeetingEvent? in
+            guard let subscription = liveByID[event.calendarID], subscription.isEnabled else { return nil }
+            var copy = event
+            if let hex = colorByID[event.calendarID] { copy.colorHex = hex }
+            copy.isMuted = matchers[event.calendarID]?.matches(title: event.title) ?? false
+            return copy
         }
         let enabledIDs = Set(live.filter(\.isEnabled).map(\.id))
         var errors = previousErrors.filter { enabledIDs.contains($0.key) }
@@ -387,6 +435,7 @@ final class AppStore: ObservableObject {
             events.append(contentsOf: result.events.map { event in
                 var copy = event
                 if let hex = colorByID[event.calendarID] { copy.colorHex = hex }
+                copy.isMuted = matchers[event.calendarID]?.matches(title: event.title) ?? false
                 return copy
             })
         }
@@ -565,13 +614,40 @@ final class AppStore: ObservableObject {
         let sorted = Self.normalizedEvents(newEvents)
         let active = Set(sorted.map(\.id))
         let pruned = Self.prunedBookkeeping(alerted: alerted, snoozed: snoozed, activeIDs: active, previousIDs: previousCommitIDs)
-        alerted = pruned.alerted
-        snoozed = pruned.snoozed
+        // Single funnel for EVERY event-list change — rule edits, ICS refreshes
+        // (a title edit keeps the same id and can flip muted→unmuted mid-window),
+        // and native rebuilds all pass through here, so the unmute ratchet lives
+        // here and nowhere else.
+        let ratcheted = Self.ratchetSilence(previous: events, current: sorted, alerted: pruned.alerted, snoozed: pruned.snoozed, leadSeconds: settings.leadSeconds, now: now())
+        alerted = ratcheted.alerted
+        snoozed = ratcheted.snoozed
         previousCommitIDs = active
         events = sorted
         // Keep an open alert in sync: cancelled/removed/disabled events drop
         // off the cards, changed events update in place.
         alertController?.reconcile(withCurrent: sorted)
+    }
+
+    /// Pure unmute ratchet: an event that transitions muted→unmuted while its
+    /// lead window already started must never pop a surprise fullscreen alert
+    /// (the user deleted/edited a rule, or a title stopped matching on refresh).
+    /// Silencing means alerted[id] = true AND snoozed[id] removed — a snoozed +
+    /// alerted event re-fires once its snooze expires, so both are required.
+    /// Events unmuted before their window are untouched; brand-new events (no
+    /// previous id) are untouched — that is intended late-delivery behavior.
+    nonisolated static func ratchetSilence(previous: [MeetingEvent], current: [MeetingEvent], alerted: Set<String>, snoozed: [String: Date], leadSeconds: Int, now: Date) -> (alerted: Set<String>, snoozed: [String: Date]) {
+        var wasMuted: [String: Bool] = [:]
+        for event in previous { wasMuted[event.id] = event.isMuted }
+        var alerted = alerted
+        var snoozed = snoozed
+        let lead = TimeInterval(leadSeconds)
+        for event in current {
+            guard wasMuted[event.id] == true, !event.isMuted else { continue }
+            guard now >= event.start.addingTimeInterval(-lead), now < event.end else { continue }
+            alerted.insert(event.id)
+            snoozed.removeValue(forKey: event.id)
+        }
+        return (alerted, snoozed)
     }
 
     /// Deterministic ordering + dedup for the published event list: stable
@@ -599,13 +675,15 @@ final class AppStore: ObservableObject {
     private func reconcileEvents() {
         let byID = Dictionary(uniqueKeysWithValues: subscriptions.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
         let enabled = Set(subscriptions.filter(\.isEnabled).map(\.id))
-        let next = events.compactMap { event -> MeetingEvent? in
-            if knownNativeCalendarIDs.contains(event.calendarID) { return event }
+        let native = events.filter { knownNativeCalendarIDs.contains($0.calendarID) }
+        let tintedICS = events.compactMap { event -> MeetingEvent? in
+            if knownNativeCalendarIDs.contains(event.calendarID) { return nil }
             guard enabled.contains(event.calendarID) else { return nil }
             var copy = event
             if let hex = byID[event.calendarID] { copy.colorHex = hex }
             return copy
         }
+        let next = TitleFilterMatcher.applying(to: tintedICS, subscriptions: subscriptions) + native
         commitEvents(next)
     }
 
@@ -652,9 +730,11 @@ final class AppStore: ObservableObject {
     /// launch, delayed refresh, blocked UI) still alerts instead of being
     /// silently dropped by the old 45-second deadline. A snoozed reminder
     /// re-fires when its snooze expires, again only while `now < event.end`.
+    /// Title-muted events never fire — the pure seam `tick()` shares with tests.
     nonisolated static func dueForAlert(events: [MeetingEvent], alerted: Set<String>, snoozed: [String: Date], leadSeconds: Int, now: Date) -> [MeetingEvent] {
         let lead = TimeInterval(leadSeconds)
         return events.filter { event in
+            if event.isMuted { return false }
             if alerted.contains(event.id) {
                 if let fireAt = snoozed[event.id], now >= fireAt, now < event.end { return true }
                 return false

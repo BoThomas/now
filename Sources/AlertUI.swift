@@ -127,12 +127,13 @@ final class AlertController: ObservableObject {
     }
 
     /// Drops cards whose event vanished from the store (cancelled, calendar
-    /// removed/disabled, occurrence deleted) and picks up refreshed copies of
-    /// changed events. A rescheduled meeting gets a NEW id, so its old card
-    /// drops and the new time earns its own reminder when due again. Pure.
+    /// removed/disabled, occurrence deleted) or became title-muted, and picks up
+    /// refreshed copies of changed events. A rescheduled meeting gets a NEW id,
+    /// so its old card drops and the new time earns its own reminder when due
+    /// again. Pure.
     nonisolated static func reconciledShownEvents(shown: [MeetingEvent], current: [MeetingEvent]) -> [MeetingEvent] {
         let byID = Dictionary(uniqueKeysWithValues: current.map { ($0.id, $0) })
-        return shown.compactMap { byID[$0.id] }
+        return shown.compactMap { byID[$0.id] }.filter { !$0.isMuted }
     }
 
     /// Called from `AppStore.commitEvents` so an open alert tracks reality.
