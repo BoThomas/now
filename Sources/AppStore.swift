@@ -86,6 +86,10 @@ final class AppStore: ObservableObject {
     /// IDs present in the most recent `commitEvents` — lets the prune there require
     /// two consecutive misses before dropping alert/snooze bookkeeping.
     private var previousCommitIDs: Set<String> = []
+    /// Last observed muted state, retained across one missing commit just like
+    /// alert/snooze bookkeeping. A transient omission must not hide an unmute
+    /// transition when the event returns inside its lead window.
+    private var recentMutedByID: [String: Bool] = [:]
     private var pendingRefresh = false
     private var fetchTracker = FetchTracker()
     private var tickTimer: Timer?
@@ -618,9 +622,10 @@ final class AppStore: ObservableObject {
         // (a title edit keeps the same id and can flip muted→unmuted mid-window),
         // and native rebuilds all pass through here, so the unmute ratchet lives
         // here and nowhere else.
-        let ratcheted = Self.ratchetSilence(previous: events, current: sorted, alerted: pruned.alerted, snoozed: pruned.snoozed, leadSeconds: settings.leadSeconds, now: now())
+        let ratcheted = Self.ratchetSilence(previous: events, fallbackMutedByID: recentMutedByID, current: sorted, alerted: pruned.alerted, snoozed: pruned.snoozed, leadSeconds: settings.leadSeconds, now: now())
         alerted = ratcheted.alerted
         snoozed = ratcheted.snoozed
+        recentMutedByID = Self.retainedMutedStates(previous: recentMutedByID, current: sorted, previousIDs: previousCommitIDs)
         previousCommitIDs = active
         events = sorted
         // Keep an open alert in sync: cancelled/removed/disabled events drop
@@ -635,8 +640,8 @@ final class AppStore: ObservableObject {
     /// alerted event re-fires once its snooze expires, so both are required.
     /// Events unmuted before their window are untouched; brand-new events (no
     /// previous id) are untouched — that is intended late-delivery behavior.
-    nonisolated static func ratchetSilence(previous: [MeetingEvent], current: [MeetingEvent], alerted: Set<String>, snoozed: [String: Date], leadSeconds: Int, now: Date) -> (alerted: Set<String>, snoozed: [String: Date]) {
-        var wasMuted: [String: Bool] = [:]
+    nonisolated static func ratchetSilence(previous: [MeetingEvent], fallbackMutedByID: [String: Bool] = [:], current: [MeetingEvent], alerted: Set<String>, snoozed: [String: Date], leadSeconds: Int, now: Date) -> (alerted: Set<String>, snoozed: [String: Date]) {
+        var wasMuted = fallbackMutedByID
         for event in previous { wasMuted[event.id] = event.isMuted }
         var alerted = alerted
         var snoozed = snoozed
@@ -648,6 +653,14 @@ final class AppStore: ObservableObject {
             snoozed.removeValue(forKey: event.id)
         }
         return (alerted, snoozed)
+    }
+
+    /// Keeps current states plus states missing from exactly one commit. On the
+    /// second consecutive miss `previousIDs` no longer contains the id, so it drops.
+    nonisolated static func retainedMutedStates(previous: [String: Bool], current: [MeetingEvent], previousIDs: Set<String>) -> [String: Bool] {
+        var retained = previous.filter { previousIDs.contains($0.key) }
+        for event in current { retained[event.id] = event.isMuted }
+        return retained
     }
 
     /// Deterministic ordering + dedup for the published event list: stable

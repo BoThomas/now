@@ -1812,6 +1812,15 @@ enum SelfTest {
         let stableOutcome = AppStore.ratchetSilence(previous: [unmutedRunning], current: [unmutedRunning], alerted: [unmutedRunning.id], snoozed: [:], leadSeconds: 300, now: now)
         c.expect(stableOutcome.alerted == [unmutedRunning.id] && stableOutcome.snoozed.isEmpty, "repeated commits leave the ratchet stable")
 
+        var retainedMuted: [String: Bool] = [:]
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [mutedRunning], previousIDs: [])
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], previousIDs: [mutedRunning.id])
+        let afterOneMiss = AppStore.ratchetSilence(previous: [], fallbackMutedByID: retainedMuted, current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
+        c.expect(afterOneMiss.alerted == [unmutedRunning.id], "one transient omission preserves muted state for the unmute ratchet")
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], previousIDs: [])
+        let afterTwoMisses = AppStore.ratchetSilence(previous: [], fallbackMutedByID: retainedMuted, current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
+        c.expect(afterTwoMisses.alerted.isEmpty, "two consecutive omissions expire retained muted state")
+
         let mutedNearest = ratchetEvent("nearest", muted: true, startIn: -30)
         let future = ratchetEvent("future", muted: false, startIn: 600)
         c.expect(AppStore.nextEvent(events: [mutedNearest, future], lateMinutes: 0, now: now)?.id == future.id, "nextEvent skips a muted running meeting")
