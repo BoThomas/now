@@ -213,7 +213,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Muted rows keep their calendar dot, faded. The title itself keeps its
         // NATIVE color — explicit foreground colors break menu selection
         // highlighting (hard-won constraint); muting is signaled by the dot plus
-        // a small trailing annotation, matching the existing no-link treatment.
+        // compact trailing state icons.
         item.image = Palette.dotImage(color: event.isMuted ? event.nsColor.withAlphaComponent(0.35) : event.nsColor)
         item.toolTip = Self.tooltipText(for: event)
         let paragraph = NSMutableParagraphStyle()
@@ -222,11 +222,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let titleAttributes: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 0), .paragraphStyle: paragraph]
         let text = NSMutableAttributedString(string: Fmt.time.string(from: event.start), attributes: timeAttributes)
         text.append(NSAttributedString(string: "\t", attributes: titleAttributes))
-        var title = " \(Fmt.ellipsized(event.title.isEmpty ? "Untitled" : event.title, limit: 48))"
-        if event.start <= Date() {
-            title += "  ·  \(Fmt.barCountdown(to: event.start))"
-        }
+        let title = " \(Fmt.ellipsized(event.title.isEmpty ? "Untitled" : event.title, limit: 48))"
         text.append(NSAttributedString(string: title, attributes: titleAttributes))
+        if event.start <= Date() {
+            text.append(NSAttributedString(string: "  \(Fmt.barCountdown(to: event.start))", attributes: [
+                .font: NSFont.systemFont(ofSize: 10),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph,
+            ]))
+        }
         var accessibilityLabel = event.title.isEmpty ? "Untitled" : event.title
         if event.isMuted {
             let attachment = NSTextAttachment()
@@ -239,27 +243,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 text.append(NSAttributedString(string: "  ", attributes: titleAttributes))
                 text.append(NSAttributedString(attachment: attachment))
             }
-            text.append(NSAttributedString(string: " Muted", attributes: [
-                .font: NSFont.systemFont(ofSize: 10),
-                .foregroundColor: NSColor.secondaryLabelColor,
-                .paragraphStyle: paragraph,
-            ]))
             accessibilityLabel += ", reminders muted"
         }
         if event.link == nil {
             text.append(NSAttributedString(string: "  ", attributes: titleAttributes))
             let attachment = NSTextAttachment()
-            if let image = NSImage(systemSymbolName: "chain.slash", accessibilityDescription: "No meeting link") {
+            let configuration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+            if let base = NSImage(systemSymbolName: "personalhotspot.slash", accessibilityDescription: "No meeting link"),
+               let image = base.withSymbolConfiguration(configuration) {
                 image.isTemplate = true
                 attachment.image = image
-                attachment.bounds = CGRect(x: 0, y: -2, width: 11, height: 11)
+                attachment.bounds = CGRect(x: 0, y: -1, width: 12, height: 12)
                 text.append(NSAttributedString(attachment: attachment))
             }
-            text.append(NSAttributedString(string: " No link", attributes: [
-                .font: NSFont.systemFont(ofSize: 10),
-                .foregroundColor: NSColor.secondaryLabelColor,
-                .paragraphStyle: paragraph,
-            ]))
             accessibilityLabel += ", no meeting link"
         }
         if event.isMuted || event.link == nil {
@@ -400,15 +396,27 @@ private struct LinklessEventPopover: View {
                 }
                 Spacer(minLength: 0)
             }
-            Label("No meeting link found", systemImage: "chain.slash")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-            Label("\(event.start.formatted(date: .abbreviated, time: .shortened)) – \(Fmt.time.string(from: event.end))", systemImage: "clock")
-                .font(.system(size: 12))
+            HStack(spacing: 8) {
+                Image(systemName: "personalhotspot.slash")
+                    .frame(width: 14)
+                Text("No meeting link found")
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Image(systemName: "clock")
+                    .frame(width: 14)
+                Text("\(event.start.formatted(date: .abbreviated, time: .shortened)) – \(Fmt.time.string(from: event.end))")
+            }
+            .font(.system(size: 12))
             if let location {
-                Label(location, systemImage: "mappin.and.ellipse")
-                    .font(.system(size: 12))
-                    .lineLimit(2)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .frame(width: 14)
+                    Text(location)
+                        .lineLimit(2)
+                }
+                .font(.system(size: 12))
             }
             if let notes {
                 Text(notes)

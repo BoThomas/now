@@ -471,7 +471,7 @@ struct SingleEventView: View {
                 .buttonStyle(AlertJoinButtonStyle(color: event.alertButtonColor))
             } else {
                 VStack(spacing: 12) {
-                    Label("No meeting link found", systemImage: "chain.slash")
+                    Label("No meeting link found", systemImage: "personalhotspot.slash")
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(.white.opacity(0.58))
                     if let notes = displayNotes {
@@ -545,7 +545,7 @@ struct MultiEventView: View {
                                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                                         .foregroundStyle(.white)
                                 } else {
-                                    Image(systemName: "chain.slash")
+                                    Image(systemName: "personalhotspot.slash")
                                         .font(.system(size: 10, weight: .semibold))
                                         .foregroundStyle(.white.opacity(0.62))
                                 }
@@ -569,7 +569,7 @@ struct MultiEventView: View {
                                 }
                                 .buttonStyle(AlertJoinButtonStyle(color: event.alertButtonColor, compact: true))
                             } else {
-                                Label("No link", systemImage: "chain.slash")
+                                Label("No link", systemImage: "personalhotspot.slash")
                                     .font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(.white.opacity(0.48))
                             }

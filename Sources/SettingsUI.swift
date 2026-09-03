@@ -501,7 +501,7 @@ struct UpcomingEventList: View {
     }
 
     private var noLinkLabel: some View {
-        Label("No link", systemImage: "chain.slash")
+        Text("No link")
             .font(.system(size: 10))
             .foregroundStyle(.secondary)
             .help("No meeting link found")
