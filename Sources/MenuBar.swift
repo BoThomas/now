@@ -15,6 +15,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// `menuNeedsUpdate` alone only fires on the next open.
     private var menuIsTracking = false
     private var lastUpdateSignature = ""
+    /// Structural changes (start/end boundaries, refreshes, midnight) rebuild
+    /// the open menu; ordinary second ticks update row titles in place so the
+    /// current hover/selection is not disturbed.
+    private var lastMenuStructureSignature = ""
     private var trackingObservers: [Any] = []
     private var eventPopover: NSPopover?
 
@@ -35,7 +39,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 MainActor.assumeIsolated { self?.menuIsTracking = true }
             },
             NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: menu, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.menuIsTracking = false }
+                MainActor.assumeIsolated {
+                    self?.menuIsTracking = false
+                    if let trackedMenu = self?.statusItem.menu {
+                        self?.clearEventTooltips(in: trackedMenu)
+                    }
+                }
             },
         ]
         // .common mode: the countdown keeps updating while the dropdown is
@@ -51,76 +60,210 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func updateButton() {
-        refreshOpenMenuForUpdateState()
         guard let button = statusItem.button else { return }
+        let now = Date()
+        refreshOpenMenu(now: now)
         if store.isPaused {
             button.attributedTitle = NSAttributedString(string: "")
             button.image = NSImage(systemSymbolName: "moon.zzz.fill", accessibilityDescription: "now — reminders paused")
             button.setAccessibilityLabel("now — reminders paused")
+            button.toolTip = "now — reminders paused"
             return
         }
-        guard store.settings.showMenuBarCountdown, let next = store.nextEvent else {
+        guard store.settings.showMenuBarCountdown,
+              let focus = AppStore.menuBarFocus(events: store.events, lateMinutes: store.settings.lateMinutes, now: now) else {
             button.attributedTitle = NSAttributedString(string: "")
             button.image = NSImage(systemSymbolName: "alarm", accessibilityDescription: "now")
             button.setAccessibilityLabel("now — no upcoming meetings")
+            button.toolTip = "now — no current or upcoming meetings"
             return
         }
         button.image = nil
         let textFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         let dotSize: CGFloat = 7
         let attachment = NSTextAttachment()
-        attachment.image = Palette.dotImage(color: next.nsColor, size: dotSize)
-        attachment.bounds = CGRect(x: 0, y: textFont.capHeight / 2 - dotSize / 2, width: dotSize, height: dotSize)
+        let dots = Palette.dotClusterImage(colors: focus.events.map(\.nsColor), size: dotSize)
+        attachment.image = dots
+        attachment.bounds = CGRect(x: 0, y: textFont.capHeight / 2 - dotSize / 2, width: dots.size.width, height: dotSize)
         let text = NSMutableAttributedString(attachment: attachment)
-        text.append(NSAttributedString(string: " \(Fmt.barCountdown(to: next.start))", attributes: [
+        let countdown: String
+        switch focus.kind {
+        case .start:
+            countdown = Fmt.barCountdown(to: focus.date, relativeTo: now)
+        case .end:
+            countdown = "ends \(Fmt.barCountdown(to: focus.date, relativeTo: now))"
+        }
+        text.append(NSAttributedString(string: " \(countdown)", attributes: [
             .font: textFont,
             .foregroundColor: NSColor.labelColor
         ]))
         button.attributedTitle = text
-        let running = next.start <= Date()
-        button.setAccessibilityLabel(running
-            ? "now — \(next.title) is running, started \(Fmt.ago(next.start))"
-            : "now — next meeting \(next.title) at \(Fmt.time.string(from: next.start)), in \(Fmt.mmss(next.start.timeIntervalSince(Date())))")
+        button.setAccessibilityLabel(Self.accessibilityLabel(for: focus, now: now))
+        button.toolTip = Self.statusTooltip(events: store.events, now: now)
     }
 
-    /// Rebuild the currently-tracking menu when updater state changed — the
-    /// "Update to vX…" item must appear (or the "Checking…" state clear)
-    /// without the user closing and reopening the dropdown.
-    private func refreshOpenMenuForUpdateState() {
-        let signature = "\(updates.available?.version ?? "")|\(updates.stagedVersion ?? "")|\(updates.isChecking)"
-        guard menuIsTracking, signature != lastUpdateSignature else {
-            lastUpdateSignature = signature
+    nonisolated static func accessibilityLabel(for focus: MenuBarFocus, now: Date) -> String {
+        let names = focus.events.map { $0.title.isEmpty ? "Untitled" : $0.title }.joined(separator: ", ")
+        let subject = focus.events.count == 1 ? names : "\(focus.events.count) meetings: \(names)"
+        switch focus.kind {
+        case .start where focus.date <= now:
+            if focus.date == now { return "now — \(subject), starting now" }
+            return "now — \(subject), started \(Fmt.mmss(now.timeIntervalSince(focus.date))) ago"
+        case .start:
+            return "now — \(subject), starts in \(Fmt.mmss(focus.date.timeIntervalSince(now)))"
+        case .end:
+            return "now — \(subject), ends in \(Fmt.mmss(focus.date.timeIntervalSince(now)))"
+        }
+    }
+
+    /// Hover context stays concise but exposes both useful clocks without
+    /// widening the status item: every running meeting's end and the next
+    /// unmuted start (including simultaneous starts).
+    nonisolated static func statusTooltip(events: [MeetingEvent], now: Date) -> String {
+        let eligible = events.filter { !$0.isMuted }
+        let running = eligible
+            .filter { $0.start <= now && now < $0.end }
+            .sorted { ($0.end, $0.start, $0.title, $0.id) < ($1.end, $1.start, $1.title, $1.id) }
+        let future = eligible
+            .filter { $0.start > now }
+            .sorted { ($0.start, $0.title, $0.id) < ($1.start, $1.title, $1.id) }
+        var lines = running.prefix(3).map { event in
+            "Now: \(event.title.isEmpty ? "Untitled" : event.title) — ends in \(Fmt.barCountdown(to: event.end, relativeTo: now))"
+        }
+        if let nextStart = future.first?.start {
+            let next = future.filter { $0.start == nextStart }
+            lines.append(contentsOf: next.prefix(3).map { event in
+                "Next: \(event.title.isEmpty ? "Untitled" : event.title) — starts in \(Fmt.barCountdown(to: event.start, relativeTo: now))"
+            })
+        }
+        return lines.isEmpty ? "now — no current or upcoming meetings" : lines.joined(separator: "\n")
+    }
+
+    /// Keep an open native menu live. Rebuilding it every second causes hover
+    /// and keyboard selection to jump, so countdown-only ticks mutate the
+    /// existing event items; structural or updater changes still rebuild.
+    private func refreshOpenMenu(now: Date) {
+        guard menuIsTracking, let menu = statusItem.menu else { return }
+        let updateSignature = currentUpdateSignature
+        let structureSignature = menuStructureSignature(at: now)
+        if updateSignature != lastUpdateSignature || structureSignature != lastMenuStructureSignature {
+            menuNeedsUpdate(menu)
             return
         }
-        lastUpdateSignature = signature
-        if let menu = statusItem.menu {
-            menuNeedsUpdate(menu)
+
+        let eventItems = menu.items.compactMap { item -> (NSMenuItem, MeetingEvent)? in
+            guard let event = item.representedObject as? MeetingEvent else { return nil }
+            return (item, event)
         }
+        guard !eventItems.isEmpty else { return }
+        let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        let measure: [NSAttributedString.Key: Any] = [.font: timeFont]
+        let timeWidth = eventItems.map { (Fmt.time.string(from: $0.1.start) as NSString).size(withAttributes: measure).width }.max() ?? 0
+        for (item, event) in eventItems {
+            updateEventMenuItem(
+                item,
+                for: event,
+                now: now,
+                timeFont: timeFont,
+                timeWidth: timeWidth,
+                includeTooltip: item.isHighlighted
+            )
+        }
+    }
+
+    /// Native menu-item help tags can otherwise remain active after the
+    /// pointer leaves the dropdown and cover the status-button help tag. Keep
+    /// a help tag only on the row AppKit is actively highlighting.
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        clearEventTooltips(in: menu)
+        guard let item, let event = item.representedObject as? MeetingEvent else { return }
+        item.toolTip = Self.tooltipText(for: event, now: Date())
+    }
+
+    private func clearEventTooltips(in menu: NSMenu) {
+        for item in menu.items where item.representedObject is MeetingEvent {
+            item.toolTip = nil
+        }
+    }
+
+    private var currentUpdateSignature: String {
+        "\(updates.available?.version ?? "")|\(updates.stagedVersion ?? "")|\(updates.isChecking)"
+    }
+
+    private func menuStructureSignature(at now: Date) -> String {
+        let day = Calendar.current.startOfDay(for: now).timeIntervalSinceReferenceDate
+        let eventStates = store.events.compactMap { event -> String? in
+            guard AppStore.isVisible(event, at: now) else { return nil }
+            let state = event.start <= now && now < event.end ? "now" : "future"
+            // `representedObject` stores a value-type snapshot. Include every
+            // field that affects row rendering, actions, or help text so a
+            // refresh cannot leave the open menu displaying stale event data.
+            let fields = [
+                event.id,
+                state,
+                String(event.start.timeIntervalSinceReferenceDate),
+                String(event.end.timeIntervalSinceReferenceDate),
+                event.title,
+                event.calendarName,
+                event.colorHex,
+                String(event.isMuted),
+                event.link?.absoluteString ?? "",
+                event.location ?? "",
+                event.notes ?? "",
+            ]
+            return fields.map { "\($0.utf8.count):\($0)" }.joined()
+        }.joined(separator: "|")
+        return "\(store.isPaused)|\(day)|\(eventStates)"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        lastUpdateSignature = "\(updates.available?.version ?? "")|\(updates.stagedVersion ?? "")|\(updates.isChecking)"
+        let now = Date()
+        lastUpdateSignature = currentUpdateSignature
+        lastMenuStructureSignature = menuStructureSignature(at: now)
         menu.removeAllItems()
-        let upcoming = Array(store.upcoming.prefix(5))
+        let visible = store.events.filter { AppStore.isVisible($0, at: now) }
         if store.isPaused {
             let until = store.pausedUntil == Date.distantFuture ? "indefinitely" : "until \(Fmt.time.string(from: store.pausedUntil ?? Date()))"
             menu.addItem(withTitle: "Reminders paused \(until)", action: nil, keyEquivalent: "")
             menu.addItem(withTitle: "Resume Now", action: #selector(resumeAction), keyEquivalent: "").target = self
-        } else if upcoming.isEmpty {
+        } else if visible.isEmpty {
             menu.addItem(withTitle: store.events.isEmpty ? "No calendars loaded" : "No upcoming events", action: nil, keyEquivalent: "")
         } else {
             let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
             let measure: [NSAttributedString.Key: Any] = [.font: timeFont]
-            let timeWidth = upcoming.map { (Fmt.time.string(from: $0.start) as NSString).size(withAttributes: measure).width }.max() ?? 0
-            let tabLocation = timeWidth.rounded(.up) + 4
-            var currentDay: Date?
-            for event in upcoming {
-                let day = Calendar.current.startOfDay(for: event.start)
-                if currentDay != day {
-                    currentDay = day
-                    menu.addItem(dayHeaderItem(for: day))
+            let timeWidth = visible.map { (Fmt.time.string(from: $0.start) as NSString).size(withAttributes: measure).width }.max() ?? 0
+            let running = visible.filter { $0.start <= now && now < $0.end }
+            let future = visible.filter { $0.start > now }
+            var remainingSlots = 5
+
+            func addSection(_ title: String, events: [MeetingEvent]) {
+                let shown = Array(events.prefix(remainingSlots))
+                guard !shown.isEmpty else { return }
+                menu.addItem(sectionHeaderItem(title))
+                for event in shown {
+                    menu.addItem(eventMenuItem(for: event, now: now, timeFont: timeFont, timeWidth: timeWidth))
                 }
-                menu.addItem(eventMenuItem(for: event, timeFont: timeFont, tabLocation: tabLocation))
+                remainingSlots -= shown.count
+            }
+
+            addSection("NOW", events: running)
+
+            var later: ArraySlice<MeetingEvent> = future[future.startIndex...]
+            if let nextStart = future.first?.start {
+                let nextCount = future.prefix { $0.start == nextStart }.count
+                addSection(nextHeader(for: nextStart), events: Array(future.prefix(nextCount)))
+                later = future.dropFirst(nextCount)
+            }
+
+            var currentLaterDay: Date?
+            for event in later where remainingSlots > 0 {
+                let day = Calendar.current.startOfDay(for: event.start)
+                if currentLaterDay != day {
+                    currentLaterDay = day
+                    menu.addItem(sectionHeaderItem(laterHeader(for: day)))
+                }
+                menu.addItem(eventMenuItem(for: event, now: now, timeFont: timeFont, timeWidth: timeWidth))
+                remainingSlots -= 1
             }
         }
         menu.addItem(.separator())
@@ -168,24 +311,45 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(withTitle: "Quit now", action: #selector(quitAction), keyEquivalent: "q").target = self
     }
 
-    private func dayHeaderItem(for day: Date) -> NSMenuItem {
+    private func sectionHeaderItem(_ title: String) -> NSMenuItem {
         let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        item.attributedTitle = NSAttributedString(string: Fmt.dayHeader(for: day), attributes: [
+        item.attributedTitle = NSAttributedString(string: title, attributes: [
             .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
             .foregroundColor: NSColor.secondaryLabelColor
         ])
         return item
     }
 
+    private func laterHeader(for day: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(day) { return "LATER TODAY" }
+        if calendar.isDateInTomorrow(day) { return "LATER TOMORROW" }
+        return "LATER \(Fmt.dayHeader(for: day))"
+    }
+
+    private func nextHeader(for start: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(start) { return "NEXT" }
+        if calendar.isDateInTomorrow(start) { return "NEXT · TOMORROW" }
+        return "NEXT · \(Fmt.dayHeader(for: start))"
+    }
+
     /// Multi-line hover tooltip: title, when, location, notes. Values that are nothing
     /// but the join link (or Apple's `----( Video Call )----` wrapper around it) are
     /// suppressed (redundant — clicking the row opens it).
-    private static func tooltipText(for event: MeetingEvent) -> String {
+    private static func tooltipText(for event: MeetingEvent, now: Date) -> String {
         var lines: [String] = []
         lines.append(event.title.isEmpty ? "Untitled" : event.title)
         let calendar = Calendar.current
         let dateText = calendar.isDateInToday(event.start) ? "" : event.start.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)) + " · "
         lines.append("\(dateText)\(Fmt.time.string(from: event.start)) – \(Fmt.time.string(from: event.end)) · \(Fmt.duration(event.end.timeIntervalSince(event.start)))")
+        if now < event.start {
+            lines.append("Starts in \(Fmt.barCountdown(to: event.start, relativeTo: now))")
+        } else if now < event.end {
+            let delta = Fmt.barCountdown(to: event.start, relativeTo: now)
+            let started = delta == "now" ? "just now" : "\(delta.dropFirst()) ago"
+            lines.append("Running · started \(started) · ends in \(Fmt.barCountdown(to: event.end, relativeTo: now))")
+        }
         if let location = event.location, !location.isEmpty, !isJustJoinLink(location, event: event) {
             lines.append("Location: \(Fmt.ellipsized(location, limit: 100))")
         }
@@ -204,65 +368,90 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return text.trimmingCharacters(in: .whitespacesAndNewlines) == link.absoluteString
     }
 
-    private func eventMenuItem(for event: MeetingEvent, timeFont: NSFont, tabLocation: CGFloat) -> NSMenuItem {
+    nonisolated static func menuStatusText(for event: MeetingEvent, lateMinutes: Int, now: Date) -> String {
+        if now < event.start {
+            guard Calendar.current.isDate(event.start, inSameDayAs: now) else { return "" }
+            return "in \(Fmt.barCountdown(to: event.start, relativeTo: now))"
+        }
+        guard now < event.end else { return "" }
+        if AppStore.isWithinStartedCountdownWindow(event, lateMinutes: lateMinutes, now: now) {
+            return "\(Fmt.barCountdown(to: event.start, relativeTo: now)) · ends \(Fmt.time.string(from: event.end))"
+        }
+        return "\(Fmt.barCountdown(to: event.end, relativeTo: now)) left"
+    }
+
+    private func eventMenuItem(for event: MeetingEvent, now: Date, timeFont: NSFont, timeWidth: CGFloat) -> NSMenuItem {
         // Linkless events stay enabled: selecting one opens its useful event
         // details rather than pretending to be a Join action or doing nothing.
         let item = NSMenuItem(title: "", action: event.link == nil ? #selector(showEventDetailsAction) : #selector(joinAction), keyEquivalent: "")
         item.target = self
         item.representedObject = event
+        updateEventMenuItem(item, for: event, now: now, timeFont: timeFont, timeWidth: timeWidth, includeTooltip: false)
+        return item
+    }
+
+    private func updateEventMenuItem(
+        _ item: NSMenuItem,
+        for event: MeetingEvent,
+        now: Date,
+        timeFont: NSFont,
+        timeWidth: CGFloat,
+        includeTooltip: Bool
+    ) {
         // Muted rows keep their calendar dot, faded. The title itself keeps its
         // NATIVE color — explicit foreground colors break menu selection
-        // highlighting (hard-won constraint); muting is signaled by the dot plus
-        // compact trailing state icons.
+        // highlighting (hard-won constraint). State symbols follow the title
+        // so ordinary rows do not pay for a permanently reserved icon column.
         item.image = Palette.dotImage(color: event.isMuted ? event.nsColor.withAlphaComponent(0.35) : event.nsColor)
-        item.toolTip = Self.tooltipText(for: event)
+        item.toolTip = includeTooltip ? Self.tooltipText(for: event, now: now) : nil
         let paragraph = NSMutableParagraphStyle()
-        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: tabLocation, options: [:])]
+        let timeRightEdge = timeWidth.rounded(.up)
+        paragraph.tabStops = [
+            NSTextTab(textAlignment: .right, location: timeRightEdge, options: [:]),
+            NSTextTab(textAlignment: .left, location: timeRightEdge + 8, options: [:]),
+        ]
         let timeAttributes: [NSAttributedString.Key: Any] = [.font: timeFont, .paragraphStyle: paragraph]
         let titleAttributes: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 0), .paragraphStyle: paragraph]
-        let text = NSMutableAttributedString(string: Fmt.time.string(from: event.start), attributes: timeAttributes)
+        let iconAttributes: [NSAttributedString.Key: Any] = [.paragraphStyle: paragraph]
+        let text = NSMutableAttributedString()
+
+        func appendIcon(_ name: String, description: String, size: CGFloat) {
+            let configuration = NSImage.SymbolConfiguration(pointSize: size, weight: .medium)
+            guard let base = NSImage(systemSymbolName: name, accessibilityDescription: description),
+                  let image = base.withSymbolConfiguration(configuration) else { return }
+            text.append(NSAttributedString(string: " ", attributes: iconAttributes))
+            image.isTemplate = true
+            let attachment = NSTextAttachment()
+            attachment.image = image
+            attachment.bounds = CGRect(x: 0, y: -1, width: size, height: size)
+            text.append(NSAttributedString(attachment: attachment))
+        }
+
+        text.append(NSAttributedString(string: "\t", attributes: iconAttributes))
+        text.append(NSAttributedString(string: Fmt.time.string(from: event.start), attributes: timeAttributes))
         text.append(NSAttributedString(string: "\t", attributes: titleAttributes))
         let title = " \(Fmt.ellipsized(event.title.isEmpty ? "Untitled" : event.title, limit: 48))"
         text.append(NSAttributedString(string: title, attributes: titleAttributes))
-        if event.start <= Date() {
-            text.append(NSAttributedString(string: "  \(Fmt.barCountdown(to: event.start))", attributes: [
+        if event.isMuted {
+            appendIcon("bell.slash", description: "Reminders muted", size: 11)
+        }
+        if event.link == nil {
+            appendIcon("personalhotspot.slash", description: "No meeting link", size: 12)
+        }
+        let status = Self.menuStatusText(for: event, lateMinutes: store.settings.lateMinutes, now: now)
+        if !status.isEmpty {
+            text.append(NSAttributedString(string: "  \(status)", attributes: [
                 .font: NSFont.systemFont(ofSize: 10),
                 .foregroundColor: NSColor.secondaryLabelColor,
                 .paragraphStyle: paragraph,
             ]))
         }
-        var accessibilityLabel = event.title.isEmpty ? "Untitled" : event.title
-        if event.isMuted {
-            let attachment = NSTextAttachment()
-            if let image = NSImage(systemSymbolName: "bell.slash", accessibilityDescription: "Reminders muted") {
-                image.isTemplate = true
-                attachment.image = image
-                // y = -1 centers the 11pt box on the 13pt menu font's cap height
-                // (y = -2 sat visibly low — bell glyphs carry their mass low).
-                attachment.bounds = CGRect(x: 0, y: -1, width: 11, height: 11)
-                text.append(NSAttributedString(string: "  ", attributes: titleAttributes))
-                text.append(NSAttributedString(attachment: attachment))
-            }
-            accessibilityLabel += ", reminders muted"
-        }
-        if event.link == nil {
-            text.append(NSAttributedString(string: "  ", attributes: titleAttributes))
-            let attachment = NSTextAttachment()
-            let configuration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
-            if let base = NSImage(systemSymbolName: "personalhotspot.slash", accessibilityDescription: "No meeting link"),
-               let image = base.withSymbolConfiguration(configuration) {
-                image.isTemplate = true
-                attachment.image = image
-                attachment.bounds = CGRect(x: 0, y: -1, width: 12, height: 12)
-                text.append(NSAttributedString(attachment: attachment))
-            }
-            accessibilityLabel += ", no meeting link"
-        }
-        if event.isMuted || event.link == nil {
-            item.setAccessibilityLabel(accessibilityLabel)
-        }
+        var accessibilityParts = [event.title.isEmpty ? "Untitled" : event.title, Fmt.time.string(from: event.start)]
+        if !status.isEmpty { accessibilityParts.append(status) }
+        if event.isMuted { accessibilityParts.append("reminders muted") }
+        if event.link == nil { accessibilityParts.append("no meeting link") }
+        item.setAccessibilityLabel(accessibilityParts.joined(separator: ", "))
         item.attributedTitle = text
-        return item
     }
 
     @objc private func joinAction(_ sender: NSMenuItem) {

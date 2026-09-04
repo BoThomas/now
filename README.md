@@ -41,7 +41,7 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 - Choose between different alert sounds.
 
 **Menu bar**
-- Live countdown to the next meeting, including late ones (`-3m`).
+- Smart live countdown: briefly shows a meeting that just started (`-3m`), then switches to the closer upcoming start; simultaneous meetings keep their calendar colors.
 - Upcoming events grouped by day: click to join, hover for details.
 - Pause reminders, refresh (⌘R), reminder preview.
 

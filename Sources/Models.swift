@@ -43,7 +43,9 @@ struct AppSettings: Codable, Equatable {
     var soundName = "Hero"
     var showMenuBarCountdown = true
     var launchAtLogin = false
-    var lateMinutes = 0
+    /// Maximum time after a meeting starts during which its elapsed-start
+    /// countdown may own the menu bar. `-1` disables it, `0` means until end.
+    var lateMinutes = 10
     var skipDeclined = true
     var automaticUpdateChecks = true
     var suppressRemindersDuringMeetings = false
@@ -56,7 +58,7 @@ struct AppSettings: Codable, Equatable {
     /// decode instead of crashing pickers or producing absurd behavior.
     static let allowedRefreshMinutes = [5, 15, 30, 60]
     static let leadSecondsRange = 0...7200
-    static let allowedLateMinutes = [-1, 0, 5, 15, 30, 60]
+    static let allowedLateMinutes = [-1, 0, 5, 10, 15, 30, 60]
 
     enum CodingKeys: String, CodingKey {
         case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, lateMinutes, skipDeclined, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
@@ -82,8 +84,8 @@ struct AppSettings: Codable, Equatable {
         soundName = AppStore.soundNames.contains(sound) ? sound : "Hero"
         showMenuBarCountdown = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarCountdown) ?? true
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
-        let late = try c.decodeIfPresent(Int.self, forKey: .lateMinutes) ?? 0
-        lateMinutes = Self.nearest(late, in: Self.allowedLateMinutes, default: 0)
+        let late = try c.decodeIfPresent(Int.self, forKey: .lateMinutes) ?? 10
+        lateMinutes = Self.nearest(late, in: Self.allowedLateMinutes, default: 10)
         skipDeclined = try c.decodeIfPresent(Bool.self, forKey: .skipDeclined) ?? true
         automaticUpdateChecks = try c.decodeIfPresent(Bool.self, forKey: .automaticUpdateChecks) ?? true
         suppressRemindersDuringMeetings = try c.decodeIfPresent(Bool.self, forKey: .suppressRemindersDuringMeetings) ?? false

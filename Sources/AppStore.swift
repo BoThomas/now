@@ -8,6 +8,21 @@ struct MeetingReminderDecision {
     let dismiss: [MeetingEvent]
 }
 
+enum MenuBarCountdownKind: Equatable {
+    /// Count toward (or briefly back from) one or more meetings' shared start.
+    case start
+    /// No future meeting exists; show when the selected running meeting ends.
+    case end
+}
+
+struct MenuBarFocus {
+    let kind: MenuBarCountdownKind
+    let date: Date
+    /// More than one event when multiple unmuted meetings share the selected
+    /// start/end instant. The menu bar renders their colors as a dot cluster.
+    let events: [MeetingEvent]
+}
+
 /// All app state is main-actor (AppKit/MainActor by design — see AGENTS.md).
 /// Pure, unit-tested decision logic is `nonisolated` so the selftest can drive
 /// it without constructing an `AppStore` (and its `EKEventStore`).
@@ -174,10 +189,14 @@ final class AppStore: ObservableObject {
     }
 
     func isVisible(_ event: MeetingEvent, at now: Date) -> Bool {
-        if now < event.start { return true }
-        if settings.lateMinutes < 0 { return false }
-        if settings.lateMinutes == 0 { return now < event.end }
-        return now < event.start.addingTimeInterval(TimeInterval(settings.lateMinutes) * 60)
+        Self.isVisible(event, at: now)
+    }
+
+    /// Menu/list visibility is deliberately independent from the menu bar's
+    /// recent-start window: future events and meetings that are still running
+    /// remain available in the dropdown until their scheduled end.
+    nonisolated static func isVisible(_ event: MeetingEvent, at now: Date) -> Bool {
+        now < event.start || now < event.end
     }
 
     var upcoming: [MeetingEvent] {
@@ -185,23 +204,52 @@ final class AppStore: ObservableObject {
         return events.filter { isVisible($0, at: now) }
     }
 
-    var nextEvent: MeetingEvent? {
-        Self.nextEvent(events: events, lateMinutes: settings.lateMinutes, now: Date())
+    var menuBarFocus: MenuBarFocus? {
+        Self.menuBarFocus(events: events, lateMinutes: settings.lateMinutes, now: Date())
     }
 
-    /// Pure status-item selection: muted events never own the countdown, while
-    /// running meetings retain priority over future meetings.
-    nonisolated static func nextEvent(events: [MeetingEvent], lateMinutes: Int, now: Date) -> MeetingEvent? {
-        // Muted events never alert, so they never own the countdown either
-        // (running-before-future priority preserved over what remains).
-        let visible = events.filter { event in
-            guard !event.isMuted else { return false }
-            if now < event.start { return true }
-            if lateMinutes < 0 { return false }
-            if lateMinutes == 0 { return now < event.end }
-            return now < event.start.addingTimeInterval(TimeInterval(lateMinutes) * 60)
+    /// Whether a running event may still show its elapsed-start countdown.
+    /// Finite windows are capped at the event end: an ended five-minute event
+    /// must not remain the focus merely because the user selected 60 minutes.
+    nonisolated static func isWithinStartedCountdownWindow(_ event: MeetingEvent, lateMinutes: Int, now: Date) -> Bool {
+        guard event.start <= now, now < event.end, lateMinutes >= 0 else { return false }
+        if lateMinutes == 0 { return true }
+        return now < event.start.addingTimeInterval(TimeInterval(lateMinutes) * 60)
+    }
+
+    /// Pure status-item selection. Among the next future start and still-
+    /// eligible recent starts, the closest start wins; a future start wins an
+    /// exact midpoint tie. Thus the setting is a maximum negative-countdown
+    /// window, while closely spaced meetings switch naturally at their midpoint.
+    /// If no start candidate remains and no future meeting exists, the soonest
+    /// ending running meeting supplies an explicit `ends …` fallback.
+    nonisolated static func menuBarFocus(events: [MeetingEvent], lateMinutes: Int, now: Date) -> MenuBarFocus? {
+        let eligible = events.filter { !$0.isMuted }
+        let startCandidates = eligible.filter { event in
+            event.start > now || isWithinStartedCountdownWindow(event, lateMinutes: lateMinutes, now: now)
         }
-        return visible.first { $0.start <= now } ?? visible.first
+
+        if let selected = startCandidates.min(by: { lhs, rhs in
+            let lhsDistance = abs(lhs.start.timeIntervalSince(now))
+            let rhsDistance = abs(rhs.start.timeIntervalSince(now))
+            if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+            let lhsIsFuture = lhs.start > now
+            let rhsIsFuture = rhs.start > now
+            if lhsIsFuture != rhsIsFuture { return lhsIsFuture }
+            return (lhs.start, lhs.calendarName, lhs.title, lhs.id) < (rhs.start, rhs.calendarName, rhs.title, rhs.id)
+        }) {
+            let group = startCandidates
+                .filter { $0.start == selected.start }
+                .sorted { ($0.calendarName, $0.title, $0.id) < ($1.calendarName, $1.title, $1.id) }
+            return MenuBarFocus(kind: .start, date: selected.start, events: group)
+        }
+
+        let running = eligible.filter { $0.start <= now && now < $0.end }
+        guard let soonestEnd = running.map(\.end).min() else { return nil }
+        let group = running
+            .filter { $0.end == soonestEnd }
+            .sorted { ($0.calendarName, $0.title, $0.id) < ($1.calendarName, $1.title, $1.id) }
+        return MenuBarFocus(kind: .end, date: soonestEnd, events: group)
     }
 
     func addSubscription(name: String, urlString: String) {

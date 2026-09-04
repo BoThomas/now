@@ -1491,6 +1491,7 @@ struct SettingsView: View {
     @EnvironmentObject var updates: UpdateController
     @State private var showAddSheet = false
     @State private var showBrowserMeetingInfo = false
+    @State private var showStartedCountdownInfo = false
     @StateObject private var commandHints = CommandHoldTracker()
     @State private var selectedSection: SettingsSection = .calendars
     /// While a sidebar jump animates, the scroll-position tracker is paused —
@@ -2035,16 +2036,34 @@ struct SettingsView: View {
             .pickerStyle(.menu)
             .frame(maxWidth: 240)
             Toggle("Show countdown in menu bar", isOn: $store.settings.showMenuBarCountdown)
-            Picker("Show started meetings", selection: $store.settings.lateMinutes) {
-                Text("Hide once started").tag(-1)
-                Text("Until they end").tag(0)
-                Text("5 min after start").tag(5)
-                Text("15 min after start").tag(15)
-                Text("30 min after start").tag(30)
-                Text("60 min after start").tag(60)
+            HStack(spacing: 6) {
+                Picker("Show elapsed start time for", selection: $store.settings.lateMinutes) {
+                    Text("Never").tag(-1)
+                    Text("Until meeting ends").tag(0)
+                    Text("5 minutes").tag(5)
+                    Text("10 minutes").tag(10)
+                    Text("15 minutes").tag(15)
+                    Text("30 minutes").tag(30)
+                    Text("60 minutes").tag(60)
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 320)
+                Button {
+                    showStartedCountdownInfo.toggle()
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.borderless)
+                .help("How recently started meetings affect the menu bar countdown")
+                .accessibilityLabel("About elapsed start time")
+                .popover(isPresented: $showStartedCountdownInfo, arrowEdge: .trailing) {
+                    Text("After a meeting starts, now briefly counts backward so you can see that you may still join late. The selected duration is the maximum. If another meeting start is closer, now switches at the midpoint between both starts. This only affects the menu bar countdown; reminder delivery and running meetings in the menu are independent.")
+                        .font(.system(size: 12))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(14)
+                        .frame(width: 360, alignment: .leading)
+                }
             }
-            .pickerStyle(.menu)
-            .frame(maxWidth: 300)
             Toggle("Launch at Login", isOn: $store.settings.launchAtLogin)
             if case .requiresApproval = store.loginItemState {
                 HStack(spacing: 8) {

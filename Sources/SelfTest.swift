@@ -1369,6 +1369,9 @@ enum SelfTest {
     static func settingsTests(_ c: inout Checker) {
         c.expect(!AppStore.refreshIntervalChanged(from: 15, to: 15), "unrelated settings edits keep refresh cadence")
         c.expect(AppStore.refreshIntervalChanged(from: 15, to: 30), "refresh interval edit reschedules cadence")
+        c.expect(AppSettings().lateMinutes == 10, "new settings default to a 10-minute elapsed-start window")
+        let missingLate = try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        c.expect(missingLate?.lateMinutes == 10, "settings without lateMinutes adopt the 10-minute default")
 
         // Decoded settings are validated/clamped into the UI's offered ranges.
         let junk = """
@@ -1821,12 +1824,72 @@ enum SelfTest {
         let afterTwoMisses = AppStore.ratchetSilence(previous: [], fallbackMutedByID: retainedMuted, current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
         c.expect(afterTwoMisses.alerted.isEmpty, "two consecutive omissions expire retained muted state")
 
-        let mutedNearest = ratchetEvent("nearest", muted: true, startIn: -30)
-        let future = ratchetEvent("future", muted: false, startIn: 600)
-        c.expect(AppStore.nextEvent(events: [mutedNearest, future], lateMinutes: 0, now: now)?.id == future.id, "nextEvent skips a muted running meeting")
-        let running = ratchetEvent("running", muted: false, startIn: -60)
-        c.expect(AppStore.nextEvent(events: [future, running], lateMinutes: 0, now: now)?.id == running.id, "nextEvent preserves running-before-future priority")
-        c.expect(AppStore.nextEvent(events: [mutedNearest], lateMinutes: 0, now: now)?.id == nil, "nextEvent is empty when every visible meeting is muted")
+        func focusEvent(_ uid: String, startIn: TimeInterval, endIn: TimeInterval, muted: Bool = false, colorIndex: Int = 0) -> MeetingEvent {
+            MeetingEvent(uid: uid, title: uid, start: now.addingTimeInterval(startIn), end: now.addingTimeInterval(endIn),
+                         location: nil, notes: nil, link: nil, calendarID: otherSub.id, calendarName: "Cal", colorIndex: colorIndex, isMuted: muted)
+        }
+
+        let recent = focusEvent("recent", startIn: -5 * 60, endIn: 55 * 60)
+        let inTwenty = focusEvent("twenty", startIn: 20 * 60, endIn: 50 * 60)
+        var focus = AppStore.menuBarFocus(events: [inTwenty, recent], lateMinutes: 10, now: now)
+        c.expect(focus?.kind == .start && focus?.events.first?.id == recent.id, "recent start wins while closer and inside the elapsed-start window")
+
+        let midpointFuture = focusEvent("midpoint", startIn: 5 * 60, endIn: 35 * 60)
+        focus = AppStore.menuBarFocus(events: [recent, midpointFuture], lateMinutes: 10, now: now)
+        c.expect(focus?.events.first?.id == midpointFuture.id, "future meeting wins the exact midpoint tie")
+
+        let expired = focusEvent("expired", startIn: -11 * 60, endIn: 49 * 60)
+        let inHour = focusEvent("hour", startIn: 60 * 60, endIn: 90 * 60)
+        focus = AppStore.menuBarFocus(events: [expired, inHour], lateMinutes: 10, now: now)
+        c.expect(focus?.events.first?.id == inHour.id, "10-minute window caps the negative countdown")
+
+        let longRunning = focusEvent("long", startIn: -60 * 60, endIn: 60 * 60)
+        let closerFuture = focusEvent("closer", startIn: 30 * 60, endIn: 60 * 60)
+        focus = AppStore.menuBarFocus(events: [longRunning, closerFuture], lateMinutes: 0, now: now)
+        c.expect(focus?.events.first?.id == closerFuture.id, "until-end mode still switches when the future start becomes closer")
+        let fartherFuture = focusEvent("farther", startIn: 2 * 60 * 60, endIn: 3 * 60 * 60)
+        focus = AppStore.menuBarFocus(events: [longRunning, fartherFuture], lateMinutes: 0, now: now)
+        c.expect(focus?.events.first?.id == longRunning.id, "until-end mode retains a closer running start")
+
+        focus = AppStore.menuBarFocus(events: [expired], lateMinutes: 10, now: now)
+        c.expect(focus?.kind == .end && focus?.date == expired.end, "running meeting falls back to ends countdown when no future meeting exists")
+        focus = AppStore.menuBarFocus(events: [recent], lateMinutes: 10, now: now)
+        c.expect(focus?.kind == .start, "recent meeting remains a negative countdown before the ends fallback")
+        let recentRow = MenuBarController.menuStatusText(for: recent, lateMinutes: 10, now: now)
+        let expiredRow = MenuBarController.menuStatusText(for: expired, lateMinutes: 10, now: now)
+        let futureRow = MenuBarController.menuStatusText(for: inTwenty, lateMinutes: 10, now: now)
+        c.expect(recentRow.hasPrefix("-5m · ends "), "recent dropdown row shows elapsed start plus scheduled end")
+        c.expect(expiredRow == "49m left", "older running dropdown row shows remaining time")
+        c.expect(futureRow == "in 20m", "future dropdown row shows time until start")
+        let inThirtySeconds = focusEvent("seconds", startIn: 30, endIn: 1830)
+        c.expect(MenuBarController.menuStatusText(for: inThirtySeconds, lateMinutes: 10, now: now) == "in 30s" &&
+                 MenuBarController.menuStatusText(for: inThirtySeconds, lateMinutes: 10, now: now.addingTimeInterval(1)) == "in 29s",
+                 "open-menu second countdown values advance on each tick")
+        let tomorrowStart = Calendar.current.date(byAdding: .day, value: 1, to: now)!
+        let tomorrow = MeetingEvent(uid: "tomorrow", title: "tomorrow", start: tomorrowStart, end: tomorrowStart.addingTimeInterval(1800),
+                                    location: nil, notes: nil, link: nil, calendarID: otherSub.id, calendarName: "Cal", colorIndex: 0)
+        c.expect(MenuBarController.menuStatusText(for: tomorrow, lateMinutes: 10, now: now).isEmpty, "future dropdown rows show relative countdowns only for meetings today")
+        let hover = MenuBarController.statusTooltip(events: [expired, inTwenty], now: now)
+        c.expect(hover.contains("Now: expired — ends in 49m") && hover.contains("Next: twenty — starts in 20m"), "status hover exposes current end and next start")
+
+        let ended = focusEvent("ended", startIn: -6 * 60, endIn: -60)
+        c.expect(!AppStore.isVisible(ended, at: now), "ended meetings are hidden even inside the configured elapsed-start window")
+        c.expect(AppStore.isVisible(expired, at: now), "running meetings stay in lists after the elapsed-start window")
+
+        let sharedStartA = focusEvent("shared-a", startIn: 15 * 60, endIn: 45 * 60, colorIndex: 1)
+        let sharedStartB = focusEvent("shared-b", startIn: 15 * 60, endIn: 75 * 60, colorIndex: 2)
+        let mutedShared = focusEvent("shared-muted", startIn: 15 * 60, endIn: 45 * 60, muted: true, colorIndex: 3)
+        focus = AppStore.menuBarFocus(events: [sharedStartB, mutedShared, sharedStartA], lateMinutes: 10, now: now)
+        c.expect(focus?.events.map(\.id) == [sharedStartA.id, sharedStartB.id], "simultaneous unmuted starts form one deterministic status-bar cluster")
+        let mutedOnlyFocus = AppStore.menuBarFocus(events: [mutedShared], lateMinutes: 10, now: now)
+        c.expect(mutedOnlyFocus.map { _ in false } ?? true, "muted meetings never own the status-bar countdown")
+
+        let oneDotSize = Palette.dotClusterSize(colorCount: 1, dotSize: 7)
+        let twoDotSize = Palette.dotClusterSize(colorCount: 2, dotSize: 7)
+        let manyDotSize = Palette.dotClusterSize(colorCount: 4, dotSize: 7)
+        c.expect(oneDotSize == NSSize(width: 7, height: 7), "single status dot keeps its original dimensions")
+        c.expect(twoDotSize.width > 7 && twoDotSize.width < 14, "two status dots overlap within a compact image width")
+        c.expect(manyDotSize.width < 21, "large simultaneous groups stay capped at three overlapping dots")
 
         // The full snooze sequence: alert → snooze → mute → snooze expires →
         // unmute mid-window → still no reminder.
