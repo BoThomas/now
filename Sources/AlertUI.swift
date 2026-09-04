@@ -536,18 +536,15 @@ struct MultiEventView: View {
                 VStack(spacing: 14) {
                     ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
                         HStack(spacing: 20) {
-                            // Joinable cards show their 1-9 shortcut; linkless
-                            // cards use an explicit chain-slash status instead.
+                            // Joinable cards show their 1-9 shortcut. Linkless
+                            // cards use a neutral dot; the trailing label already
+                            // explains the missing link without repeating its icon.
                             ZStack {
-                                Circle().fill(event.link == nil ? Color.white.opacity(0.12) : Color(nsColor: event.readableNsColorOnBlack))
+                                Circle().fill(event.link == nil ? Color.white.opacity(0.28) : Color(nsColor: event.readableNsColorOnBlack))
                                 if event.link != nil {
                                     Text("\(index + 1)")
                                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                                         .foregroundStyle(.white)
-                                } else {
-                                    Image(systemName: "personalhotspot.slash")
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundStyle(.white.opacity(0.62))
                                 }
                             }
                             .frame(width: 20, height: 20)

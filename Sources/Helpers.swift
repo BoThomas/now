@@ -115,12 +115,52 @@ enum Palette {
     }
 
     static func dotImage(color: NSColor, size: CGFloat = 12) -> NSImage {
-        let image = NSImage(size: NSSize(width: size, height: size))
+        dotClusterImage(colors: [color], size: size)
+    }
+
+    /// One compact, color-preserving image for the status bar. Separate text
+    /// attachments plus negative kerning shift unpredictably across macOS font
+    /// metrics, so simultaneous meetings are drawn into one bitmap instead.
+    /// Adjacent circles overlap by 40%; a transparent cutout around each front
+    /// circle keeps equal-colored calendars visibly distinct on any menu-bar
+    /// material. More than three meetings remain a compact visual cluster; the
+    /// exact count belongs in the accessibility text and dropdown.
+    static func dotClusterImage(colors: [NSColor], size: CGFloat = 12) -> NSImage {
+        let visibleColors = Array(colors.prefix(3))
+        guard !visibleColors.isEmpty else { return NSImage(size: .zero) }
+        let imageSize = dotClusterSize(colorCount: visibleColors.count, dotSize: size)
+        let step = size * 0.60
+        let image = NSImage(size: imageSize)
         image.lockFocus()
-        color.setFill()
-        NSBezierPath(ovalIn: NSRect(x: 0, y: 0, width: size, height: size)).fill()
+        for (index, color) in visibleColors.enumerated() {
+            let x = CGFloat(index) * step
+            if index > 0, let context = NSGraphicsContext.current {
+                context.saveGraphicsState()
+                context.compositingOperation = .destinationOut
+                NSColor.black.setFill()
+                let separator: CGFloat = max(0.5, size * 0.07)
+                NSBezierPath(ovalIn: NSRect(
+                    x: x - separator,
+                    y: -separator,
+                    width: size + separator * 2,
+                    height: size + separator * 2
+                )).fill()
+                context.restoreGraphicsState()
+            }
+            color.setFill()
+            NSBezierPath(ovalIn: NSRect(x: x, y: 0, width: size, height: size)).fill()
+        }
         image.unlockFocus()
+        image.isTemplate = false
         return image
+    }
+
+    /// Pure geometry seam for CLI selftests; constructing/focusing an NSImage
+    /// would register an AppKit process and is invalid in a headless run.
+    static func dotClusterSize(colorCount: Int, dotSize: CGFloat) -> NSSize {
+        guard colorCount > 0 else { return .zero }
+        let visibleCount = min(3, colorCount)
+        return NSSize(width: dotSize + CGFloat(visibleCount - 1) * dotSize * 0.60, height: dotSize)
     }
 }
 
@@ -158,8 +198,8 @@ enum Fmt {
         return "\(m) min \(s)s"
     }
 
-    static func barCountdown(to date: Date) -> String {
-        let s = Int(date.timeIntervalSince(Date()))
+    static func barCountdown(to date: Date, relativeTo now: Date = Date()) -> String {
+        let s = Int(date.timeIntervalSince(now))
         let sign = s < 0 ? "-" : ""
         let t = abs(s)
         if t == 0 { return "now" }
