@@ -71,7 +71,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
         guard store.settings.showMenuBarCountdown,
-              let focus = AppStore.menuBarFocus(events: store.events, lateMinutes: store.settings.lateMinutes, now: now) else {
+              let focus = AppStore.menuBarFocus(events: store.events, elapsedStartMinutes: store.settings.elapsedStartMinutes, now: now) else {
             button.attributedTitle = NSAttributedString(string: "")
             button.image = NSImage(systemSymbolName: "alarm", accessibilityDescription: "now")
             button.setAccessibilityLabel("now — no upcoming meetings")
@@ -368,13 +368,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return text.trimmingCharacters(in: .whitespacesAndNewlines) == link.absoluteString
     }
 
-    nonisolated static func menuStatusText(for event: MeetingEvent, lateMinutes: Int, now: Date) -> String {
+    nonisolated static func menuStatusText(for event: MeetingEvent, elapsedStartMinutes: Int, now: Date) -> String {
         if now < event.start {
             guard Calendar.current.isDate(event.start, inSameDayAs: now) else { return "" }
             return "in \(Fmt.barCountdown(to: event.start, relativeTo: now))"
         }
         guard now < event.end else { return "" }
-        if AppStore.isWithinStartedCountdownWindow(event, lateMinutes: lateMinutes, now: now) {
+        if AppStore.isWithinStartedCountdownWindow(event, elapsedStartMinutes: elapsedStartMinutes, now: now) {
             return "\(Fmt.barCountdown(to: event.start, relativeTo: now)) · ends \(Fmt.time.string(from: event.end))"
         }
         return "\(Fmt.barCountdown(to: event.end, relativeTo: now)) left"
@@ -438,7 +438,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if event.link == nil {
             appendIcon("personalhotspot.slash", description: "No meeting link", size: 12)
         }
-        let status = Self.menuStatusText(for: event, lateMinutes: store.settings.lateMinutes, now: now)
+        let status = Self.menuStatusText(for: event, elapsedStartMinutes: store.settings.elapsedStartMinutes, now: now)
         if !status.isEmpty {
             text.append(NSAttributedString(string: "  \(status)", attributes: [
                 .font: NSFont.systemFont(ofSize: 10),

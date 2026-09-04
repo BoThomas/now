@@ -1369,28 +1369,34 @@ enum SelfTest {
     static func settingsTests(_ c: inout Checker) {
         c.expect(!AppStore.refreshIntervalChanged(from: 15, to: 15), "unrelated settings edits keep refresh cadence")
         c.expect(AppStore.refreshIntervalChanged(from: 15, to: 30), "refresh interval edit reschedules cadence")
-        c.expect(AppSettings().lateMinutes == 10, "new settings default to a 10-minute elapsed-start window")
-        let missingLate = try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
-        c.expect(missingLate?.lateMinutes == 10, "settings without lateMinutes adopt the 10-minute default")
+        c.expect(AppSettings().elapsedStartMinutes == 10, "new settings default to a 10-minute elapsed-start window")
+        let missingElapsedStart = try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        c.expect(missingElapsedStart?.elapsedStartMinutes == 10, "settings without elapsedStartMinutes adopt the 10-minute default")
+        let legacyLate = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"lateMinutes\":60}".utf8))
+        let migratedData = legacyLate.flatMap { try? JSONEncoder().encode($0) }
+        let migratedJSON = migratedData.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        c.expect(legacyLate?.elapsedStartMinutes == 10, "legacy lateMinutes is intentionally reset instead of inheriting old semantics")
+        c.expect(migratedJSON.contains("\"elapsedStartMinutes\":10") && !migratedJSON.contains("\"lateMinutes\""),
+                 "re-encoded settings store only the new elapsedStartMinutes key")
 
         // Decoded settings are validated/clamped into the UI's offered ranges.
         let junk = """
-        {"leadSeconds": -50, "refreshMinutes": 7, "soundName": "Nope", "lateMinutes": 9999, "skipDeclined": false}
+        {"leadSeconds": -50, "refreshMinutes": 7, "soundName": "Nope", "elapsedStartMinutes": 9999, "skipDeclined": false}
         """
         let decoded = try? JSONDecoder().decode(AppSettings.self, from: Data(junk.utf8))
         c.expect(decoded?.leadSeconds == 0, "negative lead clamps to 0 (got \(String(describing: decoded?.leadSeconds)))")
         c.expect(decoded?.refreshMinutes == 5, "odd refresh interval snaps to 5 (got \(String(describing: decoded?.refreshMinutes)))")
         c.expect(decoded?.soundName == "Hero", "unknown sound falls back to Hero")
-        c.expect(decoded?.lateMinutes == 60, "huge lateMinutes snaps to 60 (got \(String(describing: decoded?.lateMinutes)))")
+        c.expect(decoded?.elapsedStartMinutes == 60, "huge elapsedStartMinutes snaps to 60 (got \(String(describing: decoded?.elapsedStartMinutes)))")
         c.expect(decoded?.skipDeclined == false, "valid booleans preserved")
         c.expect(decoded?.automaticUpdateChecks == true && decoded?.skippedUpdateVersion == nil, "legacy settings use updater defaults")
         c.expect(decoded?.suppressRemindersDuringMeetings == false && decoded?.includeBrowserMeetings == false, "legacy settings disable meeting suppression")
-        let upper = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\": 99999, \"refreshMinutes\": 45, \"lateMinutes\": -3}".utf8))
+        let upper = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\": 99999, \"refreshMinutes\": 45, \"elapsedStartMinutes\": -3}".utf8))
         c.expect(upper?.leadSeconds == 7200, "oversized lead clamps to 7200")
         c.expect(upper?.refreshMinutes == 30 || upper?.refreshMinutes == 60, "45 min snaps to a picker value (got \(String(describing: upper?.refreshMinutes)))")
-        c.expect(upper?.lateMinutes == -1, "-3 snaps to -1 (got \(String(describing: upper?.lateMinutes)))")
-        let extremes = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"refreshMinutes\":-9223372036854775808,\"lateMinutes\":-9223372036854775808}".utf8))
-        c.expect(extremes?.refreshMinutes == 5 && extremes?.lateMinutes == -1, "Int.min settings normalize without overflow")
+        c.expect(upper?.elapsedStartMinutes == -1, "-3 snaps to -1 (got \(String(describing: upper?.elapsedStartMinutes)))")
+        let extremes = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"refreshMinutes\":-9223372036854775808,\"elapsedStartMinutes\":-9223372036854775808}".utf8))
+        c.expect(extremes?.refreshMinutes == 5 && extremes?.elapsedStartMinutes == -1, "Int.min settings normalize without overflow")
 
         let zoomOwners = [MeetingAudioOwner(pid: 10, bundleID: "us.zoom.xos")]
         c.expect(MeetingActivityProbe.activity(owners: zoomOwners, includeBrowsers: false) == .meeting(.zoom), "Zoom input classifies as meeting")
@@ -1831,44 +1837,44 @@ enum SelfTest {
 
         let recent = focusEvent("recent", startIn: -5 * 60, endIn: 55 * 60)
         let inTwenty = focusEvent("twenty", startIn: 20 * 60, endIn: 50 * 60)
-        var focus = AppStore.menuBarFocus(events: [inTwenty, recent], lateMinutes: 10, now: now)
+        var focus = AppStore.menuBarFocus(events: [inTwenty, recent], elapsedStartMinutes: 10, now: now)
         c.expect(focus?.kind == .start && focus?.events.first?.id == recent.id, "recent start wins while closer and inside the elapsed-start window")
 
         let midpointFuture = focusEvent("midpoint", startIn: 5 * 60, endIn: 35 * 60)
-        focus = AppStore.menuBarFocus(events: [recent, midpointFuture], lateMinutes: 10, now: now)
+        focus = AppStore.menuBarFocus(events: [recent, midpointFuture], elapsedStartMinutes: 10, now: now)
         c.expect(focus?.events.first?.id == midpointFuture.id, "future meeting wins the exact midpoint tie")
 
         let expired = focusEvent("expired", startIn: -11 * 60, endIn: 49 * 60)
         let inHour = focusEvent("hour", startIn: 60 * 60, endIn: 90 * 60)
-        focus = AppStore.menuBarFocus(events: [expired, inHour], lateMinutes: 10, now: now)
+        focus = AppStore.menuBarFocus(events: [expired, inHour], elapsedStartMinutes: 10, now: now)
         c.expect(focus?.events.first?.id == inHour.id, "10-minute window caps the negative countdown")
 
         let longRunning = focusEvent("long", startIn: -60 * 60, endIn: 60 * 60)
         let closerFuture = focusEvent("closer", startIn: 30 * 60, endIn: 60 * 60)
-        focus = AppStore.menuBarFocus(events: [longRunning, closerFuture], lateMinutes: 0, now: now)
+        focus = AppStore.menuBarFocus(events: [longRunning, closerFuture], elapsedStartMinutes: 0, now: now)
         c.expect(focus?.events.first?.id == closerFuture.id, "until-end mode still switches when the future start becomes closer")
         let fartherFuture = focusEvent("farther", startIn: 2 * 60 * 60, endIn: 3 * 60 * 60)
-        focus = AppStore.menuBarFocus(events: [longRunning, fartherFuture], lateMinutes: 0, now: now)
+        focus = AppStore.menuBarFocus(events: [longRunning, fartherFuture], elapsedStartMinutes: 0, now: now)
         c.expect(focus?.events.first?.id == longRunning.id, "until-end mode retains a closer running start")
 
-        focus = AppStore.menuBarFocus(events: [expired], lateMinutes: 10, now: now)
+        focus = AppStore.menuBarFocus(events: [expired], elapsedStartMinutes: 10, now: now)
         c.expect(focus?.kind == .end && focus?.date == expired.end, "running meeting falls back to ends countdown when no future meeting exists")
-        focus = AppStore.menuBarFocus(events: [recent], lateMinutes: 10, now: now)
+        focus = AppStore.menuBarFocus(events: [recent], elapsedStartMinutes: 10, now: now)
         c.expect(focus?.kind == .start, "recent meeting remains a negative countdown before the ends fallback")
-        let recentRow = MenuBarController.menuStatusText(for: recent, lateMinutes: 10, now: now)
-        let expiredRow = MenuBarController.menuStatusText(for: expired, lateMinutes: 10, now: now)
-        let futureRow = MenuBarController.menuStatusText(for: inTwenty, lateMinutes: 10, now: now)
+        let recentRow = MenuBarController.menuStatusText(for: recent, elapsedStartMinutes: 10, now: now)
+        let expiredRow = MenuBarController.menuStatusText(for: expired, elapsedStartMinutes: 10, now: now)
+        let futureRow = MenuBarController.menuStatusText(for: inTwenty, elapsedStartMinutes: 10, now: now)
         c.expect(recentRow.hasPrefix("-5m · ends "), "recent dropdown row shows elapsed start plus scheduled end")
         c.expect(expiredRow == "49m left", "older running dropdown row shows remaining time")
         c.expect(futureRow == "in 20m", "future dropdown row shows time until start")
         let inThirtySeconds = focusEvent("seconds", startIn: 30, endIn: 1830)
-        c.expect(MenuBarController.menuStatusText(for: inThirtySeconds, lateMinutes: 10, now: now) == "in 30s" &&
-                 MenuBarController.menuStatusText(for: inThirtySeconds, lateMinutes: 10, now: now.addingTimeInterval(1)) == "in 29s",
+        c.expect(MenuBarController.menuStatusText(for: inThirtySeconds, elapsedStartMinutes: 10, now: now) == "in 30s" &&
+                 MenuBarController.menuStatusText(for: inThirtySeconds, elapsedStartMinutes: 10, now: now.addingTimeInterval(1)) == "in 29s",
                  "open-menu second countdown values advance on each tick")
         let tomorrowStart = Calendar.current.date(byAdding: .day, value: 1, to: now)!
         let tomorrow = MeetingEvent(uid: "tomorrow", title: "tomorrow", start: tomorrowStart, end: tomorrowStart.addingTimeInterval(1800),
                                     location: nil, notes: nil, link: nil, calendarID: otherSub.id, calendarName: "Cal", colorIndex: 0)
-        c.expect(MenuBarController.menuStatusText(for: tomorrow, lateMinutes: 10, now: now).isEmpty, "future dropdown rows show relative countdowns only for meetings today")
+        c.expect(MenuBarController.menuStatusText(for: tomorrow, elapsedStartMinutes: 10, now: now).isEmpty, "future dropdown rows show relative countdowns only for meetings today")
         let hover = MenuBarController.statusTooltip(events: [expired, inTwenty], now: now)
         c.expect(hover.contains("Now: expired — ends in 49m") && hover.contains("Next: twenty — starts in 20m"), "status hover exposes current end and next start")
 
@@ -1879,9 +1885,9 @@ enum SelfTest {
         let sharedStartA = focusEvent("shared-a", startIn: 15 * 60, endIn: 45 * 60, colorIndex: 1)
         let sharedStartB = focusEvent("shared-b", startIn: 15 * 60, endIn: 75 * 60, colorIndex: 2)
         let mutedShared = focusEvent("shared-muted", startIn: 15 * 60, endIn: 45 * 60, muted: true, colorIndex: 3)
-        focus = AppStore.menuBarFocus(events: [sharedStartB, mutedShared, sharedStartA], lateMinutes: 10, now: now)
+        focus = AppStore.menuBarFocus(events: [sharedStartB, mutedShared, sharedStartA], elapsedStartMinutes: 10, now: now)
         c.expect(focus?.events.map(\.id) == [sharedStartA.id, sharedStartB.id], "simultaneous unmuted starts form one deterministic status-bar cluster")
-        let mutedOnlyFocus = AppStore.menuBarFocus(events: [mutedShared], lateMinutes: 10, now: now)
+        let mutedOnlyFocus = AppStore.menuBarFocus(events: [mutedShared], elapsedStartMinutes: 10, now: now)
         c.expect(mutedOnlyFocus.map { _ in false } ?? true, "muted meetings never own the status-bar countdown")
 
         let oneDotSize = Palette.dotClusterSize(colorCount: 1, dotSize: 7)

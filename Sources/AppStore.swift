@@ -131,6 +131,10 @@ final class AppStore: ObservableObject {
         previousSkipDeclined = settings.skipDeclined
         previousRefreshMinutes = settings.refreshMinutes
         previousIncludeBrowserMeetings = settings.includeBrowserMeetings
+        // Re-encode once at launch so schema migrations are materialized
+        // immediately. In particular, the obsolete `lateMinutes` key is
+        // removed and `elapsedStartMinutes: 10` is stored for existing users.
+        persist()
     }
 
     deinit {
@@ -205,16 +209,16 @@ final class AppStore: ObservableObject {
     }
 
     var menuBarFocus: MenuBarFocus? {
-        Self.menuBarFocus(events: events, lateMinutes: settings.lateMinutes, now: Date())
+        Self.menuBarFocus(events: events, elapsedStartMinutes: settings.elapsedStartMinutes, now: Date())
     }
 
     /// Whether a running event may still show its elapsed-start countdown.
     /// Finite windows are capped at the event end: an ended five-minute event
     /// must not remain the focus merely because the user selected 60 minutes.
-    nonisolated static func isWithinStartedCountdownWindow(_ event: MeetingEvent, lateMinutes: Int, now: Date) -> Bool {
-        guard event.start <= now, now < event.end, lateMinutes >= 0 else { return false }
-        if lateMinutes == 0 { return true }
-        return now < event.start.addingTimeInterval(TimeInterval(lateMinutes) * 60)
+    nonisolated static func isWithinStartedCountdownWindow(_ event: MeetingEvent, elapsedStartMinutes: Int, now: Date) -> Bool {
+        guard event.start <= now, now < event.end, elapsedStartMinutes >= 0 else { return false }
+        if elapsedStartMinutes == 0 { return true }
+        return now < event.start.addingTimeInterval(TimeInterval(elapsedStartMinutes) * 60)
     }
 
     /// Pure status-item selection. Among the next future start and still-
@@ -223,10 +227,10 @@ final class AppStore: ObservableObject {
     /// window, while closely spaced meetings switch naturally at their midpoint.
     /// If no start candidate remains and no future meeting exists, the soonest
     /// ending running meeting supplies an explicit `ends …` fallback.
-    nonisolated static func menuBarFocus(events: [MeetingEvent], lateMinutes: Int, now: Date) -> MenuBarFocus? {
+    nonisolated static func menuBarFocus(events: [MeetingEvent], elapsedStartMinutes: Int, now: Date) -> MenuBarFocus? {
         let eligible = events.filter { !$0.isMuted }
         let startCandidates = eligible.filter { event in
-            event.start > now || isWithinStartedCountdownWindow(event, lateMinutes: lateMinutes, now: now)
+            event.start > now || isWithinStartedCountdownWindow(event, elapsedStartMinutes: elapsedStartMinutes, now: now)
         }
 
         if let selected = startCandidates.min(by: { lhs, rhs in

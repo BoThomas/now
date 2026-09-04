@@ -2037,7 +2037,7 @@ struct SettingsView: View {
             .frame(maxWidth: 240)
             Toggle("Show countdown in menu bar", isOn: $store.settings.showMenuBarCountdown)
             HStack(spacing: 6) {
-                Picker("Show elapsed start time for", selection: $store.settings.lateMinutes) {
+                Picker("Show elapsed start time for", selection: $store.settings.elapsedStartMinutes) {
                     Text("Never").tag(-1)
                     Text("Until meeting ends").tag(0)
                     Text("5 minutes").tag(5)
