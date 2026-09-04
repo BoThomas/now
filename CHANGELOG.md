@@ -1,4 +1,17 @@
 # Changelog
+## [1.8.0] - 2026-09-04
+
+### Added
+- Smart menu bar countdowns switch from recently started meetings to the closer upcoming start at the midpoint
+- A configurable elapsed-start window defaults to 10 minutes and remains independent from reminder delivery and running-event visibility
+- Context-aware NOW, NEXT, and LATER sections use overlapping calendar-colored indicators for simultaneous meetings
+### Improved
+- Menu rows keep status icons compactly beside their titles and linkless multi-event reminders avoid duplicated missing-link symbols
+### Fixed
+- Countdown seconds update live while the menu is open
+- Relative start times appear only for meetings happening today
+- Event tooltips no longer replace the menu bar tooltip when leaving the dropdown
+
 ## [1.7.0] - 2026-09-03
 
 ### Added
@@ -108,3 +121,4 @@
 [1.6.0]: https://github.com/BoThomas/now/compare/v1.5.0...v1.6.0
 [1.6.1]: https://github.com/BoThomas/now/compare/v1.6.0...v1.6.1
 [1.7.0]: https://github.com/BoThomas/now/compare/v1.6.1...v1.7.0
+[1.8.0]: https://github.com/BoThomas/now/compare/v1.7.0...v1.8.0
