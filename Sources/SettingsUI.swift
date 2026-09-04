@@ -2035,7 +2035,6 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             .frame(maxWidth: 240)
-            Toggle("Show countdown in menu bar", isOn: $store.settings.showMenuBarCountdown)
             HStack(spacing: 6) {
                 Picker("Show elapsed start time for", selection: $store.settings.elapsedStartMinutes) {
                     Text("Never").tag(-1)
@@ -2064,6 +2063,7 @@ struct SettingsView: View {
                         .frame(width: 360, alignment: .leading)
                 }
             }
+            Toggle("Show countdown in menu bar", isOn: $store.settings.showMenuBarCountdown)
             Toggle("Launch at Login", isOn: $store.settings.launchAtLogin)
             if case .requiresApproval = store.loginItemState {
                 HStack(spacing: 8) {
