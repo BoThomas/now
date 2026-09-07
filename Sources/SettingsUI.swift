@@ -282,63 +282,6 @@ struct GitHubMark: Shape {
     }
 }
 
-struct PresetButtonStyle: ButtonStyle {
-    let active: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Capsule().fill(active ? Color.accentColor : Color.primary.opacity(0.08)))
-            .foregroundStyle(active ? Color.white : Color.primary)
-    }
-}
-
-/// Left-aligned wrap layout (text-flow style): children keep their ideal size
-/// and wrap as WHOLE items to the next line when the width runs out. Used for
-/// the lead-time presets — equal-width grid slots made pills stretch or break.
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var width: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > 0, x + size.width > maxWidth {
-                width = max(width, x - spacing)
-                x = 0
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-        width = max(width, x - spacing)
-        return CGSize(width: max(0, width), height: y + rowHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .unspecified)
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-    }
-}
-
 /// Events grouped under one uppercase day header (same `Fmt.dayHeader` style as the
 /// menu bar dropdown), so each row is a single line: time + title.
 struct UpcomingEventList: View {
@@ -1489,6 +1432,9 @@ struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var alerts: AlertController
     @EnvironmentObject var updates: UpdateController
+    @State private var showCustomReminderTime = false
+    @State private var customReminderMinutes = "0"
+    @State private var customReminderSeconds = "0"
     @State private var showAddSheet = false
     @State private var showBrowserMeetingInfo = false
     @State private var showStartedCountdownInfo = false
@@ -1506,6 +1452,8 @@ struct SettingsView: View {
 
     /// Below this width the sidebar disappears and the form takes the full window.
     static let sidebarThreshold: CGFloat = 880
+    /// Common lead times; arbitrary values are edited through Custom….
+    private static let leadPresets = [0, 10, 30, 60, 120, 300, 600, 900]
 
     var body: some View {
         GeometryReader { geo in
@@ -1929,28 +1877,134 @@ struct SettingsView: View {
         }
     }
 
+    private func reminderTimingLabel(_ seconds: Int) -> String {
+        seconds == 0 ? "Just in time" : "\(Fmt.leadTime(seconds)) before"
+    }
+
+    private func timingMenuLabel(_ title: String) -> some View {
+        HStack(spacing: 12) {
+            Text(title).lineLimit(1)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .frame(width: 184, height: 32)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.055)))
+        .contentShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var customReminderValue: Int? {
+        guard let minutes = Int(customReminderMinutes), let seconds = Int(customReminderSeconds),
+              (0...120).contains(minutes), (0...59).contains(seconds),
+              minutes * 60 + seconds <= 7200 else { return nil }
+        return minutes * 60 + seconds
+    }
+
+    private var customReminderEditor: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Remind me before start").font(.headline)
+            HStack(spacing: 8) {
+                TextField("Minutes", text: $customReminderMinutes).frame(width: 52)
+                    .accessibilityLabel("Minutes")
+                Text("min")
+                TextField("Seconds", text: $customReminderSeconds).frame(width: 52)
+                    .accessibilityLabel("Seconds")
+                Text("sec")
+            }
+            .textFieldStyle(.roundedBorder)
+            HStack {
+                Button("Cancel") { showCustomReminderTime = false }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Apply") {
+                    guard let seconds = customReminderValue else { return }
+                    store.settings.leadSeconds = seconds
+                    showCustomReminderTime = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(customReminderValue == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 260)
+    }
+
     private var reminderSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader(SettingsSection.reminder.title, SettingsSection.reminder.symbol)
-            Text("The fullscreen reminder opens this long before an event starts.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            // Flow layout: pills hug their content (one compact row when the
-            // window is wide) and wrap as whole pills when it narrows —
-            // no stretching, no mid-pill line breaks.
-            FlowLayout(spacing: 6) {
-                ForEach([0, 10, 30, 60, 120, 300, 600, 900], id: \.self) { seconds in
-                    Button {
-                        store.settings.leadSeconds = seconds
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Remind me")
+                    Spacer(minLength: 16)
+                    Menu {
+                        ForEach(Self.leadPresets, id: \.self) { seconds in
+                            Button {
+                                store.settings.leadSeconds = seconds
+                            } label: {
+                                if store.settings.leadSeconds == seconds {
+                                    Label(reminderTimingLabel(seconds), systemImage: "checkmark")
+                                } else {
+                                    Text(reminderTimingLabel(seconds))
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("Custom…") {
+                            customReminderMinutes = String(store.settings.leadSeconds / 60)
+                            customReminderSeconds = String(store.settings.leadSeconds % 60)
+                            showCustomReminderTime = true
+                        }
                     } label: {
-                        Text(Fmt.leadTime(seconds))
-                            .fixedSize(horizontal: true, vertical: false)
+                        timingMenuLabel(reminderTimingLabel(store.settings.leadSeconds))
                     }
-                    .buttonStyle(PresetButtonStyle(active: store.settings.leadSeconds == seconds))
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .accessibilityLabel("Reminder timing")
+                    .popover(isPresented: $showCustomReminderTime, arrowEdge: .bottom) {
+                        customReminderEditor
+                    }
                 }
-            }
-            Stepper(value: $store.settings.leadSeconds, in: 0...7200, step: 15) {
-                Text("Fine tune: \(Fmt.leadTime(store.settings.leadSeconds))")
+                .padding(.vertical, 10)
+                Divider()
+                HStack {
+                    Text("Snooze")
+                    Spacer(minLength: 16)
+                    Menu {
+                        if store.settings.leadSeconds > 0 {
+                            Button {
+                                store.settings.snoozeSeconds = 0
+                            } label: {
+                                if store.settings.snoozeSeconds == 0 {
+                                    Label("Just in time", systemImage: "checkmark")
+                                } else {
+                                    Text("Just in time")
+                                }
+                            }
+                            Divider()
+                        }
+                        ForEach(AppSettings.allowedSnoozeSeconds, id: \.self) { seconds in
+                            Button {
+                                store.settings.snoozeSeconds = seconds
+                            } label: {
+                                if store.settings.snoozeSeconds == seconds {
+                                    Label(Fmt.leadTime(seconds), systemImage: "checkmark")
+                                } else {
+                                    Text(Fmt.leadTime(seconds))
+                                }
+                            }
+                        }
+                    } label: {
+                        timingMenuLabel(store.settings.snoozeSeconds == 0 ? "Just in time" : Fmt.leadTime(store.settings.snoozeSeconds))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .accessibilityLabel("Default snooze")
+                }
+                .padding(.vertical, 10)
             }
             Divider()
             Toggle("Don't interrupt me while I'm in a meeting", isOn: Binding(
