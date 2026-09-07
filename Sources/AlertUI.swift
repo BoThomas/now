@@ -8,6 +8,8 @@ final class AlertPanel: NSPanel {
 @MainActor
 final class AlertController: ObservableObject {
     @Published private(set) var shownEvents: [MeetingEvent] = []
+    @Published var snoozeMenuOpen = false
+    @Published var highlightedSnooze: SnoozePlan?
     private var panel: AlertPanel?
     private var monitor: Any?
     /// Preview alerts (Settings → Preview Reminder) show fabricated events that
@@ -46,6 +48,7 @@ final class AlertController: ObservableObject {
         // merge into the open panel instead.
         if isOpen {
             shownEvents = Self.mergedShown(existing: shownEvents, new: events)
+            reconcileSnoozeMenu(options: Self.snoozeOptions(events: shownEvents, now: Date()))
             if playSound { store?.playSound() }
             return
         }
@@ -102,12 +105,36 @@ final class AlertController: ObservableObject {
     }
 
     func close() {
+        snoozeMenuOpen = false
         closePanel()
         shownEvents = []
     }
 
     func snoozeAll() {
-        store?.snooze(shownEvents.map(\.id))
+        guard let plan = Self.primarySnoozePlan(options: Self.snoozeOptions(events: shownEvents, now: Date()), defaultSeconds: defaultSnoozeSeconds) else { return }
+        applySnooze(plan)
+    }
+
+    func snoozeAll(after seconds: Int) {
+        applySnooze(.duration(seconds))
+    }
+
+    func snoozeAllAtStart() {
+        applySnooze(.atStart)
+    }
+
+    /// The configured default (0 = just in time; otherwise seconds).
+    var defaultSnoozeSeconds: Int { store?.settings.snoozeSeconds ?? 60 }
+
+    private func applySnooze(_ plan: SnoozePlan) {
+        let now = Date()
+        guard let schedule = Self.snoozeSchedule(plan: plan, events: shownEvents, now: now) else {
+            // A meeting may have started/changed since the row was drawn.
+            // Keep the reminder open and update the choices instead of losing it.
+            reconcileSnoozeMenu(options: Self.snoozeOptions(events: shownEvents, now: now))
+            return
+        }
+        store?.snooze(schedule)
         close()
     }
 
@@ -144,10 +171,12 @@ final class AlertController: ObservableObject {
             close()
         } else {
             shownEvents = next
+            reconcileSnoozeMenu(options: Self.snoozeOptions(events: shownEvents, now: Date()))
         }
     }
 
     private func closePanel() {
+        snoozeMenuOpen = false
         panel?.orderOut(nil)
         panel = nil
         policyDidChange?()
@@ -191,8 +220,7 @@ final class AlertController: ObservableObject {
 
     /// Snooze re-fires while `now < event.end` (AppStore.tick) — a running meeting can still be snoozed.
     private var isSnoozeable: Bool {
-        let now = Date()
-        return shownEvents.contains { now < $0.end }
+        Self.primarySnoozePlan(options: Self.snoozeOptions(events: shownEvents, now: Date()), defaultSeconds: defaultSnoozeSeconds) != nil
     }
 
     /// True when keyboard focus sits on a control inside the panel (a Join,
@@ -263,6 +291,107 @@ final class AlertController: ObservableObject {
         return events[number - 1].link
     }
 
+    // MARK: - Snooze choices
+
+    /// Shared choices must work for every active card. Ended cards do not
+    /// constrain the group and are never added to a new snooze schedule.
+    struct SnoozeOptions: Equatable {
+        var atStartEnabled: Bool
+        var enabledDurations: Set<Int>
+        var anyEnabled: Bool { atStartEnabled || !enabledDurations.isEmpty }
+        var plans: [SnoozePlan] {
+            (atStartEnabled ? [.atStart] : []) + AppSettings.allowedSnoozeSeconds
+                .filter { enabledDurations.contains($0) }.map { .duration($0) }
+        }
+    }
+
+    enum SnoozePlan: Equatable {
+        case atStart
+        case duration(Int)
+    }
+
+    nonisolated static func snoozeOptions(events: [MeetingEvent], now: Date) -> SnoozeOptions {
+        let active = events.filter { now < $0.end }
+        guard !active.isEmpty else { return SnoozeOptions(atStartEnabled: false, enabledDurations: []) }
+        let atStart = active.allSatisfy { now < $0.start }
+        let durations = Set(AppSettings.allowedSnoozeSeconds.filter { seconds in
+            active.allSatisfy { now.addingTimeInterval(TimeInterval(seconds)) < $0.end }
+        })
+        return SnoozeOptions(atStartEnabled: atStart, enabledDurations: durations)
+    }
+
+    /// Validate again at activation time, using the same policy as the UI.
+    nonisolated static func snoozeSchedule(plan: SnoozePlan, events: [MeetingEvent], now: Date) -> [String: Date]? {
+        guard snoozeOptions(events: events, now: now).plans.contains(plan) else { return nil }
+        return Dictionary(uniqueKeysWithValues: events.filter { now < $0.end }.map { event in
+            switch plan {
+            case .atStart: return (event.id, event.start)
+            case .duration(let seconds): return (event.id, now.addingTimeInterval(TimeInterval(seconds)))
+            }
+        })
+    }
+
+    /// Duration defaults shorten to the longest safe duration; never lengthen.
+    /// Just in time remains an alternative when no duration fits before start.
+    /// After start, a just-in-time default falls back to the shortest duration.
+    nonisolated static func primarySnoozePlan(options: SnoozeOptions, defaultSeconds: Int) -> SnoozePlan? {
+        if defaultSeconds == 0 {
+            if options.atStartEnabled { return .atStart }
+            return options.enabledDurations.min().map { .duration($0) }
+        }
+        if let seconds = options.enabledDurations.filter({ $0 <= defaultSeconds }).max() {
+            return .duration(seconds)
+        }
+        return options.atStartEnabled ? .atStart : nil
+    }
+
+    nonisolated static func snoozeMenuSelection(current: SnoozePlan?, options: SnoozeOptions, defaultSeconds: Int) -> SnoozePlan? {
+        if let current, options.plans.contains(current) { return current }
+        return primarySnoozePlan(options: options, defaultSeconds: defaultSeconds)
+    }
+
+    nonisolated static func movedSnoozeSelection(current: SnoozePlan?, options: SnoozeOptions, direction: Int) -> SnoozePlan? {
+        let plans = options.plans
+        guard !plans.isEmpty else { return nil }
+        guard let current, let index = plans.firstIndex(of: current) else {
+            return direction > 0 ? plans.first : plans.last
+        }
+        return plans[(index + (direction > 0 ? 1 : plans.count - 1)) % plans.count]
+    }
+
+    func reconcileSnoozeMenu(options: SnoozeOptions) {
+        guard snoozeMenuOpen else { return }
+        highlightedSnooze = Self.snoozeMenuSelection(current: highlightedSnooze, options: options, defaultSeconds: defaultSnoozeSeconds)
+        if !options.anyEnabled { snoozeMenuOpen = false }
+    }
+
+    func toggleSnoozeMenu() {
+        let options = Self.snoozeOptions(events: shownEvents, now: Date())
+        highlightedSnooze = Self.primarySnoozePlan(options: options, defaultSeconds: defaultSnoozeSeconds)
+        snoozeMenuOpen = !snoozeMenuOpen && options.anyEnabled
+    }
+
+    enum SnoozeMenuKeyAction: Equatable {
+        case dismiss, activate, dismissAndPassThrough, swallow, passThrough
+        case move(Int)
+    }
+
+    nonisolated static func snoozeMenuKeyAction(modifiers: NSEvent.ModifierFlags, keyCode: UInt16, characters: String?) -> SnoozeMenuKeyAction {
+        // Caps Lock and the hardware flags on arrow/keypad keys are not
+        // shortcut modifiers. Command/Option/Control/Shift must be respected.
+        let mods = modifiers.intersection([.command, .option, .control, .shift])
+        if mods == .command, let key = characters?.lowercased(), key == "w" || key == "m" { return .swallow }
+        if keyCode == 48 && (mods.isEmpty || mods == .shift) { return .dismissAndPassThrough }
+        guard mods.isEmpty else { return .passThrough }
+        switch keyCode {
+        case 53: return .dismiss
+        case 125: return .move(1)
+        case 126: return .move(-1)
+        case 36, 76, 49: return .activate
+        default: return .swallow
+        }
+    }
+
     private func installMonitor() {
         // Also watches leftMouseDown: any click in the panel is deliberate
         // engagement — it ends the keystroke guard early so the keyboard is
@@ -279,6 +408,28 @@ final class AlertController: ObservableObject {
             // key focus must never trigger an action (Return joins a
             // meeting, digits join cards, "s" snoozes, Escape closes).
             if self.isGuardingKeystrokes { return nil }
+            if self.snoozeMenuOpen {
+                let options = Self.snoozeOptions(events: self.shownEvents, now: Date())
+                switch Self.snoozeMenuKeyAction(modifiers: event.modifierFlags, keyCode: event.keyCode, characters: event.charactersIgnoringModifiers) {
+                case .dismiss: self.snoozeMenuOpen = false
+                case .move(let direction):
+                    self.highlightedSnooze = Self.movedSnoozeSelection(current: self.highlightedSnooze, options: options, direction: direction)
+                    if !options.anyEnabled { self.snoozeMenuOpen = false }
+                case .activate:
+                    // Resolve a stale choice before acting, even between UI ticks.
+                    if let plan = Self.snoozeMenuSelection(current: self.highlightedSnooze, options: options, defaultSeconds: self.defaultSnoozeSeconds) {
+                        self.applySnooze(plan)
+                    } else {
+                        self.snoozeMenuOpen = false
+                    }
+                case .dismissAndPassThrough:
+                    self.snoozeMenuOpen = false
+                    return event
+                case .passThrough: return event
+                case .swallow: break
+                }
+                return nil
+            }
             let action = Self.keyAction(
                 modifiers: event.modifierFlags,
                 keyCode: event.keyCode,
@@ -353,6 +504,22 @@ struct AlertView: View {
                 content(now: timeline.date)
             }
         }
+        .overlayPreferenceValue(SnoozeControlAnchor.self) { anchor in
+            GeometryReader { geometry in
+                if controller.snoozeMenuOpen, let anchor {
+                    let bounds = geometry[anchor]
+                    Color.clear.contentShape(Rectangle())
+                        .onTapGesture { controller.snoozeMenuOpen = false }
+                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                        snoozeMenuItems(options: AlertController.snoozeOptions(events: controller.shownEvents, now: timeline.date))
+                    }
+                    .frame(width: 260)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(height: max(0, bounds.minY - 12), alignment: .bottom)
+                    .offset(x: min(bounds.minX, max(0, geometry.size.width - 272)))
+                }
+            }
+        }
         .opacity(appeared ? 1 : 0)
         .onAppear {
             withAnimation(.easeOut(duration: 0.15)) { appeared = true }
@@ -369,15 +536,17 @@ struct AlertView: View {
                 MultiEventView(events: events, now: now)
             }
             Spacer(minLength: 30)
-            footer(events: events)
+            footer(events: events, now: now)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(50)
     }
 
-    private func footer(events: [MeetingEvent]) -> some View {
-        // Snooze stays available while any event is running (it re-fires until end).
-        let snoozeable = events.contains { $0.end > Date() }
+    private func footer(events: [MeetingEvent], now: Date) -> some View {
+        // Every active card must re-alert; the label shows the safe fallback.
+        let options = AlertController.snoozeOptions(events: events, now: now)
+        let plan = AlertController.primarySnoozePlan(options: options, defaultSeconds: controller.defaultSnoozeSeconds)
+        let snoozeable = plan != nil
         let joinable = events.contains { $0.link != nil }
         // "esc close" sits last (right edge): Escape is the least likely
         // action, the join/snooze hints lead.
@@ -394,16 +563,11 @@ struct AlertView: View {
         }
         if snoozeable { hints.append("s snooze") }
         hints.append("esc close")
+        if controller.snoozeMenuOpen { hints = ["↑ ↓ choose", "return snooze", "esc back"] }
         return VStack(spacing: 16) {
-            HStack(spacing: 16) {
-                if snoozeable {
-                    Button {
-                        controller.snoozeAll()
-                    } label: {
-                        Label("Snooze 1 min", systemImage: "clock.arrow.circlepath")
-                    }
-                    .buttonStyle(AlertSecondaryButtonStyle())
-                    .keyboardShortcut("s", modifiers: [])
+            HStack(spacing: 8) {
+                if let plan {
+                    snoozeSplitButton(plan: plan)
                 }
                 if events.count != 1 || events[0].link != nil {
                     Button {
@@ -425,7 +589,112 @@ struct AlertView: View {
                 .animation(.easeOut(duration: 0.25), value: controller.isGuardingKeystrokes)
         }
         .padding(.bottom, 10)
+        .onChange(of: options) { controller.reconcileSnoozeMenu(options: $0) }
     }
+
+    /// Main snooze button label: the concrete outcome, never a mystery.
+    private func snoozeMainLabel(plan: AlertController.SnoozePlan) -> String {
+        switch plan {
+        case .duration(let seconds):
+            return "Snooze \(Fmt.leadTime(seconds))"
+        case .atStart:
+            return "Just in time"
+        }
+    }
+
+    /// Snooze split control: ONE capsule — the main segment applies the
+    /// primary plan (same as "s"), the attached chevron segment opens the
+    /// choice menu. Segment highlights are plain rectangles; the shared
+    /// capsule clip keeps them inside the pill (a per-segment Capsule would
+    /// draw a pill-inside-the-pill).
+    private func snoozeSplitButton(plan: AlertController.SnoozePlan) -> some View {
+        HStack(spacing: 0) {
+            Button {
+                controller.snoozeAll()
+            } label: {
+                Label(snoozeMainLabel(plan: plan), systemImage: "clock.arrow.circlepath")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.leading, 16)
+                    .padding(.trailing, 10)
+                    .padding(.vertical, 9)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(SplitSegmentButtonStyle())
+            .keyboardShortcut("s", modifiers: [])
+            Rectangle()
+                .fill(Color.white.opacity(0.25))
+                .frame(width: 1, height: 20)
+            Button {
+                controller.toggleSnoozeMenu()
+            } label: {
+                Image(systemName: controller.snoozeMenuOpen ? "chevron.down" : "chevron.up")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(SplitSegmentButtonStyle())
+            .accessibilityLabel(Text("Snooze options"))
+        }
+        .background(Capsule().fill(Color.white.opacity(0.10)))
+        .clipShape(Capsule())
+        // The control must stay rigid: the fullscreen footer sits between
+        // Spacers, and any height-flexible child (a plain Rectangle divider,
+        // a borderless Menu) lets the capsule drink the whole screen height.
+        .fixedSize()
+        .anchorPreference(key: SnoozeControlAnchor.self, value: .bounds) { $0 }
+    }
+
+    private func snoozeMenuItems(options: AlertController.SnoozeOptions) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("SNOOZE REMINDER")
+                .font(.system(size: 10, weight: .semibold)).tracking(1.2)
+                .foregroundStyle(.white.opacity(0.45))
+                .padding(.horizontal, 10).padding(.vertical, 8)
+            if options.atStartEnabled {
+                snoozeMenuRow("Just in time", detail: "At the meeting’s start", plan: .atStart, enabled: true)
+                Rectangle().fill(.white.opacity(0.1)).frame(height: 1).padding(.vertical, 3)
+            }
+            ForEach(AppSettings.allowedSnoozeSeconds, id: \.self) { seconds in
+                snoozeMenuRow(Fmt.leadTime(seconds), plan: .duration(seconds), enabled: options.enabledDurations.contains(seconds))
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color(red: 0.12, green: 0.13, blue: 0.16)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.12)))
+        .shadow(color: .black.opacity(0.5), radius: 20, y: 8)
+    }
+
+    private func snoozeMenuRow(_ title: String, detail: String? = nil, plan: AlertController.SnoozePlan, enabled: Bool) -> some View {
+        Button {
+            switch plan {
+            case .atStart: controller.snoozeAllAtStart()
+            case .duration(let seconds): controller.snoozeAll(after: seconds)
+            }
+        } label: {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.system(size: 14, weight: .medium))
+                    if let detail { Text(detail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)) }
+                }
+                Spacer()
+                if controller.highlightedSnooze == plan {
+                    Image(systemName: "checkmark").font(.system(size: 12, weight: .semibold))
+                }
+            }
+            .foregroundStyle(.white.opacity(enabled ? 1 : 0.3))
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .background(RoundedRectangle(cornerRadius: 7).fill(.white.opacity(controller.highlightedSnooze == plan && enabled ? 0.1 : 0)))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .onHover { hovering in
+            if hovering && enabled { controller.highlightedSnooze = plan }
+        }
+    }
+
 }
 
 struct SingleEventView: View {
@@ -626,5 +895,24 @@ struct AlertSecondaryButtonStyle: ButtonStyle {
             )
             .contentShape(Capsule())
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
+    }
+}
+
+/// Main segment of the snooze split control: transparent at rest (the shared
+/// capsule behind the whole control provides the fill) and a plain rectangle
+/// highlight while pressed — the control's capsule clip keeps it inside the
+/// pill. Font/padding metrics mirror `AlertSecondaryButtonStyle` so heights
+/// match the neighboring Close button.
+struct SplitSegmentButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Color.white.opacity(configuration.isPressed ? 0.18 : 0))
+    }
+}
+
+private struct SnoozeControlAnchor: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
     }
 }

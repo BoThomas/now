@@ -1271,6 +1271,81 @@ enum SelfTest {
         let snoozePending = [imminent.id: now.addingTimeInterval(30)]
         c.expect(AppStore.dueForAlert(events: [imminent], alerted: [imminent.id], snoozed: snoozePending, leadSeconds: 300, now: now).isEmpty, "pending snooze quiet")
 
+        // A shared snooze must re-alert every active meeting before its end.
+        // Ended cards neither constrain choices nor receive new snoozes.
+        let soonEnding = event("soonending", startIn: -540, duration: 600)  // ends in 60 s
+        let shortLead = event("shortlead", startIn: 240, duration: 300)    // starts in 4 min, ends in 9 min
+        let full = AlertController.snoozeOptions(events: [imminent], now: now)
+        c.expect(full.atStartEnabled && full.enabledDurations == [60, 180, 300, 600], "un-started event offers just-in-time and every duration")
+        let started = AlertController.snoozeOptions(events: [running], now: now)
+        c.expect(!started.atStartEnabled && started.enabledDurations == [60, 180, 300, 600], "started event hides just-in-time but keeps durations")
+        let tight = AlertController.snoozeOptions(events: [shortLead], now: now)
+        c.expect(tight.atStartEnabled && tight.enabledDurations == [60, 180, 300], "duration at or past an active meeting end is not offered")
+        let ending = AlertController.snoozeOptions(events: [soonEnding], now: now)
+        c.expect(!ending.atStartEnabled && ending.enabledDurations.isEmpty && !ending.anyEnabled, "ending meeting offers no snooze at all")
+        let mixedOptions = AlertController.snoozeOptions(events: [imminent, soonEnding], now: now)
+        c.expect(!mixedOptions.atStartEnabled && !mixedOptions.anyEnabled, "one nearly ended meeting prevents silently dropping it in a shared snooze")
+        let twoMinutesLeft = event("twoMinutesLeft", startIn: -480, duration: 600)
+        let shared = AlertController.snoozeOptions(events: [twoMinutesLeft, imminent], now: now)
+        c.expect(shared.enabledDurations == [60] && !shared.atStartEnabled, "two-minute and long meeting can only share a one-minute snooze")
+        let endedAtBoundary = event("endedCard", startIn: -600, duration: 600)
+        c.expect(AlertController.snoozeOptions(events: [endedAtBoundary, imminent], now: now) == full, "ended card does not block durations or just-in-time for remaining future meeting")
+        c.expect(!AlertController.snoozeOptions(events: [endedAtBoundary], now: now).anyEnabled, "all ended cards offer no snooze")
+        c.expect(!AlertController.snoozeOptions(events: [], now: now).anyEnabled, "empty panel offers no snooze")
+        c.expect(AlertController.snoozeOptions(events: [imminent], now: imminent.start).atStartEnabled == false, "just-in-time disappears at the exact start")
+        let tinyFuture = event("tinyFuture", startIn: 10, duration: 20)
+        let tinyOptions = AlertController.snoozeOptions(events: [tinyFuture], now: now)
+        c.expect(tinyOptions.atStartEnabled && tinyOptions.enabledDurations.isEmpty, "very short future meeting retains just-in-time as its only safe choice")
+
+        // Primary plan (main snooze button + "s"): the configured default
+        // while it still re-alerts every active event, else a shorter safe
+        // duration; just-in-time can still cover a very short future event.
+        c.expect(AlertController.primarySnoozePlan(options: full, defaultSeconds: 300) == .duration(300), "default duration is the primary plan")
+        c.expect(AlertController.primarySnoozePlan(options: tight, defaultSeconds: 600) == .duration(300), "invalid default shortens even before start")
+        let shortRun = AlertController.snoozeOptions(events: [event("shortrun", startIn: -1560, duration: 1800)], now: now) // ends in 4 min
+        c.expect(AlertController.primarySnoozePlan(options: shortRun, defaultSeconds: 300) == .duration(180), "invalid default on a started event takes the longest valid duration")
+        c.expect(AlertController.primarySnoozePlan(options: ending, defaultSeconds: 300) == nil, "no valid choice means no snooze")
+
+        c.expect(AlertController.primarySnoozePlan(options: full, defaultSeconds: 0) == .atStart, "configured just-in-time wins over durations")
+        c.expect(AlertController.primarySnoozePlan(options: started, defaultSeconds: 0) == .duration(60), "just-in-time default falls back to shortest duration after start")
+        c.expect(AlertController.primarySnoozePlan(options: ending, defaultSeconds: 0) == nil, "just-in-time default cannot snooze an ending event")
+
+        c.expect(AlertController.primarySnoozePlan(options: shared, defaultSeconds: 600) == .duration(60), "main button shortens to protect every meeting")
+        c.expect(AlertController.primarySnoozePlan(options: tinyOptions, defaultSeconds: 600) == .atStart, "just-in-time is retained when no duration fits a future event")
+        c.expect(AlertController.primarySnoozePlan(options: .init(atStartEnabled: false, enabledDurations: [300]), defaultSeconds: 60) == nil, "fallback never lengthens the preferred duration")
+
+        // Real schedules share exactly the UI policy, and only include active cards.
+        let sharedEvents = [twoMinutesLeft, imminent, endedAtBoundary]
+        let sharedSchedule = AlertController.snoozeSchedule(plan: .duration(60), events: sharedEvents, now: now)
+        c.expect(Set(sharedSchedule?.keys.map { $0 } ?? []) == [twoMinutesLeft.id, imminent.id], "shared snooze schedules every active card and excludes ended cards")
+        c.expect(sharedSchedule?.values.allSatisfy { $0 == now.addingTimeInterval(60) } == true, "duration schedule uses one consistent activation time")
+        c.expect(AlertController.snoozeSchedule(plan: .duration(600), events: sharedEvents, now: now) == nil, "reject long shared snooze instead of dropping the shorter meeting")
+        c.expect(AlertController.snoozeSchedule(plan: .duration(60), events: sharedEvents, now: now.addingTimeInterval(60)) == nil, "activation at the exact end boundary rejects a stale duration")
+        c.expect(AlertController.snoozeSchedule(plan: .atStart, events: [imminent], now: imminent.start) == nil, "stale just-in-time click cannot schedule a past fire date")
+        let multiStart = AlertController.snoozeSchedule(plan: .atStart, events: [imminent, shortLead, endedAtBoundary], now: now)
+        c.expect(multiStart == [imminent.id: imminent.start, shortLead.id: shortLead.start], "just-in-time schedules each future meeting at its own start")
+        if let sharedSchedule {
+            let due = AppStore.dueForAlert(events: sharedEvents, alerted: Set(sharedEvents.map(\.id)), snoozed: sharedSchedule, leadSeconds: 300, now: now.addingTimeInterval(60))
+            c.expect(Set(due.map(\.id)) == [twoMinutesLeft.id, imminent.id], "every active meeting actually re-alerts when the shared snooze expires")
+        }
+
+        // Selection must remain valid as time passes or a new card merges in.
+        c.expect(AlertController.snoozeMenuSelection(current: .atStart, options: started, defaultSeconds: 0) == .duration(60), "first Return after start resolves the expired selection to one minute")
+        c.expect(AlertController.snoozeMenuSelection(current: .duration(600), options: shared, defaultSeconds: 600) == .duration(60), "a newly merged shorter meeting replaces an unsafe selection")
+        c.expect(AlertController.snoozeMenuSelection(current: .duration(180), options: full, defaultSeconds: 0) == .duration(180), "valid user selection survives updates")
+        c.expect(AlertController.snoozeMenuSelection(current: .duration(60), options: ending, defaultSeconds: 60) == nil, "no remaining choices clears the highlight")
+        c.expect(AlertController.movedSnoozeSelection(current: .atStart, options: started, direction: 1) == .duration(60), "Down from a vanished row does not skip the first valid choice")
+        c.expect(AlertController.movedSnoozeSelection(current: .atStart, options: started, direction: -1) == .duration(600), "Up from a vanished row chooses the last valid choice")
+        c.expect(AlertController.movedSnoozeSelection(current: .duration(600), options: full, direction: 1) == .atStart, "Down wraps to the first choice")
+        c.expect(AlertController.movedSnoozeSelection(current: .atStart, options: full, direction: -1) == .duration(600), "Up wraps to the last choice")
+        c.expect(AlertController.movedSnoozeSelection(current: nil, options: ending, direction: 1) == nil, "empty choices cannot produce a selection")
+
+        // Just-in-time snoozes store each event's own start as the fire date
+        // and re-fire exactly then.
+        let jit = [shortLead.id: shortLead.start]
+        c.expect(AppStore.dueForAlert(events: [shortLead], alerted: [shortLead.id], snoozed: jit, leadSeconds: 300, now: shortLead.start.addingTimeInterval(-1)).isEmpty, "just-in-time snooze stays quiet before the start")
+        c.expect(AppStore.dueForAlert(events: [shortLead], alerted: [shortLead.id], snoozed: jit, leadSeconds: 300, now: shortLead.start).map(\.uid) == ["shortlead"], "just-in-time snooze re-fires at the start instant")
+
         // Active-meeting policy: defer before start, permanently dismiss from
         // the event start onward, and fail open for inactive/unknown states.
         let deferred = AppStore.meetingReminderDecision(due: [imminent], suppressionEnabled: true, activity: .meeting(.zoom), now: now)
@@ -1315,6 +1390,27 @@ enum SelfTest {
         c.expect(AlertController.keyAction(modifiers: plain, keyCode: 19, characters: "2", snoozeable: false, hasFocusedControl: false) == .joinIndex(2), "plain 2 joins second card")
         c.expect(AlertController.keyAction(modifiers: .command, keyCode: 18, characters: "1", snoozeable: true, hasFocusedControl: false) == .passThrough, "⌘1 passes through")
         c.expect(AlertController.keyAction(modifiers: plain, keyCode: 18, characters: "1", snoozeable: true, hasFocusedControl: true) == .joinIndex(1), "digits work with focused control too")
+
+        // The dropdown owns only its plain navigation/activation keys.
+        for modifier: Mod in [.option, .command, .control, .shift, [.control, .option]] {
+            for key: UInt16 in [36, 76, 49, 125, 126] {
+                c.expect(AlertController.snoozeMenuKeyAction(modifiers: modifier, keyCode: key, characters: nil) == .passThrough,
+                         "modified dropdown activation/navigation passes through: \(modifier.rawValue), \(key)")
+            }
+        }
+        for key: UInt16 in [36, 76, 49] {
+            c.expect(AlertController.snoozeMenuKeyAction(modifiers: plain, keyCode: key, characters: nil) == .activate, "plain dropdown activation: \(key)")
+        }
+        c.expect(AlertController.snoozeMenuKeyAction(modifiers: .capsLock, keyCode: 36, characters: nil) == .activate, "Caps Lock does not disable dropdown activation")
+        c.expect(AlertController.snoozeMenuKeyAction(modifiers: [.numericPad, .function], keyCode: 125, characters: nil) == .move(1), "hardware arrow flags do not disable navigation")
+        c.expect(AlertController.snoozeMenuKeyAction(modifiers: plain, keyCode: 126, characters: nil) == .move(-1), "Up navigates dropdown")
+        c.expect(AlertController.snoozeMenuKeyAction(modifiers: plain, keyCode: 53, characters: nil) == .dismiss, "Escape dismisses dropdown without closing reminder")
+        c.expect(AlertController.snoozeMenuKeyAction(modifiers: plain, keyCode: 48, characters: nil) == .dismissAndPassThrough, "Tab dismisses dropdown and preserves focus traversal")
+        c.expect(AlertController.snoozeMenuKeyAction(modifiers: .shift, keyCode: 48, characters: nil) == .dismissAndPassThrough, "Shift-Tab preserves reverse focus traversal")
+        c.expect(AlertController.snoozeMenuKeyAction(modifiers: .command, keyCode: 12, characters: "q") == .passThrough, "Quit remains available while dropdown is open")
+        c.expect(AlertController.snoozeMenuKeyAction(modifiers: .command, keyCode: 13, characters: "w") == .swallow, "borderless panel still swallows Command-W")
+        c.expect(AlertController.snoozeMenuKeyAction(modifiers: .command, keyCode: 46, characters: "m") == .swallow, "borderless panel still swallows Command-M")
+        c.expect(AlertController.snoozeMenuKeyAction(modifiers: plain, keyCode: 18, characters: "1") == .swallow, "dropdown input cannot accidentally join a meeting")
 
         // Mixed reminders: Return uses the first available link, while card
         // numbers preserve visual row identity and linkless rows do nothing.
@@ -1367,6 +1463,35 @@ enum SelfTest {
     // MARK: - Settings & login item
 
     static func settingsTests(_ c: inout Checker) {
+        c.expect(AppSettings().snoozeSeconds == 0, "new installs default to just-in-time snooze")
+        c.expect(Persisted().settings.snoozeSeconds == 0, "new persisted state uses just-in-time snooze")
+        let legacySnooze = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\":30,\"soundEnabled\":false}".utf8))
+        c.expect(legacySnooze?.snoozeSeconds == 0 && legacySnooze?.leadSeconds == 30 && legacySnooze?.soundEnabled == false,
+                 "existing installs without snooze setting adopt just-in-time while keeping other preferences")
+        for seconds in [0] + AppSettings.allowedSnoozeSeconds {
+            var saved = AppSettings()
+            saved.snoozeSeconds = seconds
+            let data = try? JSONEncoder().encode(saved)
+            let decoded = data.flatMap { try? JSONDecoder().decode(AppSettings.self, from: $0) }
+            c.expect(decoded == saved, "explicit snooze choice survives migration: \(seconds)")
+        }
+        for json in ["{}", "{\"settings\":null}", "{\"settings\":\"damaged\"}", "{\"settings\":{}}"] {
+            let saved = try? JSONDecoder().decode(Persisted.self, from: Data(json.utf8))
+            c.expect(saved?.settings.snoozeSeconds == 0, "state recovery uses the shared just-in-time default: \(json)")
+        }
+        let atStartLegacy = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\":0}".utf8))
+        c.expect(atStartLegacy?.snoozeSeconds == 60, "existing just-in-time reminder without snooze preference defaults to one minute")
+        let atStartExplicit = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\":0,\"snoozeSeconds\":300}".utf8))
+        c.expect(atStartExplicit?.snoozeSeconds == 300, "explicit duration survives with a just-in-time reminder")
+        var snoozeSettings = AppSettings()
+        let snoozeData = try? JSONEncoder().encode(snoozeSettings)
+        let snoozeDecoded = snoozeData.flatMap { try? JSONDecoder().decode(AppSettings.self, from: $0) }
+        c.expect(snoozeDecoded?.snoozeSeconds == 0, "just-in-time snooze survives persistence")
+        snoozeSettings.leadSeconds = 0
+        c.expect(snoozeSettings.snoozeSeconds == 60, "at-start reminder resets just-in-time snooze to one minute")
+        let conflictingSnooze = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\":0,\"snoozeSeconds\":0}".utf8))
+        c.expect(conflictingSnooze?.snoozeSeconds == 60, "decode normalizes conflicting just-in-time settings")
+
         c.expect(!AppStore.refreshIntervalChanged(from: 15, to: 15), "unrelated settings edits keep refresh cadence")
         c.expect(AppStore.refreshIntervalChanged(from: 15, to: 30), "refresh interval edit reschedules cadence")
         c.expect(AppSettings().elapsedStartMinutes == 10, "new settings default to a 10-minute elapsed-start window")

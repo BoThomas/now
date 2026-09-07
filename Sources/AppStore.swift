@@ -499,9 +499,10 @@ final class AppStore: ObservableObject {
     }
 
 
-    func snooze(_ ids: [String]) {
-        let fireAt = Date().addingTimeInterval(60)
-        for id in ids { snoozed[id] = fireAt }
+    /// Snoozes each id to its own re-alert time. Duration snoozes share one
+    /// fire date; a "just in time" snooze maps each event to its own start.
+    func snooze(_ plan: [String: Date]) {
+        for (id, fireAt) in plan { snoozed[id] = fireAt }
     }
 
     func pause(for seconds: TimeInterval) {

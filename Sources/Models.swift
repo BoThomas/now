@@ -37,7 +37,11 @@ struct CalendarSubscription: Codable, Identifiable, Equatable {
 }
 
 struct AppSettings: Codable, Equatable {
-    var leadSeconds = 300
+    var leadSeconds = 300 {
+        didSet {
+            if leadSeconds == 0 && snoozeSeconds == 0 { snoozeSeconds = 60 }
+        }
+    }
     var refreshMinutes = 15
     var soundEnabled = true
     var soundName = "Hero"
@@ -47,6 +51,10 @@ struct AppSettings: Codable, Equatable {
     /// countdown may own the menu bar. `-1` disables it, `0` means until end.
     var elapsedStartMinutes = 10
     var skipDeclined = true
+    /// Default snooze: 0 means just in time; positive values are seconds.
+    /// What the alert's main snooze button and the
+    /// "s" shortcut apply (the alert's snooze menu always offers all choices).
+    var snoozeSeconds = 0
     var automaticUpdateChecks = true
     var suppressRemindersDuringMeetings = false
     var includeBrowserMeetings = false
@@ -59,9 +67,10 @@ struct AppSettings: Codable, Equatable {
     static let allowedRefreshMinutes = [5, 15, 30, 60]
     static let leadSecondsRange = 0...7200
     static let allowedElapsedStartMinutes = [-1, 0, 5, 10, 15, 30, 60]
+    static let allowedSnoozeSeconds = [60, 180, 300, 600]
 
     enum CodingKeys: String, CodingKey {
-        case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
+        case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
     }
 
     init() {}
@@ -91,6 +100,10 @@ struct AppSettings: Codable, Equatable {
         let elapsed = try c.decodeIfPresent(Int.self, forKey: .elapsedStartMinutes) ?? 10
         elapsedStartMinutes = Self.nearest(elapsed, in: Self.allowedElapsedStartMinutes, default: 10)
         skipDeclined = try c.decodeIfPresent(Bool.self, forKey: .skipDeclined) ?? true
+        // New and existing installs share the same default when no explicit
+        // snooze choice is saved. At-start reminders cannot snooze to the past.
+        let snooze = try c.decodeIfPresent(Int.self, forKey: .snoozeSeconds) ?? (leadSeconds > 0 ? 0 : 60)
+        snoozeSeconds = snooze == 0 && leadSeconds > 0 ? 0 : Self.nearest(snooze, in: Self.allowedSnoozeSeconds, default: 60)
         automaticUpdateChecks = try c.decodeIfPresent(Bool.self, forKey: .automaticUpdateChecks) ?? true
         suppressRemindersDuringMeetings = try c.decodeIfPresent(Bool.self, forKey: .suppressRemindersDuringMeetings) ?? false
         includeBrowserMeetings = try c.decodeIfPresent(Bool.self, forKey: .includeBrowserMeetings) ?? false
