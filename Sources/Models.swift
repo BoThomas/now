@@ -67,7 +67,13 @@ struct AppSettings: Codable, Equatable {
     static let allowedRefreshMinutes = [5, 15, 30, 60]
     static let leadSecondsRange = 0...7200
     static let allowedElapsedStartMinutes = [-1, 0, 5, 10, 15, 30, 60]
-    static let allowedSnoozeSeconds = [60, 180, 300, 600]
+    static let snoozePresets = [60, 180, 300, 600]
+    static let snoozeSecondsRange = 1...7200
+
+    static func snoozeDurations(including customSeconds: Int) -> [Int] {
+        let custom = snoozeSecondsRange.contains(customSeconds) ? [customSeconds] : []
+        return Set(snoozePresets + custom).sorted()
+    }
 
     enum CodingKeys: String, CodingKey {
         case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
@@ -103,7 +109,11 @@ struct AppSettings: Codable, Equatable {
         // New and existing installs share the same default when no explicit
         // snooze choice is saved. At-start reminders cannot snooze to the past.
         let snooze = try c.decodeIfPresent(Int.self, forKey: .snoozeSeconds) ?? (leadSeconds > 0 ? 0 : 60)
-        snoozeSeconds = snooze == 0 && leadSeconds > 0 ? 0 : Self.nearest(snooze, in: Self.allowedSnoozeSeconds, default: 60)
+        if snooze == 0 && leadSeconds > 0 {
+            snoozeSeconds = 0
+        } else {
+            snoozeSeconds = snooze > 0 ? min(snooze, Self.snoozeSecondsRange.upperBound) : 60
+        }
         automaticUpdateChecks = try c.decodeIfPresent(Bool.self, forKey: .automaticUpdateChecks) ?? true
         suppressRemindersDuringMeetings = try c.decodeIfPresent(Bool.self, forKey: .suppressRemindersDuringMeetings) ?? false
         includeBrowserMeetings = try c.decodeIfPresent(Bool.self, forKey: .includeBrowserMeetings) ?? false

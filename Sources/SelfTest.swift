@@ -1340,6 +1340,25 @@ enum SelfTest {
         c.expect(AlertController.movedSnoozeSelection(current: .atStart, options: full, direction: -1) == .duration(600), "Up wraps to the last choice")
         c.expect(AlertController.movedSnoozeSelection(current: nil, options: ending, direction: 1) == nil, "empty choices cannot produce a selection")
 
+        // A configured custom interval participates in all the same safety,
+        // scheduling and selection rules as the presets.
+        let customOptions = AlertController.snoozeOptions(events: [imminent], now: now, customSeconds: 135)
+        c.expect(customOptions.plans == [.atStart, .duration(60), .duration(135), .duration(180), .duration(300), .duration(600)], "custom duration appears once in sorted dropdown choices")
+        c.expect(AlertController.primarySnoozePlan(options: customOptions, defaultSeconds: 135) == .duration(135), "main button and S use exact custom seconds")
+        c.expect(AlertController.snoozeMenuSelection(current: .duration(135), options: customOptions, defaultSeconds: 135) == .duration(135), "custom selection survives menu updates")
+        let customShared = AlertController.snoozeOptions(events: sharedEvents, now: now, customSeconds: 135)
+        c.expect(customShared.enabledDurations == [60], "custom interval cannot overrun the shorter active meeting")
+        c.expect(AlertController.primarySnoozePlan(options: customShared, defaultSeconds: 135) == .duration(60), "unsafe custom default shortens to a safe preset")
+        c.expect(AlertController.snoozeMenuSelection(current: .duration(135), options: customShared, defaultSeconds: 135) == .duration(60), "stale custom choice reconciles after a shorter meeting merges")
+        c.expect(AlertController.snoozeSchedule(plan: .duration(135), events: sharedEvents, now: now) == nil, "custom action revalidates safety for every active card")
+        let secondsOptions = AlertController.snoozeOptions(events: [soonEnding], now: now, customSeconds: 30)
+        c.expect(secondsOptions.enabledDurations == [30], "custom sub-minute snooze remains available when presets no longer fit")
+        c.expect(AlertController.snoozeSchedule(plan: .duration(30), events: [soonEnding], now: now) == [soonEnding.id: now.addingTimeInterval(30)], "custom sub-minute schedule uses the exact fire time")
+        c.expect(AlertController.snoozeSchedule(plan: .duration(30), events: [soonEnding], now: now.addingTimeInterval(30)) == nil, "custom snooze cannot expire at the meeting end")
+        for seconds in [-1, 0, 7201, Int.max] {
+            c.expect(AlertController.snoozeSchedule(plan: .duration(seconds), events: [imminent], now: now) == nil, "invalid custom duration is rejected: \(seconds)")
+        }
+
         // Just-in-time snoozes store each event's own start as the fire date
         // and re-fire exactly then.
         let jit = [shortLead.id: shortLead.start]
@@ -1468,13 +1487,19 @@ enum SelfTest {
         let legacySnooze = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\":30,\"soundEnabled\":false}".utf8))
         c.expect(legacySnooze?.snoozeSeconds == 0 && legacySnooze?.leadSeconds == 30 && legacySnooze?.soundEnabled == false,
                  "existing installs without snooze setting adopt just-in-time while keeping other preferences")
-        for seconds in [0] + AppSettings.allowedSnoozeSeconds {
+        for seconds in [0, 1, 30, 135, 765, 7200] + AppSettings.snoozePresets {
             var saved = AppSettings()
             saved.snoozeSeconds = seconds
             let data = try? JSONEncoder().encode(saved)
             let decoded = data.flatMap { try? JSONDecoder().decode(AppSettings.self, from: $0) }
             c.expect(decoded == saved, "explicit snooze choice survives migration: \(seconds)")
         }
+        c.expect(AppSettings.snoozeDurations(including: 60) == AppSettings.snoozePresets, "custom value matching a preset does not duplicate it")
+        c.expect(AppSettings.snoozeDurations(including: 0) == AppSettings.snoozePresets, "just-in-time sentinel is not a duration row")
+        let oversizedSnooze = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"snoozeSeconds\":9223372036854775807}".utf8))
+        c.expect(oversizedSnooze?.snoozeSeconds == 7200, "oversized custom snooze clamps safely to two hours")
+        let negativeSnooze = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"snoozeSeconds\":-9223372036854775808}".utf8))
+        c.expect(negativeSnooze?.snoozeSeconds == 60, "negative snooze restores a safe duration")
         for json in ["{}", "{\"settings\":null}", "{\"settings\":\"damaged\"}", "{\"settings\":{}}"] {
             let saved = try? JSONDecoder().decode(Persisted.self, from: Data(json.utf8))
             c.expect(saved?.settings.snoozeSeconds == 0, "state recovery uses the shared just-in-time default: \(json)")

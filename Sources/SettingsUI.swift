@@ -1428,13 +1428,71 @@ struct SectionTopKey: PreferenceKey {
 
 private let settingsContentBottomKey = "__contentBottom"
 
+/// Shared editor for reminder lead time and custom snooze duration.
+private struct CustomTimingEditor: View {
+    let title: String
+    let initialSeconds: Int
+    let range: ClosedRange<Int>
+    let onApply: (Int) -> Void
+    let onCancel: () -> Void
+    @State private var minutes: String
+    @State private var seconds: String
+
+    init(title: String, seconds: Int, range: ClosedRange<Int>, onApply: @escaping (Int) -> Void, onCancel: @escaping () -> Void) {
+        self.title = title
+        self.initialSeconds = seconds
+        self.range = range
+        self.onApply = onApply
+        self.onCancel = onCancel
+        _minutes = State(initialValue: String(seconds / 60))
+        _seconds = State(initialValue: String(seconds % 60))
+    }
+
+    private var value: Int? {
+        guard let minutes = Int(minutes), let seconds = Int(seconds),
+              (0...(range.upperBound / 60)).contains(minutes), (0...59).contains(seconds) else { return nil }
+        let total = minutes * 60 + seconds
+        return range.contains(total) ? total : nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title).font(.headline)
+            HStack(spacing: 8) {
+                TextField("Minutes", text: $minutes).frame(width: 52)
+                    .accessibilityLabel("Minutes")
+                Text("min")
+                TextField("Seconds", text: $seconds).frame(width: 52)
+                    .accessibilityLabel("Seconds")
+                Text("sec")
+            }
+            .textFieldStyle(.roundedBorder)
+            HStack {
+                Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Apply") {
+                    guard let value else { return }
+                    onApply(value)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(value == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 260)
+        .onAppear {
+            minutes = String(initialSeconds / 60)
+            seconds = String(initialSeconds % 60)
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var alerts: AlertController
     @EnvironmentObject var updates: UpdateController
     @State private var showCustomReminderTime = false
-    @State private var customReminderMinutes = "0"
-    @State private var customReminderSeconds = "0"
+    @State private var showCustomSnoozeTime = false
     @State private var showAddSheet = false
     @State private var showBrowserMeetingInfo = false
     @State private var showStartedCountdownInfo = false
@@ -1895,42 +1953,6 @@ struct SettingsView: View {
         .contentShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private var customReminderValue: Int? {
-        guard let minutes = Int(customReminderMinutes), let seconds = Int(customReminderSeconds),
-              (0...120).contains(minutes), (0...59).contains(seconds),
-              minutes * 60 + seconds <= 7200 else { return nil }
-        return minutes * 60 + seconds
-    }
-
-    private var customReminderEditor: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Remind me before start").font(.headline)
-            HStack(spacing: 8) {
-                TextField("Minutes", text: $customReminderMinutes).frame(width: 52)
-                    .accessibilityLabel("Minutes")
-                Text("min")
-                TextField("Seconds", text: $customReminderSeconds).frame(width: 52)
-                    .accessibilityLabel("Seconds")
-                Text("sec")
-            }
-            .textFieldStyle(.roundedBorder)
-            HStack {
-                Button("Cancel") { showCustomReminderTime = false }
-                    .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Apply") {
-                    guard let seconds = customReminderValue else { return }
-                    store.settings.leadSeconds = seconds
-                    showCustomReminderTime = false
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(customReminderValue == nil)
-            }
-        }
-        .padding(20)
-        .frame(width: 260)
-    }
-
     private var reminderSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader(SettingsSection.reminder.title, SettingsSection.reminder.symbol)
@@ -1952,8 +1974,6 @@ struct SettingsView: View {
                         }
                         Divider()
                         Button("Custom…") {
-                            customReminderMinutes = String(store.settings.leadSeconds / 60)
-                            customReminderSeconds = String(store.settings.leadSeconds % 60)
                             showCustomReminderTime = true
                         }
                     } label: {
@@ -1964,7 +1984,9 @@ struct SettingsView: View {
                     .fixedSize()
                     .accessibilityLabel("Reminder timing")
                     .popover(isPresented: $showCustomReminderTime, arrowEdge: .bottom) {
-                        customReminderEditor
+                        CustomTimingEditor(title: "Remind me before start", seconds: store.settings.leadSeconds, range: AppSettings.leadSecondsRange,
+                            onApply: { store.settings.leadSeconds = $0; showCustomReminderTime = false },
+                            onCancel: { showCustomReminderTime = false })
                     }
                 }
                 .padding(.vertical, 10)
@@ -1985,7 +2007,7 @@ struct SettingsView: View {
                             }
                             Divider()
                         }
-                        ForEach(AppSettings.allowedSnoozeSeconds, id: \.self) { seconds in
+                        ForEach(AppSettings.snoozeDurations(including: store.settings.snoozeSeconds), id: \.self) { seconds in
                             Button {
                                 store.settings.snoozeSeconds = seconds
                             } label: {
@@ -1996,6 +2018,8 @@ struct SettingsView: View {
                                 }
                             }
                         }
+                        Divider()
+                        Button("Custom…") { showCustomSnoozeTime = true }
                     } label: {
                         timingMenuLabel(store.settings.snoozeSeconds == 0 ? "Just in time" : Fmt.leadTime(store.settings.snoozeSeconds))
                     }
@@ -2003,6 +2027,11 @@ struct SettingsView: View {
                     .menuIndicator(.hidden)
                     .fixedSize()
                     .accessibilityLabel("Default snooze")
+                    .popover(isPresented: $showCustomSnoozeTime, arrowEdge: .bottom) {
+                        CustomTimingEditor(title: "Snooze for", seconds: store.settings.snoozeSeconds == 0 ? 60 : store.settings.snoozeSeconds, range: AppSettings.snoozeSecondsRange,
+                            onApply: { store.settings.snoozeSeconds = $0; showCustomSnoozeTime = false },
+                            onCancel: { showCustomSnoozeTime = false })
+                    }
                 }
                 .padding(.vertical, 10)
             }
