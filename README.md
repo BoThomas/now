@@ -36,7 +36,7 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 - Fullscreen reminder just before a meeting starts.
 - One-click **Join** (Zoom, Meet, Teams, Webex, any meeting link).
 - Keyboard shortcuts: `esc` close, `return` join, `s` snooze, `1`-`9` join a specific meeting.
-- Snooze until the meeting starts or for 1, 3, 5, or 10 minutes. Choose a default in Settings; shared snoozes only offer times that work for every active meeting.
+- Snooze until the meeting starts or for `x` minutes (choose a default in Settings).
 - Mute reminders by title or regex; muted meetings stay visible and joinable.
 - Optional "don't interrupt me while I'm in a meeting" mode (no audio recorded).
 - Choose between different alert sounds.
