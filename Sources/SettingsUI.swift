@@ -1449,7 +1449,10 @@ private struct CustomTimingEditor: View {
     }
 
     private var value: Int? {
-        guard let minutes = Int(minutes), let seconds = Int(seconds),
+        let minuteText = minutes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secondText = seconds.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let minutes = Int(minuteText.isEmpty ? "0" : minuteText),
+              let seconds = Int(secondText.isEmpty ? "0" : secondText),
               (0...(range.upperBound / 60)).contains(minutes), (0...59).contains(seconds) else { return nil }
         let total = minutes * 60 + seconds
         return range.contains(total) ? total : nil
