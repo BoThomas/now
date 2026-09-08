@@ -291,3 +291,7 @@ final class MeetingActivitySource {
         onActivityChange?(debouncer.apply(detected))
     }
 }
+
+extension MeetingActivity {
+    var isDetectedMeeting: Bool { if case .meeting = self { return true }; return false }
+}

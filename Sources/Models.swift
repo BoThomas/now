@@ -36,6 +36,10 @@ struct CalendarSubscription: Codable, Identifiable, Equatable {
     }
 }
 
+enum ReminderDelivery: String, Codable, CaseIterable { case fullscreen, notification }
+enum CatchUpDelivery: String, Codable, CaseIterable { case normal, notification, skip }
+enum InMeetingDelivery: String, Codable, CaseIterable { case normal, notification, suppress }
+
 struct AppSettings: Codable, Equatable {
     var leadSeconds = 300 {
         didSet {
@@ -59,6 +63,33 @@ struct AppSettings: Codable, Equatable {
     var automaticUpdateChecks = true
     var suppressRemindersDuringMeetings = false
     var includeBrowserMeetings = false
+    var reminderDelivery: ReminderDelivery = .fullscreen
+    var notifyDuringMeetings = false
+    var notifyOnCatchUp = false
+    var skipMeetingsOnCatchUp = false
+
+    var catchUpDelivery: CatchUpDelivery {
+        get { skipMeetingsOnCatchUp ? .skip : (notifyOnCatchUp ? .notification : .normal) }
+        set {
+            notifyOnCatchUp = newValue == .notification
+            skipMeetingsOnCatchUp = newValue == .skip
+        }
+    }
+    var hideNotificationDetails = false
+    var notifySyncErrors = false
+    var notifyUpdates = false
+
+    var inMeetingDelivery: InMeetingDelivery {
+        get { notifyDuringMeetings ? .notification : (suppressRemindersDuringMeetings ? .suppress : .normal) }
+        set {
+            notifyDuringMeetings = newValue == .notification
+            suppressRemindersDuringMeetings = newValue == .suppress
+        }
+    }
+    var needsMeetingDetection: Bool { inMeetingDelivery != .normal }
+    var usesNotifications: Bool {
+        reminderDelivery == .notification || notifyDuringMeetings || notifyOnCatchUp || notifySyncErrors || (notifyUpdates && automaticUpdateChecks)
+    }
     /// Reserved for the v2 "Skip this version" UI — the updater already
     /// honors it in `decide`.
     var skippedUpdateVersion: String?
@@ -83,6 +114,7 @@ struct AppSettings: Codable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case reminderDelivery, notifyDuringMeetings, notifyOnCatchUp, skipMeetingsOnCatchUp, hideNotificationDetails, notifySyncErrors, notifyUpdates
         case menuMeetingLimit, leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
     }
 
@@ -125,6 +157,15 @@ struct AppSettings: Codable, Equatable {
         automaticUpdateChecks = try c.decodeIfPresent(Bool.self, forKey: .automaticUpdateChecks) ?? true
         suppressRemindersDuringMeetings = try c.decodeIfPresent(Bool.self, forKey: .suppressRemindersDuringMeetings) ?? false
         includeBrowserMeetings = try c.decodeIfPresent(Bool.self, forKey: .includeBrowserMeetings) ?? false
+        reminderDelivery = (try? c.decode(ReminderDelivery.self, forKey: .reminderDelivery)) ?? .fullscreen
+        notifyDuringMeetings = (try? c.decode(Bool.self, forKey: .notifyDuringMeetings)) ?? false
+        if notifyDuringMeetings { suppressRemindersDuringMeetings = false }
+        notifyOnCatchUp = (try? c.decode(Bool.self, forKey: .notifyOnCatchUp)) ?? false
+        skipMeetingsOnCatchUp = (try? c.decode(Bool.self, forKey: .skipMeetingsOnCatchUp)) ?? false
+        if skipMeetingsOnCatchUp { notifyOnCatchUp = false }
+        hideNotificationDetails = (try? c.decode(Bool.self, forKey: .hideNotificationDetails)) ?? false
+        notifySyncErrors = (try? c.decode(Bool.self, forKey: .notifySyncErrors)) ?? false
+        notifyUpdates = (try? c.decode(Bool.self, forKey: .notifyUpdates)) ?? false
         skippedUpdateVersion = try c.decodeIfPresent(String.self, forKey: .skippedUpdateVersion)
     }
 }
@@ -180,8 +221,8 @@ struct Persisted: Codable {
     var subscriptions: [CalendarSubscription]
     var settings: AppSettings
     var nativeCalendars: [NativeCalendar] = []
-    /// Pause survives relaunch (incl. indefinite); snoozes/alerted memory do
-    /// not — a delayed launch should still alert for a due meeting.
+    /// Pause survives relaunch (incl. indefinite). Reminder acknowledgements
+    /// and snoozes persist separately in ReminderLedger.
     var pausedUntil: Date?
 
     init(subscriptions: [CalendarSubscription] = [], settings: AppSettings = AppSettings(), nativeCalendars: [NativeCalendar] = [], pausedUntil: Date? = nil) {

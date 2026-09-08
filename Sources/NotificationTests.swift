@@ -1,0 +1,173 @@
+import Foundation
+
+extension SelfTest {
+    static func notificationTests(_ c: inout Checker) {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var setup = SetupAssistantState(isNewProfile: true, settings: AppSettings(), supportsMeetings: true)
+        c.expect(setup.draft.leadSeconds == 60 && setup.draft.snoozeSeconds == 0, "assistant: new-user timing defaults to one minute and just in time")
+        c.expect(!setup.completed && setup.step == .welcome && setup.draft.notifyDuringMeetings && setup.draft.notifyOnCatchUp && setup.draft.notifyUpdates, "assistant: new user starts with recommended notification draft")
+        c.expect(setup.draft.launchAtLogin == AppSettings().launchAtLogin && setup.draft.refreshMinutes == AppSettings().refreshMinutes && !setup.draft.notifySyncErrors, "assistant: general defaults untouched")
+        c.expect(SetupAssistantState(isNewProfile: false, settings: AppSettings(), supportsMeetings: true).completed, "assistant: existing empty profiles not mistaken for new installs")
+        setup.next(); c.expect(setup.step == .reminders, "assistant: welcome precedes reminder options")
+        setup.next(); c.expect(setup.step == .ready && setup.steps.count == 3, "assistant: three-screen flow ends after combined reminders")
+        setup.back(); c.expect(setup.step == .reminders, "assistant: back revisits combined reminder screen")
+        let disabled = SetupAssistantState.effective(setup.draft, notificationsAllowed: false)
+        c.expect(!disabled.usesNotifications && disabled.reminderDelivery == .fullscreen && disabled.inMeetingDelivery == .normal, "assistant: permission off disables every notification route")
+        c.expect(SetupAssistantState.effective(setup.draft, notificationsAllowed: true) == setup.draft && setup.draft.notifyDuringMeetings, "assistant: later grant restores draft choices without losing them")
+        let legacyDraft = #"{"completed":false,"step":"context","draft":{}}"#.data(using: .utf8)!
+        c.expect((try? JSONDecoder().decode(SetupAssistantState.self, from: legacyDraft))?.step == .reminders, "assistant: old context step migrates to combined reminders")
+        var current = AppSettings()
+        current.refreshMinutes = 30; current.launchAtLogin = true; current.automaticUpdateChecks = false
+        current.showMenuBarCountdown = false; current.elapsedStartMinutes = 60
+        var draft = AppSettings(); draft.leadSeconds = 90; draft.snoozeSeconds = 45; draft.hideNotificationDetails = true
+        let applied = SetupAssistantState.applying(draft, to: current)
+        c.expect(applied.leadSeconds == 90 && applied.snoozeSeconds == current.snoozeSeconds && applied.hideNotificationDetails, "assistant: selected reminder choices applied")
+        c.expect(applied.refreshMinutes == 30 && applied.launchAtLogin == draft.launchAtLogin && applied.automaticUpdateChecks == draft.automaticUpdateChecks && !applied.showMenuBarCountdown && applied.elapsedStartMinutes == 60, "assistant: selected startup/update choices apply while other general settings stay unchanged")
+        let encodedSetup = try? JSONEncoder().encode(setup)
+        c.expect(encodedSetup.flatMap { try? JSONDecoder().decode(SetupAssistantState.self, from: $0) } == setup, "assistant: draft and step survive restart")
+        for lead in [0, 60, 300] {
+            for snooze in [0, 45, 7200] {
+                var previewSettings = AppSettings()
+                previewSettings.leadSeconds = lead
+                previewSettings.snoozeSeconds = snooze == 0 && lead == 0 ? 60 : snooze
+                let sample = AlertController.previewEvent(at: now, settings: previewSettings)
+                c.expect(sample.start == now.addingTimeInterval(TimeInterval(lead)), "preview: sample respects reminder lead time")
+                let options = AlertController.snoozeOptions(events: [sample], now: now, customSeconds: previewSettings.snoozeSeconds)
+                let plan = AlertController.primarySnoozePlan(options: options, defaultSeconds: previewSettings.snoozeSeconds)
+                c.expect(plan == (previewSettings.snoozeSeconds == 0 ? .atStart : .duration(previewSettings.snoozeSeconds)), "preview: selected snooze fits sample meeting")
+            }
+        }
+        let catalog = FeatureGuideCatalog.entries
+        var guides = FeatureGuideState()
+        c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true) == [FeatureGuideCatalog.notificationsID], "guide: legacy user sees feature on crossing its introduction")
+        for _ in 0..<3 {
+            c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true).isEmpty, "guide: subsequent updates never repeat introduction")
+        }
+        let futureGuide = FeatureGuideDefinition(id: "future-feature", content: .information(title: "Future", message: "Explanation"))
+        c.expect(guides.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true, hasCalendar: true) == [futureGuide.id], "guide: future update introduces only its new feature")
+        var skipped = FeatureGuideState()
+        c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true, hasCalendar: true).count == 2, "guide: skipped releases collect all new features")
+        _ = skipped.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true)
+        c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true, hasCalendar: true).isEmpty, "guide: downgrade preserves feature history")
+        var initial = FeatureGuideState()
+        c.expect(initial.acknowledge(catalog: catalog + [futureGuide], installedUpdate: false, hasCalendar: false).isEmpty && initial.pendingSettings.isEmpty, "guide: first-run assistant replaces inline setup cards")
+        c.expect(initial.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true).isEmpty, "guide: later update does not repeat pending initial setup")
+        let savedGuides = try? JSONEncoder().encode(guides)
+        c.expect(savedGuides.flatMap { try? JSONDecoder().decode(FeatureGuideState.self, from: $0) } == guides, "guide: introduction history persists")
+        var updateSettings = AppSettings()
+        updateSettings.notifyUpdates = true
+        var updateState = UpdateState()
+        let manifest = UpdateManifest(version: "2.0.0", zipURL: URL(string: "https://example.com/update.zip")!, assetSize: 1, publishedAt: now.addingTimeInterval(-86400), notes: "")
+        func shouldNotify(_ state: UpdateState, _ settings: AppSettings, _ current: String = "1.0.0", _ time: Date = now) -> Bool {
+            UpdateLogic.shouldNotifyUpdate(manifest: manifest, state: state, settings: settings, currentVersion: current, now: time)
+        }
+        c.expect(shouldNotify(updateState, updateSettings), "update notice: eligible release")
+        c.expect(!shouldNotify(updateState, updateSettings, "2.0.0"), "update notice: installed release removed")
+        c.expect(!shouldNotify(updateState, updateSettings, "1.0.0", now.addingTimeInterval(-1)), "update notice: automatic age gate respected")
+        updateState.lastNotificationVersion = "2.0.0"
+        c.expect(!shouldNotify(updateState, updateSettings), "update notice: once per version")
+        updateState.lastNotificationVersion = "3.0.0"
+        c.expect(!shouldNotify(updateState, updateSettings), "update notice: withdrawn newer release does not re-notify older release")
+        updateState.lastNotificationVersion = nil
+        updateState.lastNotifiedVersion = "2.0.0"
+        c.expect(!shouldNotify(updateState, updateSettings), "update notice: already shown or failed install does not nag")
+        updateState.lastNotifiedVersion = nil
+        updateSettings.automaticUpdateChecks = false
+        c.expect(!shouldNotify(updateState, updateSettings), "update notice: automatic checks off")
+        updateSettings.automaticUpdateChecks = true
+        updateSettings.notifyUpdates = false
+        c.expect(!shouldNotify(updateState, updateSettings), "update notice: opt-in required")
+        let oldUpdate = Data(#"{"attemptsToday":2,"attemptsDayStamp":"2026-09-08","lastNotifiedVersion":"1.5"}"#.utf8)
+        let restoredUpdate = try? JSONDecoder().decode(UpdateState.self, from: oldUpdate)
+        c.expect(restoredUpdate?.attemptsToday == 2 && restoredUpdate?.lastNotifiedVersion == "1.5" && restoredUpdate?.lastNotificationVersion == nil, "update notice: old bookkeeping decodes without losing state")
+        var legacySuppression = AppSettings()
+        legacySuppression.inMeetingDelivery = .suppress
+        c.expect(!NotificationSetupChoices(settings: legacySuppression, supportsMeetings: true).duringMeetings, "guide: preserve legacy suppression recommendation")
+        c.expect(!NotificationSetupChoices(settings: AppSettings(), supportsMeetings: false).duringMeetings, "guide: unsupported meeting detection not recommended")
+        let calendar = UUID()
+        func event(_ uid: String = "one", start: TimeInterval = 120, end: TimeInterval = 1800, muted: Bool = false) -> MeetingEvent {
+            MeetingEvent(uid: uid, title: "Private title", start: now.addingTimeInterval(start), end: now.addingTimeInterval(end),
+                         location: "Secret room", notes: "Private notes", link: URL(string: "https://zoom.us/j/123?pwd=secret"),
+                         calendarID: calendar, calendarName: "Secret calendar", colorIndex: 0, isMuted: muted)
+        }
+        var settings = AppSettings()
+        let future = event(), running = event("running", start: -120)
+        let meeting = MeetingActivity.meeting(.zoom)
+        c.expect(NotificationLogic.route(event: future, settings: settings, activity: .unknown, catchUp: false, snoozed: false, now: now) == .fullscreen, "notification: existing default fullscreen")
+        settings.reminderDelivery = .notification
+        c.expect(NotificationLogic.route(event: future, settings: settings, activity: .unknown, catchUp: false, snoozed: false, now: now) == .notification, "notification: notification mode unknown activity")
+        settings.inMeetingDelivery = .suppress
+        c.expect(NotificationLogic.route(event: future, settings: settings, activity: meeting, catchUp: false, snoozed: false, now: now) == .deferReminder, "notification: suppression defers before start")
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: meeting, catchUp: true, snoozed: false, now: now) == .handled, "notification: suppression handles started meetings")
+        settings.inMeetingDelivery = .notification
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: meeting, catchUp: false, snoozed: false, now: now) == .notification, "notification: in-meeting notification never discarded by suppression")
+        settings.inMeetingDelivery = .normal
+        settings.reminderDelivery = .fullscreen
+        settings.notifyOnCatchUp = true
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: .unknown, catchUp: true, snoozed: false, now: now) == .catchUp, "notification: launch/wake catch-up")
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: .unknown, catchUp: true, snoozed: true, now: now) == .fullscreen, "notification: snoozes retain ordinary delivery on wake")
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: .unknown, catchUp: false, snoozed: false, now: now) == .fullscreen, "notification: ordinary refresh remains ordinary delivery")
+        for grouped in [false, true] {
+            let text = NotificationLogic.content(events: grouped ? [future, running] : [future], privateDetails: true, catchUp: grouped, now: now)
+            let combined = text.title + text.body
+            c.expect(!combined.contains("Private") && !combined.contains("Secret") && !combined.contains("zoom") && !combined.contains("pwd"), "notification: private content omits all identifying data")
+        }
+        settings.catchUpDelivery = .skip
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: .unknown, catchUp: true, snoozed: false, now: now) == .handled, "catch-up: skip handles ongoing meeting")
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: .unknown, catchUp: true, snoozed: true, now: now) == .fullscreen, "catch-up: skip preserves explicit snooze")
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: .unknown, catchUp: false, snoozed: false, now: now) == .fullscreen, "catch-up: skip does not affect ordinary reminders")
+        settings.inMeetingDelivery = .notification
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: meeting, catchUp: true, snoozed: false, now: now) == .notification, "catch-up: during-meeting rule retains priority")
+        for mode in CatchUpDelivery.allCases {
+            var choice = AppSettings(); choice.catchUpDelivery = mode
+            let restored = try? JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(choice))
+            c.expect(restored?.catchUpDelivery == mode, "catch-up: choice round trips")
+        }
+        for enabled in [false, true] {
+            let legacy = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"notifyOnCatchUp\":\(enabled)}".utf8))
+            c.expect(legacy?.catchUpDelivery == (enabled ? .notification : .normal), "catch-up: legacy checkbox preserves behavior")
+        }
+        let plain = NotificationLogic.content(events: [future], privateDetails: false, catchUp: false, now: now)
+        c.expect(plain.title == future.title && !plain.body.contains("secret") && !plain.body.contains("Secret"), "notification: normal content includes only title and timing")
+        c.expect(!NotificationPermission(authorization: .denied).canSubmit && NotificationPermission(authorization: .allowed).canSubmit, "notification: permission denial blocks; alerts-disabled can use center")
+
+        var ledger = ReminderLedger()
+        ledger.record(future, snooze: now.addingTimeInterval(60))
+        let key = NotificationLogic.key(future.id)
+        let data = try! JSONEncoder().encode(ledger)
+        c.expect(!String(data: data, encoding: .utf8)!.contains("Private") && !String(data: data, encoding: .utf8)!.contains(future.uid + "-"), "notification: ledger stores hashed identity, no meeting content")
+        ledger = try! JSONDecoder().decode(ReminderLedger.self, from: data)
+        c.expect(ledger.entries[key]?.snooze == now.addingTimeInterval(60), "notification: exact snooze survives restart")
+        ledger.reconcile(events: [], enabled: [calendar], observed: [], now: now)
+        c.expect(ledger.entries[key] != nil, "notification: asynchronous restore and failures retain acknowledgement")
+        ledger.reconcile(events: [], enabled: [calendar], observed: [calendar], now: now)
+        c.expect(ledger.entries[key] != nil, "notification: one omission retains acknowledgement")
+        ledger.reconcile(events: [future], enabled: [calendar], observed: [calendar], now: now)
+        ledger.reconcile(events: [], enabled: [calendar], observed: [calendar], now: now)
+        c.expect(ledger.entries[key] != nil, "notification: return resets omission counter")
+        ledger.reconcile(events: [], enabled: [calendar], observed: [calendar], now: now)
+        c.expect(ledger.entries.isEmpty, "notification: two omissions remove acknowledgement")
+        ledger.record(future); ledger.invalidate([calendar])
+        c.expect(ledger.entries.isEmpty, "notification: source URL replacement invalidates persisted acknowledgement")
+        ledger.record(future); ledger.reconcile(events: [], enabled: [], observed: [], now: now)
+        c.expect(ledger.entries.isEmpty, "notification: disabled source invalidates acknowledgement")
+        ledger.record(future); ledger.reconcile(events: [future], enabled: [calendar], observed: [], now: future.end)
+        c.expect(ledger.entries.isEmpty, "notification: ended acknowledgement expires")
+
+        var tracker = SyncNotificationTracker()
+        let other = UUID()
+        c.expect(tracker.candidates(failed: [calendar], now: now).isEmpty, "notification: transient failure silent")
+        c.expect(tracker.candidates(failed: [calendar], now: now.addingTimeInterval(299)).isEmpty, "notification: failure delay lower boundary")
+        c.expect(tracker.candidates(failed: [calendar], now: now.addingTimeInterval(300)) == [calendar], "notification: sustained failure threshold")
+        tracker.notified = [calendar]
+        c.expect(tracker.candidates(failed: [calendar, other], now: now.addingTimeInterval(301)).isEmpty, "notification: unchanged failure silent and new failure waits")
+        c.expect(tracker.candidates(failed: [calendar, other], now: now.addingTimeInterval(601)) == [other], "notification: new source failure independent")
+        _ = tracker.candidates(failed: [], now: now.addingTimeInterval(602))
+        c.expect(tracker.candidates(failed: [calendar], now: now.addingTimeInterval(603)).isEmpty, "notification: recovery re-arms with full delay")
+        let migrated = try! JSONDecoder().decode(AppSettings.self, from: Data("{\"suppressRemindersDuringMeetings\":true}".utf8))
+        c.expect(migrated.inMeetingDelivery == .suppress && migrated.reminderDelivery == .fullscreen && !migrated.usesNotifications, "notification: legacy suppression and defaults migrate unchanged")
+        settings.notifyDuringMeetings = true; settings.notifySyncErrors = true; settings.hideNotificationDetails = true
+        let roundTrip = try! JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+        c.expect(roundTrip == settings, "notification: settings round-trip")
+    }
+}

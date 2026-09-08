@@ -226,7 +226,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return fields.map { "\($0.utf8.count):\($0)" }.joined()
         }.joined(separator: "|")
         let checked = store.lastChecked?.timeIntervalSinceReferenceDate ?? 0
-        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.calendarSyncProblemTitle ?? "")|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)"
+        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.calendarSyncProblemTitle ?? "")|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)|\(store.notificationProblemTitle ?? "")"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -240,6 +240,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let until = store.pausedUntil == Date.distantFuture ? "indefinitely" : "until \(Fmt.time.string(from: store.pausedUntil ?? now))"
             menu.addItem(withTitle: "Reminders paused \(until)", action: nil, keyEquivalent: "")
             menu.addItem(withTitle: "Resume Now", action: #selector(resumeAction), keyEquivalent: "").target = self
+            menu.addItem(.separator())
+        }
+        if let problem = store.notificationProblemTitle {
+            let item = NSMenuItem(title: problem, action: #selector(settingsAction), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
             menu.addItem(.separator())
         }
         if visible.isEmpty {
@@ -489,8 +495,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         item.attributedTitle = text
     }
 
+    func openAgenda() { statusItem.button?.performClick(nil) }
+
     @objc private func joinAction(_ sender: NSMenuItem) {
         if let event = sender.representedObject as? MeetingEvent, let url = event.link {
+            store.joinedMeeting(event)
             NSWorkspace.shared.open(url)
         }
     }
@@ -503,16 +512,25 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         DispatchQueue.main.async { [weak self] in self?.showEventDetails(event) }
     }
 
-    private func showEventDetails(_ event: MeetingEvent) {
+    private func showEventDetails(_ event: MeetingEvent) { showMeetingDetails([event]) }
+
+    func showMeetingDetails(_ events: [MeetingEvent]) {
+        guard !events.isEmpty else { return }
         guard let button = statusItem.button else { return }
         eventPopover?.close()
         let popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
-        popover.contentSize = NSSize(width: 360, height: 280)
-        popover.contentViewController = NSHostingController(rootView: LinklessEventPopover(
-            event: event,
-            copyText: Self.eventDetailsText(for: event),
+        popover.contentSize = NSSize(width: 360, height: events.count > 1 ? 380 : 340)
+        popover.contentViewController = NSHostingController(rootView: MeetingDetailsPopover(
+            events: events,
+            join: { [weak self] event in
+                guard let self, let current = self.store.events.first(where: { $0.id == event.id }),
+                      current.end > Date(), let url = current.link else { return }
+                self.store.joinedMeeting(current)
+                self.eventPopover?.close()
+                NSWorkspace.shared.open(url)
+            },
             close: { [weak self] in self?.eventPopover?.close() }
         ))
         eventPopover = popover
@@ -584,9 +602,31 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 }
 
-private struct LinklessEventPopover: View {
+private struct MeetingDetailsPopover: View {
+    let events: [MeetingEvent]
+    let join: (MeetingEvent) -> Void
+    let close: () -> Void
+    @State private var selectedID: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if events.count > 1 {
+                Picker("Meeting", selection: Binding(get: { selectedID ?? events[0].id }, set: { selectedID = $0 })) {
+                    ForEach(events) { event in Text(event.title.isEmpty ? "Untitled event" : event.title).tag(event.id) }
+                }
+                .padding([.horizontal, .top], 18)
+            }
+            let event = events.first(where: { $0.id == selectedID }) ?? events[0]
+            EventDetailsPopover(event: event, copyText: MenuBarController.eventDetailsText(for: event),
+                                join: { join(event) }, close: close)
+        }
+    }
+}
+
+private struct EventDetailsPopover: View {
     let event: MeetingEvent
     let copyText: String
+    let join: () -> Void
     let close: () -> Void
 
     private var location: String? {
@@ -620,13 +660,15 @@ private struct LinklessEventPopover: View {
                 }
                 Spacer(minLength: 0)
             }
-            HStack(spacing: 8) {
-                Image(systemName: "personalhotspot.slash")
-                    .frame(width: 14)
-                Text("No meeting link found")
+            if event.link == nil {
+                HStack(spacing: 8) {
+                    Image(systemName: "personalhotspot.slash")
+                        .frame(width: 14)
+                    Text("No meeting link found")
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
             }
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 Image(systemName: "clock")
                     .frame(width: 14)
@@ -650,6 +692,9 @@ private struct LinklessEventPopover: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             Spacer(minLength: 0)
+            if event.link != nil {
+                Button("Join Meeting", action: join).buttonStyle(.borderedProminent)
+            }
             HStack {
                 Button("Copy Details") {
                     NSPasteboard.general.clearContents()

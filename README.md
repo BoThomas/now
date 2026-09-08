@@ -33,7 +33,7 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 ## Features
 
 **Reminders**
-- Fullscreen reminder just before a meeting starts.
+- Fullscreen or macOS notification reminders just before a meeting starts.
 - One-click **Join** (Zoom, Meet, Teams, Webex, any meeting link).
 - Keyboard shortcuts: `esc` close, `return` join, `s` snooze, `1`-`9` join a specific meeting.
 - Snooze until the meeting starts or for `x` minutes (choose a default in Settings).
@@ -51,7 +51,7 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 - **Apple Calendar**, no links needed; changes show up near-instantly.
 - Recurring events, including moved and cancelled instances.
 - Saved ICS calendars keep meetings and reminders available after an offline restart.
-- Offline status appears in the menu; Settings shows each calendar’s last successful sync.
+- Offline status appears in the menu; Settings shows a calendar’s last successful sync when it has a sync or cache problem.
 - Per-calendar color, on/off switch, title filters.
 - Hide events you've declined.
 
@@ -66,9 +66,9 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 
 After a successful ICS sync, `now` saves the fetched meeting occurrences locally. On restart it restores upcoming and ongoing meetings before refreshing. Offline reminders use the same pause, title-filter, and meeting-detection settings as online reminders.
 
-Saved data covers the original fetch window (up to 14 days ahead); it cannot know about later edits or cancellations, or generate meetings beyond that window. The menu reports offline/sync problems in its existing red status row. Settings shows the last successful sync, whether saved data is in use, and when its coverage has expired. “Last synced” still means the last completed full refresh attempt.
+Saved data covers the original fetch window (up to 14 days ahead); it cannot know about later edits or cancellations, or generate meetings beyond that window. The menu reports offline/sync problems in its existing red status row. For calendars with a sync or cache problem, Settings shows the last successful sync, whether saved data is in use, and when its coverage has expired. Healthy calendars use the shared timestamp beside Refresh. “Last synced” still means the last completed full refresh attempt.
 
-Copies live in `~/Library/Application Support/com.thomasboch.now/CalendarCache-v1/`, with owner-only file permissions. They contain meeting details and Join links; feed URLs are represented by a fingerprint. Disabling, removing, or changing a calendar URL clears its saved copy. Storage is bounded to 16 MB per calendar and 64 MB total; storage failures are surfaced without discarding the live agenda. Snoozes and dismissed-reminder history still reset on restart.
+Copies live in `~/Library/Application Support/com.thomasboch.now/CalendarCache-v1/`, with owner-only file permissions. They contain meeting details and Join links; feed URLs are represented by a fingerprint. Disabling, removing, or changing a calendar URL clears its saved copy. Storage is bounded to 16 MB per calendar and 64 MB total; storage failures are surfaced without discarding the live agenda. Handled reminders and exact snooze deadlines survive restart; ended meetings never re-alert.
 
 ## Building from source
 
@@ -96,3 +96,21 @@ See [AGENTS.md](AGENTS.md) for development notes and the release workflow.
 ## Author & License
 
 [Thomas Boch](https://thomasboch.com) · [GitHub](https://github.com/BoThomas) · [MIT license](LICENSE)
+
+## Notification reminders
+
+In Settings → Reminder, choose **Fullscreen** (the default) or **macOS notification**. You can also use notifications only during another detected meeting, or for meetings already running when now launches or your Mac wakes. Existing reminder and suppression choices are preserved until you change them.
+
+Enabling a notification feature asks macOS for permission. If you decline, open **Notification Settings…**, then System Settings → Notifications → now and enable notifications. Settings shows current permission, offers **Preview Notification Reminder**, and includes guidance for Focus, sound, persistent alerts, and screen-sharing restrictions. macOS decides whether a banner appears; now never silently replaces a blocked notification with fullscreen.
+
+Notifications offer **Join** when a single meeting has a link and **Snooze** when a safe duration remains. Snooze uses your existing default and safe fallback; clicking the notification opens meeting details, with a Join button when a link is available. **Hide meeting details** uses generic wording. Notifications use the macOS notification sound; the custom sound picker controls fullscreen reminders. Notifications during another meeting are silent.
+
+**Notify about new updates** sends one silent notification per new version while automatic update checks are enabled. Clicking opens the update window; manual checks still open it directly. This replaces automatic update-window popups when enabled.
+
+On first launch, a three-screen assistant offers startup/update preferences and notification access, followed by reminder style, timing, meeting behavior, privacy, and a preview of the selected style. Notification-dependent options remain disabled until access is enabled. It finishes by opening Settings to add calendar/event sources. New setup starts with a one-minute reminder and just-in-time snooze. Other defaults stay unchanged; closing setup saves your draft for next time. Existing users keep their settings and receive new-feature guidance in Update Complete only when crossing a feature’s introduction. Later updates do not repeat old guides.
+
+**Notify about calendar sync problems** is separately optional: one silent notification after five minutes of continuous failure, with details in Settings. Unchanged failures do not repeat, and Pause Reminders does not disable sync diagnostics.
+
+now must be running to deliver reminders, including snoozes. After a restart, unhandled ongoing meetings remain eligible; handled reminders and snoozes are remembered. Obsolete Notification Center entries are removed while now runs and on its next launch.
+
+Reminder previews use your selected lead time and snooze. Snoozing a preview dismisses the sample without scheduling another reminder or affecting real meetings. Setup’s Preview button uses an eye for fullscreen and a bell for notifications.

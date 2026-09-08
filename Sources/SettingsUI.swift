@@ -285,6 +285,7 @@ struct GitHubMark: Shape {
 /// Events grouped under one uppercase day header (same `Fmt.dayHeader` style as the
 /// menu bar dropdown), so each row is a single line: time + title.
 struct UpcomingEventList: View {
+    @EnvironmentObject private var store: AppStore
     /// All visible events for the calendar; collapsed to `collapsedLimit` rows
     /// until "+ N more" is used.
     let events: [MeetingEvent]
@@ -401,7 +402,7 @@ struct UpcomingEventList: View {
     @ViewBuilder
     private func trailingDetail(_ event: MeetingEvent, compact: Bool) -> some View {
         if let link = event.link {
-            joinButton(link, compact: compact)
+            joinButton(link, event: event, compact: compact)
                 .opacity(event.isMuted ? 0.55 : 1)
         } else {
             noLinkLabel
@@ -428,8 +429,9 @@ struct UpcomingEventList: View {
         .opacity(event.isMuted ? 0.45 : 1)
     }
 
-    private func joinButton(_ link: URL, compact: Bool) -> some View {
+    private func joinButton(_ link: URL, event: MeetingEvent, compact: Bool) -> some View {
         Button {
+            store.joinedMeeting(event)
             NSWorkspace.shared.open(link)
         } label: {
             Label(hostText(link), systemImage: "video.fill")
@@ -1446,7 +1448,7 @@ struct SectionTopKey: PreferenceKey {
 private let settingsContentBottomKey = "__contentBottom"
 
 /// Shared editor for reminder lead time and custom snooze duration.
-private struct CustomTimingEditor: View {
+struct CustomTimingEditor: View {
     let title: String
     let initialSeconds: Int
     let range: ClosedRange<Int>
@@ -1515,6 +1517,7 @@ struct SettingsView: View {
     @State private var showCustomSnoozeTime = false
     @State private var showAddSheet = false
     @State private var showBrowserMeetingInfo = false
+    @State private var showReminderSoundInfo = false
     @State private var showStartedCountdownInfo = false
     @StateObject private var commandHints = CommandHoldTracker()
     @State private var selectedSection: SettingsSection = .calendars
@@ -1961,9 +1964,31 @@ struct SettingsView: View {
         seconds == 0 ? "Just in time" : "\(Fmt.leadTime(seconds)) before"
     }
 
+    @ViewBuilder
+    private var reminderPreviewButtons: some View {
+        Button { alerts.presentPreview() } label: {
+            Label("Preview Fullscreen Reminder", systemImage: "eye")
+        }
+        if let notifications = store.notifications {
+            NotificationPreviewButton(store: store, notifications: notifications)
+        }
+    }
+
     private var reminderSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader(SettingsSection.reminder.title, SettingsSection.reminder.symbol)
+            Picker("Delivery", selection: Binding(
+                get: { store.settings.reminderDelivery },
+                set: { value in
+                    store.settings.reminderDelivery = value
+                    if value == .notification { store.notifications?.requestPermission() }
+                }
+            )) {
+                Text("Fullscreen").tag(ReminderDelivery.fullscreen)
+                Text("macOS notification").tag(ReminderDelivery.notification)
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 360, alignment: .leading)
             Picker("Remind me", selection: Binding(
                 get: { store.settings.leadSeconds },
                 set: { value in
@@ -2010,11 +2035,19 @@ struct SettingsView: View {
                     onCancel: { showCustomSnoozeTime = false })
             }
             Divider()
-            Toggle("Don't interrupt me while I'm in a meeting", isOn: Binding(
-                get: { store.settings.suppressRemindersDuringMeetings },
-                set: { store.setMeetingSuppressionEnabled($0) }
-            ))
-            .disabled(store.meetingDetectionChecking || !MeetingActivityProbe.platformPotentiallySupported || store.meetingDetectionAvailable == false)
+            Picker("During another meeting", selection: Binding(
+                get: { store.settings.inMeetingDelivery },
+                set: { mode in
+                    store.setInMeetingDelivery(mode)
+                    if mode == .notification { store.notifications?.requestPermission() }
+                }
+            )) {
+                Text("Remind normally").tag(InMeetingDelivery.normal)
+                Text("Use a notification").tag(InMeetingDelivery.notification)
+                Text("Suppress reminders").tag(InMeetingDelivery.suppress)
+            }
+            .pickerStyle(.menu)
+            .disabled(store.meetingDetectionChecking)
             Text("Uses local audio activity from meeting apps. No audio is recorded.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -2035,7 +2068,7 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if store.settings.suppressRemindersDuringMeetings {
+            if store.settings.needsMeetingDetection {
                 HStack(spacing: 6) {
                     Toggle("Include meetings in browsers", isOn: $store.settings.includeBrowserMeetings)
                     Button {
@@ -2054,7 +2087,24 @@ struct SettingsView: View {
                 .padding(.leading, 18)
             }
             Divider()
-            Toggle("Play sound", isOn: $store.settings.soundEnabled)
+            HStack(spacing: 6) {
+                Toggle("Play reminder sound", isOn: $store.settings.soundEnabled)
+                Button { showReminderSoundInfo.toggle() } label: {
+                    Image(systemName: "questionmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("About reminder sounds")
+                .help("About reminder sounds")
+                .popover(isPresented: $showReminderSoundInfo, arrowEdge: .trailing) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Reminder sounds").font(.headline)
+                        Text("Notifications use the macOS notification sound and respect its sound settings. Notifications during another meeting are silent.")
+                            .font(.callout)
+                    }
+                    .padding(14)
+                    .frame(width: 320, alignment: .leading)
+                }
+            }
             if store.settings.soundEnabled {
                 HStack {
                     Picker("Sound", selection: $store.settings.soundName) {
@@ -2071,10 +2121,13 @@ struct SettingsView: View {
                 }
             }
             Divider()
-            Button {
-                alerts.presentPreview()
-            } label: {
-                Label("Preview Reminder", systemImage: "eye")
+            if let notifications = store.notifications {
+                NotificationSettingsView(store: store, notifications: notifications)
+            }
+            Divider()
+            ViewThatFits(in: .horizontal) {
+                HStack { reminderPreviewButtons }
+                VStack(alignment: .leading) { reminderPreviewButtons }
             }
         }
         .padding(16)

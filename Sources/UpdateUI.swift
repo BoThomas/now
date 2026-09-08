@@ -169,13 +169,17 @@ struct UpdateView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 8)
-            footer(
-                primaryTitle: "OK",
-                primaryEnabled: true,
-                primaryAction: { controller.dismissWindow() },
-                cancelTitle: nil
-            )
+            if let guides = controller.store.featureGuides, !guides.updateIDs.isEmpty {
+                ScrollView {
+                    FeatureGuideView(store: controller.store, guides: guides, ids: guides.updateIDs, usesKeyboardShortcuts: true) {
+                        controller.dismissWindow()
+                    }
+                }
+            } else {
+                Spacer(minLength: 8)
+                footer(primaryTitle: "OK", primaryEnabled: true,
+                       primaryAction: { controller.dismissWindow() }, cancelTitle: nil)
+            }
         }
         .frame(height: 380, alignment: .topLeading)
     }
