@@ -1926,6 +1926,7 @@ enum SelfTest {
         c.expect(failed.events.map(\.id).sorted() == [cachedA.id, cachedB.id].sorted(), "failed full refresh preserves cached events")
         c.expect(failed.errors[subA.id] == "Server returned 503" && failed.errors[subB.id] == "offline", "failed full refresh records errors")
         c.expect(!failed.allSucceeded, "failed full refresh not allSucceeded")
+        c.expect(failed.observedCalendarIDs.isEmpty, "F09: failed responses do not count as fresh snapshots")
 
         // Failed targeted refresh (A only): A keeps cache + error, B untouched —
         // B's own error from its last fetch survives.
@@ -1945,6 +1946,7 @@ enum SelfTest {
         c.expect(replaced.events.contains { $0.id == cachedB.id }, "other subscription untouched")
         c.expect(replaced.errors[subA.id] == nil, "successful refresh clears error")
         c.expect(replaced.allSucceeded, "successful refresh allSucceeded")
+        c.expect(replaced.observedCalendarIDs == [subA.id], "F09: only the successfully refreshed source advances")
 
         // Removal mid-flight: result for a deleted subscription is dropped, and its
         // cached events go away too (no resurrection).
@@ -2001,6 +2003,7 @@ enum SelfTest {
         c.expect(supersededFull.events.map(\.id) == [cachedC.id], "full refresh result superseded by newer targeted resync")
         c.expect(supersededFull.errors[subC.id] == "new targeted failure" && supersededFull.warnings[subC.id] == "new targeted warning", "superseded full refresh preserves newer targeted diagnostics")
         c.expect(!supersededFull.allSucceeded, "superseded full refresh cannot advance last successful sync")
+        c.expect(supersededFull.observedCalendarIDs.isEmpty, "F09: superseded results cannot consume snapshot grace")
         let currentResync = AppStore.mergeICS(current: [cachedC], results: [
             FetchResult(subscription: subC, events: [event("c5", cal: subC.id, minutesFromNow: 5)], error: nil, requestID: resyncID),
         ], live: [subC, subD], previousErrors: [:], latestRequestIDs: tracker.latestPerSubscription)
@@ -2017,21 +2020,43 @@ enum SelfTest {
         }
         let cal = UUID()
         let e1 = event("1", cal: cal, minutesFromNow: 10)
-        let e2 = event("2", cal: cal, minutesFromNow: 20)
+        let nativeCal = UUID()
+        let e2 = event("2", cal: nativeCal, minutesFromNow: 20)
         let alerted: Set<String> = [e1.id, e2.id]
         let snoozed = [e2.id: Date().addingTimeInterval(60)]
 
-        // First miss (id gone from active but present in previous commit): bookkeeping kept.
-        let firstMiss = AppStore.prunedBookkeeping(alerted: alerted, snoozed: snoozed, activeIDs: [e1.id], previousIDs: [e1.id, e2.id])
-        c.expect(firstMiss.alerted == alerted && firstMiss.snoozed == snoozed, "single miss keeps bookkeeping")
-
-        // Second identical missing snapshot: pruned.
-        let secondMiss = AppStore.prunedBookkeeping(alerted: firstMiss.alerted, snoozed: firstMiss.snoozed, activeIDs: [e1.id], previousIDs: [e1.id])
-        c.expect(secondMiss.alerted == [e1.id] && secondMiss.snoozed.isEmpty, "two consecutive misses prune bookkeeping")
-
-        // Never prunes ids that are still active.
-        let stable = AppStore.prunedBookkeeping(alerted: alerted, snoozed: snoozed, activeIDs: [e1.id, e2.id], previousIDs: [e1.id, e2.id])
+        let enabled: Set<UUID> = [cal, nativeCal]
+        var snapshots = ReminderSnapshotTracker()
+        var retained = snapshots.retainedIDs(current: [e1, e2], observedCalendarIDs: enabled, enabledCalendarIDs: enabled)
+        let stable = AppStore.prunedBookkeeping(alerted: alerted, snoozed: snoozed, retainedIDs: retained)
         c.expect(stable.alerted == alerted && stable.snoozed == snoozed, "active ids keep bookkeeping")
+        retained = snapshots.retainedIDs(current: [e1], observedCalendarIDs: [nativeCal], enabledCalendarIDs: enabled)
+        let firstMiss = AppStore.prunedBookkeeping(alerted: alerted, snoozed: snoozed, retainedIDs: retained)
+        c.expect(firstMiss.alerted == alerted && firstMiss.snoozed == snoozed, "F09: one native snapshot omission keeps bookkeeping")
+        for observation: Set<UUID> in [[cal], [], [cal], []] {
+            retained = snapshots.retainedIDs(current: [e1], observedCalendarIDs: observation, enabledCalendarIDs: enabled)
+            let unrelated = AppStore.prunedBookkeeping(alerted: firstMiss.alerted, snoozed: firstMiss.snoozed, retainedIDs: retained)
+            c.expect(unrelated.alerted == alerted && unrelated.snoozed == snoozed,
+                     "F09: ICS merges and presentation edits cannot consume native snapshot grace")
+        }
+        let retainedMuted = AppStore.retainedMutedStates(previous: [e2.id: true], current: [e1], retainedIDs: retained)
+        c.expect(retainedMuted[e2.id] == true, "F09: muted-state grace uses the same source lifetime")
+        retained = snapshots.retainedIDs(current: [e1, e2], observedCalendarIDs: [nativeCal], enabledCalendarIDs: enabled)
+        let restored = AppStore.prunedBookkeeping(alerted: firstMiss.alerted, snoozed: firstMiss.snoozed, retainedIDs: retained)
+        c.expect(restored.alerted == alerted && restored.snoozed == snoozed, "F09: reappearing native event preserves alert and snooze state")
+        retained = snapshots.retainedIDs(current: [e1], observedCalendarIDs: [nativeCal], enabledCalendarIDs: enabled)
+        c.expect(retained.contains(e2.id), "F09: reappearance resets the consecutive-miss counter")
+        retained = snapshots.retainedIDs(current: [e1], observedCalendarIDs: [nativeCal], enabledCalendarIDs: enabled)
+        let secondMiss = AppStore.prunedBookkeeping(alerted: restored.alerted, snoozed: restored.snoozed, retainedIDs: retained)
+        c.expect(secondMiss.alerted == [e1.id] && secondMiss.snoozed.isEmpty, "F09: two independent native misses retire bookkeeping")
+
+        // The reciprocal case: native snapshots do not age missing ICS events.
+        _ = snapshots.retainedIDs(current: [e1, e2], observedCalendarIDs: enabled, enabledCalendarIDs: enabled)
+        retained = snapshots.retainedIDs(current: [e2], observedCalendarIDs: [cal], enabledCalendarIDs: enabled)
+        retained = snapshots.retainedIDs(current: [e2], observedCalendarIDs: [nativeCal], enabledCalendarIDs: enabled)
+        c.expect(retained.contains(e1.id), "F09: native refresh cannot consume ICS snapshot grace")
+        retained = snapshots.retainedIDs(current: [e2], observedCalendarIDs: [], enabledCalendarIDs: [nativeCal])
+        c.expect(!retained.contains(e1.id), "F09: disabling/removing a calendar clears its retained bookkeeping")
 
         // Normalization: dedupe by id, stable ordering for equal starts.
         let tie1 = event("tie-b", cal: cal, minutesFromNow: 10)
@@ -2194,11 +2219,11 @@ enum SelfTest {
         c.expect(stableOutcome.alerted == [unmutedRunning.id] && stableOutcome.snoozed.isEmpty, "repeated commits leave the ratchet stable")
 
         var retainedMuted: [String: Bool] = [:]
-        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [mutedRunning], previousIDs: [])
-        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], previousIDs: [mutedRunning.id])
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [mutedRunning], retainedIDs: [mutedRunning.id])
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], retainedIDs: [mutedRunning.id])
         let afterOneMiss = AppStore.ratchetSilence(previous: [], fallbackMutedByID: retainedMuted, current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
         c.expect(afterOneMiss.alerted == [unmutedRunning.id], "one transient omission preserves muted state for the unmute ratchet")
-        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], previousIDs: [])
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], retainedIDs: [])
         let afterTwoMisses = AppStore.ratchetSilence(previous: [], fallbackMutedByID: retainedMuted, current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
         c.expect(afterTwoMisses.alerted.isEmpty, "two consecutive omissions expire retained muted state")
 

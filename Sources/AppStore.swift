@@ -98,12 +98,9 @@ final class AppStore: ObservableObject {
 
     private var alerted: Set<String> = []
     private var snoozed: [String: Date] = [:]
-    /// IDs present in the most recent `commitEvents` — lets the prune there require
-    /// two consecutive misses before dropping alert/snooze bookkeeping.
-    private var previousCommitIDs: Set<String> = []
-    /// Last observed muted state, retained across one missing commit just like
-    /// alert/snooze bookkeeping. A transient omission must not hide an unmute
-    /// transition when the event returns inside its lead window.
+    /// Missing observations are counted per calendar, not per merged commit.
+    private var reminderSnapshots = ReminderSnapshotTracker()
+    /// Muted state follows the same source-scoped retention as alert/snooze state.
     private var recentMutedByID: [String: Bool] = [:]
     private var pendingRefresh = false
     private var fetchTracker = FetchTracker()
@@ -354,7 +351,7 @@ final class AppStore: ObservableObject {
             return
         }
         nativeEvents = nativeSource.fetchEvents(calendars: enabled, skipDeclined: settings.skipDeclined, now: Date())
-        rebuildEvents()
+        rebuildEvents(observedCalendarIDs: Set(enabled.map(\.id)))
     }
 
     private func scheduleNativeStoreRefresh() {
@@ -399,8 +396,8 @@ final class AppStore: ObservableObject {
     }
 
     /// Recombine the ICS half of `events` (untouched) with the current native snapshot.
-    private func rebuildEvents() {
-        commitEvents(currentICSEvents + coloredNativeSnapshot())
+    private func rebuildEvents(observedCalendarIDs: Set<UUID> = []) {
+        commitEvents(currentICSEvents + coloredNativeSnapshot(), observedCalendarIDs: observedCalendarIDs)
     }
 
     /// The ICS-fed half of the published event list (native events are tracked
@@ -432,7 +429,7 @@ final class AppStore: ObservableObject {
         let merged = Self.mergeICS(current: currentICSEvents, results: results, live: subscriptions, previousErrors: errors, previousWarnings: warnings, latestRequestIDs: fetchTracker.latestPerSubscription)
         errors = merged.errors
         warnings = merged.warnings
-        commitEvents(merged.events + coloredNativeSnapshot())
+        commitEvents(merged.events + coloredNativeSnapshot(), observedCalendarIDs: merged.observedCalendarIDs)
     }
 
     /// Pure decision core for applying fetch results to the ICS half of the
@@ -452,7 +449,7 @@ final class AppStore: ObservableObject {
     ///   are dropped.
     /// - Successful results carry feed warnings (degraded events) alongside
     ///   events; failures keep the previous warning untouched.
-    nonisolated static func mergeICS(current: [MeetingEvent], results: [FetchResult], live: [CalendarSubscription], previousErrors: [UUID: String], previousWarnings: [UUID: String] = [:], latestRequestIDs: [UUID: Int] = [:]) -> (events: [MeetingEvent], errors: [UUID: String], warnings: [UUID: String], allSucceeded: Bool) {
+    nonisolated static func mergeICS(current: [MeetingEvent], results: [FetchResult], live: [CalendarSubscription], previousErrors: [UUID: String], previousWarnings: [UUID: String] = [:], latestRequestIDs: [UUID: Int] = [:]) -> (events: [MeetingEvent], errors: [UUID: String], warnings: [UUID: String], allSucceeded: Bool, observedCalendarIDs: Set<UUID>) {
         let liveByID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0) })
         let colorByID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
         // Muted flags come from the LIVE rules — a fetch that started before a
@@ -469,6 +466,7 @@ final class AppStore: ObservableObject {
         var errors = previousErrors.filter { enabledIDs.contains($0.key) }
         var warnings = previousWarnings.filter { enabledIDs.contains($0.key) }
         var allSucceeded = true
+        var observedCalendarIDs: Set<UUID> = []
         for result in results {
             guard let subscription = liveByID[result.subscription.id],
                   subscription.isEnabled,
@@ -482,6 +480,7 @@ final class AppStore: ObservableObject {
                 allSucceeded = false
                 continue // failed fetch: keep the cached events
             }
+            observedCalendarIDs.insert(subscription.id)
             errors.removeValue(forKey: subscription.id)
             if let warning = result.warning {
                 warnings[subscription.id] = warning
@@ -496,7 +495,7 @@ final class AppStore: ObservableObject {
                 return copy
             })
         }
-        return (events, errors, warnings, allSucceeded)
+        return (events, errors, warnings, allSucceeded, observedCalendarIDs)
     }
 
 
@@ -677,18 +676,14 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Single funnel for publishing the merged (ICS + native) event list: sorts
-    /// with stable tie-breakers, dedupes by event id, and prunes alert/snooze
-    /// bookkeeping for events that disappeared. An id is only pruned once it's
-    /// missing from **two consecutive commits**: a single miss is treated as
-    /// transient (a fetch racing a CalDAV sync, one bad/empty ICS response) so a
-    /// reappearing event neither re-alerts nor loses its snooze. Bookkeeping for
-    /// ids absent from `events` is inert — `tick()` only looks at `events` — so
-    /// the extra commit of lag is harmless.
-    private func commitEvents(_ newEvents: [MeetingEvent]) {
+    /// Publish/reconcile every edit, but advance absence only for calendars
+    /// with newly accepted source snapshots. Two independent misses retire an
+    /// id; unrelated merges, re-tints and title-filter edits do not count.
+    private func commitEvents(_ newEvents: [MeetingEvent], observedCalendarIDs: Set<UUID> = []) {
         let sorted = Self.normalizedEvents(newEvents)
-        let active = Set(sorted.map(\.id))
-        let pruned = Self.prunedBookkeeping(alerted: alerted, snoozed: snoozed, activeIDs: active, previousIDs: previousCommitIDs)
+        let enabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id) + nativeCalendars.filter(\.isEnabled).map(\.id))
+        let retainedIDs = reminderSnapshots.retainedIDs(current: sorted, observedCalendarIDs: observedCalendarIDs, enabledCalendarIDs: enabledIDs)
+        let pruned = Self.prunedBookkeeping(alerted: alerted, snoozed: snoozed, retainedIDs: retainedIDs)
         // Single funnel for EVERY event-list change — rule edits, ICS refreshes
         // (a title edit keeps the same id and can flip muted→unmuted mid-window),
         // and native rebuilds all pass through here, so the unmute ratchet lives
@@ -696,8 +691,7 @@ final class AppStore: ObservableObject {
         let ratcheted = Self.ratchetSilence(previous: events, fallbackMutedByID: recentMutedByID, current: sorted, alerted: pruned.alerted, snoozed: pruned.snoozed, leadSeconds: settings.leadSeconds, now: now())
         alerted = ratcheted.alerted
         snoozed = ratcheted.snoozed
-        recentMutedByID = Self.retainedMutedStates(previous: recentMutedByID, current: sorted, previousIDs: previousCommitIDs)
-        previousCommitIDs = active
+        recentMutedByID = Self.retainedMutedStates(previous: recentMutedByID, current: sorted, retainedIDs: retainedIDs)
         events = sorted
         // Keep an open alert in sync: cancelled/removed/disabled events drop
         // off the cards, changed events update in place.
@@ -726,10 +720,9 @@ final class AppStore: ObservableObject {
         return (alerted, snoozed)
     }
 
-    /// Keeps current states plus states missing from exactly one commit. On the
-    /// second consecutive miss `previousIDs` no longer contains the id, so it drops.
-    nonisolated static func retainedMutedStates(previous: [String: Bool], current: [MeetingEvent], previousIDs: Set<String>) -> [String: Bool] {
-        var retained = previous.filter { previousIDs.contains($0.key) }
+    /// Keep muted state for the same source-scoped lifetime as alert/snooze state.
+    nonisolated static func retainedMutedStates(previous: [String: Bool], current: [MeetingEvent], retainedIDs: Set<String>) -> [String: Bool] {
+        var retained = previous.filter { retainedIDs.contains($0.key) }
         for event in current { retained[event.id] = event.isMuted }
         return retained
     }
@@ -747,13 +740,8 @@ final class AppStore: ObservableObject {
         return unique
     }
 
-    /// Pure pruning decision for alert/snooze bookkeeping: an id is dropped
-    /// only when missing from both the new snapshot and the previous one (two
-    /// consecutive misses). Runs on every commit — the second identical missing
-    /// snapshot does prune, matching the documented behavior.
-    nonisolated static func prunedBookkeeping(alerted: Set<String>, snoozed: [String: Date], activeIDs: Set<String>, previousIDs: Set<String>) -> (alerted: Set<String>, snoozed: [String: Date]) {
-        let prunable = alerted.union(snoozed.keys).filter { !activeIDs.contains($0) && !previousIDs.contains($0) }
-        return (alerted.subtracting(prunable), snoozed.filter { !prunable.contains($0.key) })
+    nonisolated static func prunedBookkeeping(alerted: Set<String>, snoozed: [String: Date], retainedIDs: Set<String>) -> (alerted: Set<String>, snoozed: [String: Date]) {
+        (alerted.intersection(retainedIDs), snoozed.filter { retainedIDs.contains($0.key) })
     }
 
     private func reconcileEvents() {
@@ -1187,5 +1175,28 @@ private actor CalendarDownloadSlots {
     func release() {
         if waiting.isEmpty { active -= 1 }
         else { waiting.removeFirst().resume() }
+    }
+}
+
+/// Pure source-snapshot bookkeeping, shared by real commits and orchestration
+/// tests. Owners remain known while absent so another source cannot age them.
+struct ReminderSnapshotTracker {
+    private var calendarByID: [String: UUID] = [:]
+    private var missingOnce: Set<String> = []
+
+    mutating func retainedIDs(current: [MeetingEvent], observedCalendarIDs: Set<UUID>, enabledCalendarIDs: Set<UUID>) -> Set<String> {
+        let active = Set(current.map(\.id))
+        calendarByID = calendarByID.filter { enabledCalendarIDs.contains($0.value) }
+        for (id, calendarID) in calendarByID where observedCalendarIDs.contains(calendarID) && !active.contains(id) {
+            if missingOnce.contains(id) { calendarByID.removeValue(forKey: id) }
+            else { missingOnce.insert(id) }
+        }
+        for event in current where enabledCalendarIDs.contains(event.calendarID) {
+            calendarByID[event.id] = event.calendarID
+            missingOnce.remove(event.id)
+        }
+        let retained = Set(calendarByID.keys)
+        missingOnce.formIntersection(retained)
+        return retained
     }
 }
