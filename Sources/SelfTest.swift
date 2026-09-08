@@ -263,6 +263,29 @@ enum SelfTest {
                     "P1W1D", "P1WT1H", "P1D1D", "PT1H1H", "PT1S1M", "PT1M1H"] {
             c.expect(ICSParser.parseDuration(bad) == nil, "invalid duration \(bad.isEmpty ? "(empty)" : bad) rejected")
         }
+        for bad in ["PT999999999999999999999999999S", "P999999999999999999999W",
+                    "PT" + String(repeating: "9", count: 400) + "S"] {
+            c.expect(ICSParser.parseDuration(bad) == nil, "oversized duration rejected")
+            let parsed = ICSParser.parse(wrap("""
+            BEGIN:VEVENT
+            UID:overflow@test
+            DTSTART:20260826T100000Z
+            DTEND:20260826T120000Z
+            DURATION:\(bad)
+            END:VEVENT
+            """))
+            c.expect(parsed.events.first?.durationSeconds == 7200 && !parsed.warnings.isEmpty,
+                     "oversized duration warns and falls back to valid DTEND")
+        }
+        c.expect(ICSParser.parseDuration("P36500D") == 3_153_600_000, "normal long durations remain supported")
+        for invalid: Double in [.infinity, -.infinity, .nan, 1e27, -1e27, Double(Int.max), Double(Int.min)] {
+            c.expect(Fmt.duration(invalid) == "—", "duration formatter rejects unsafe interval")
+            c.expect(Fmt.mmss(invalid) == "—", "clock formatter rejects unsafe interval")
+            c.expect(Fmt.barCountdown(to: Date(timeIntervalSinceReferenceDate: invalid),
+                                     relativeTo: Date(timeIntervalSinceReferenceDate: 0)) == "—",
+                     "countdown formatter rejects unsafe interval")
+        }
+        c.expect(Fmt.duration(93_600) == "26h 0m" && Fmt.mmss(93_600) == "26h 00m", "long event formatting preserved")
         let utc = TimeZone(identifier: "UTC")!
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = utc

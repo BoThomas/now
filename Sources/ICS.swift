@@ -225,6 +225,9 @@ struct ParsedEvent {
 // MARK: - Parser
 
 enum ICSParser {
+    // Full span of RFC four-digit calendar years; larger durations cannot
+    // describe a supported event and must never reach date/Int arithmetic.
+    static let maxDuration: TimeInterval = 315_537_897_599
     static let maxLines = 200_000
     static let maxLineLength = 10_000
     private static let consumedDateProperties: Set<String> = ["DTSTART", "DTEND", "DTSTAMP", "EXDATE", "RDATE", "RECURRENCE-ID"]
@@ -399,6 +402,9 @@ enum ICSParser {
                 dtEnd = parseDate(property, fallbackTimeZone: tz).date
             case "DURATION":
                 duration = parseDuration(property.value)
+                if duration == nil {
+                    warnings.append("Invalid or unsupported DURATION — using DTEND or the default hour")
+                }
             case "RRULE":
                 rruleText = property.value
             case "EXDATE":
@@ -635,7 +641,8 @@ enum ICSParser {
 
     /// RFC 5545 duration (`[+|-]P[nW]` or `[+|-]P[nD][T[nH][nM][nS]]`). Months are not part
     /// of the format — `P1M` is invalid. Returns nil for malformed input and
-    /// for anything with a non-positive total (callers treat that as invalid).
+    /// for non-finite or unsupported magnitudes. Signed and zero values are
+    /// returned; event construction treats non-positive totals as invalid.
     static func parseDuration(_ value: String) -> TimeInterval? {
         let text = value.trimmingCharacters(in: .whitespaces)
         var sign = 1.0
@@ -681,6 +688,7 @@ enum ICSParser {
                 lastTimeRank = 3; total += n; sawTimeComponent = true
             default: return nil
             }
+            guard total.isFinite, total <= maxDuration else { return nil }
             sawComponent = true
             number = ""
         }
