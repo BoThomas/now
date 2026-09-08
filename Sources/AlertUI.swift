@@ -16,6 +16,7 @@ final class AlertController: ObservableObject {
     /// Preview alerts (Settings → Preview Reminder) show fabricated events that
     /// are not in the store — reconciliation must not close them.
     private var isPreview = false
+    private var previewSettings: AppSettings?
     /// True while a system dialog (e.g. the quit-vs-dismiss confirm) runs above
     /// the panel — the key monitor must let keystrokes through to it.
     var modalAlertActive = false
@@ -48,6 +49,7 @@ final class AlertController: ObservableObject {
         guard next.acceptsDelivery else { return }
         shownEvents = next.events
         isPreview = next.isPreview
+        if !isPreview { previewSettings = nil }
         // Real reminders merge with real reminders. A real delivery replaces
         // fabricated preview cards and immediately restores reconciliation.
         if isOpen {
@@ -87,12 +89,12 @@ final class AlertController: ObservableObject {
         }
     }
 
-    nonisolated static func previewEvent(at now: Date) -> MeetingEvent {
+    nonisolated static func previewEvent(at now: Date, settings: AppSettings = AppSettings()) -> MeetingEvent {
         MeetingEvent(
             uid: "preview",
             title: "Team Sync — Preview",
-            start: now.addingTimeInterval(120),
-            end: now.addingTimeInterval(1920),
+            start: now.addingTimeInterval(TimeInterval(settings.leadSeconds)),
+            end: now.addingTimeInterval(TimeInterval(settings.leadSeconds + max(1800, settings.snoozeSeconds + 60))),
             location: "Zoom",
             notes: nil,
             link: URL(string: "https://zoom.us/j/1234567890"),
@@ -102,8 +104,22 @@ final class AlertController: ObservableObject {
         )
     }
 
-    func presentPreview() {
-        present([Self.previewEvent(at: Date())], preview: true)
+    func presentPreview(settings: AppSettings? = nil) {
+        guard !isOpen || isPreview else { return }
+        store?.notifications?.cancelMeetingPreview()
+        let selected = settings ?? store?.settings ?? AppSettings()
+        showPreview([Self.previewEvent(at: Date(), settings: selected)], settings: selected)
+    }
+
+    func cancelPreview() {
+        if isPreview { close() }
+    }
+
+    private func showPreview(_ events: [MeetingEvent], settings: AppSettings) {
+        guard !isOpen || isPreview else { return }
+        previewSettings = settings
+        present(events, playSound: false, preview: true)
+        if settings.soundEnabled { NSSound(named: NSSound.Name(settings.soundName))?.play() }
     }
 
     func close() {
@@ -111,6 +127,7 @@ final class AlertController: ObservableObject {
         closePanel()
         shownEvents = []
         isPreview = false
+        previewSettings = nil
     }
 
     func snoozeAll() {
@@ -127,7 +144,7 @@ final class AlertController: ObservableObject {
     }
 
     /// The configured default (0 = just in time; otherwise seconds).
-    var defaultSnoozeSeconds: Int { store?.settings.snoozeSeconds ?? 60 }
+    var defaultSnoozeSeconds: Int { previewSettings?.snoozeSeconds ?? store?.settings.snoozeSeconds ?? 60 }
 
     private func applySnooze(_ plan: SnoozePlan) {
         let now = Date()
@@ -137,8 +154,12 @@ final class AlertController: ObservableObject {
             reconcileSnoozeMenu(options: snoozeOptions(at: now))
             return
         }
-        if !isPreview { store?.snooze(schedule) }
-        close()
+        if isPreview {
+            close()
+        } else {
+            store?.snooze(schedule)
+            close()
+        }
     }
 
     func join(_ url: URL) {

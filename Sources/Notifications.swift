@@ -19,7 +19,13 @@ enum NotificationLogic {
             case .normal: break
             }
         }
-        if settings.notifyOnCatchUp && catchUp && !snoozed { return .catchUp }
+        if catchUp && !snoozed {
+            switch settings.catchUpDelivery {
+            case .normal: break
+            case .notification: return .catchUp
+            case .skip: return .handled
+            }
+        }
         return settings.reminderDelivery == .notification ? .notification : .fullscreen
     }
 
@@ -206,6 +212,7 @@ final class ReminderNotificationController: ObservableObject {
     var validate: ((ReminderNotification) -> Bool)?
     var onSubmitted: ((ReminderNotification) -> Void)?
     var onResponse: ((ReminderNotification, String) -> Void)?
+    var onMeetingPreview: (() -> Void)?
     var onPermissionChange: (() -> Void)?
 
     init(transport: NotificationTransport, defaults: UserDefaults = .standard) {
@@ -232,6 +239,18 @@ final class ReminderNotificationController: ObservableObject {
             if next != permission { permission = next; retryAfter = [:]; onPermissionChange?() }
         }
     }
+    func checkPermission() async -> NotificationPermission {
+        permissionRevision += 1
+        let revision = permissionRevision
+        let value = await transport.permission()
+        if revision == permissionRevision {
+            permission = value
+            retryAfter = [:]
+            onPermissionChange?()
+        }
+        return value
+    }
+
     func requestPermission() {
         Task { _ = await authorizeForSetup() }
     }
@@ -309,24 +328,41 @@ final class ReminderNotificationController: ObservableObject {
     }
     func receive(id: String, action: String) {
         guard let item = receipts[id] else { return }
+        if item.test {
+            discard(id)
+            return
+        }
         // Resolution and stale-action handling belong to the store, including
         // deferred cold-launch responses before calendar restoration completes.
         onResponse?(item, action)
         discard(id)
     }
     func test(sound: Bool) {
+        cancelMeetingPreview()
         sendTest(ReminderNotification(id: "now.test", keys: [], fingerprints: [], expires: now().addingTimeInterval(60), catchUp: false, test: true,
                                      title: "now · Test notification", body: "Meeting notifications will appear here. Focus and macOS control their presentation.",
                                      category: SystemNotificationTransport.category(join: false, snooze: false), sound: sound))
     }
 
     func previewMeeting(settings: AppSettings) {
+        onMeetingPreview?()
+        cancelMeetingPreview()
+        let event = AlertController.previewEvent(at: now(), settings: settings)
+        sendMeetingPreview(event, settings: settings)
+    }
+
+    func cancelMeetingPreview() {
+        for item in Array(receipts.values) where item.test && item.id.hasPrefix("now.test.meeting.") { discard(item.id) }
+    }
+
+    private func sendMeetingPreview(_ event: MeetingEvent, settings: AppSettings) {
         let date = now()
-        let event = AlertController.previewEvent(at: date)
         let text = NotificationLogic.content(events: [event], privateDetails: settings.hideNotificationDetails, catchUp: false, now: date)
-        sendTest(ReminderNotification(id: "now.test.meeting", keys: [], fingerprints: [], expires: date.addingTimeInterval(60), catchUp: false, test: true,
+        let options = AlertController.snoozeOptions(events: [event], now: date, customSeconds: settings.snoozeSeconds)
+        let canSnooze = AlertController.primarySnoozePlan(options: options, defaultSeconds: settings.snoozeSeconds) != nil
+        sendTest(ReminderNotification(id: "now.test.meeting", keys: [], fingerprints: [], expires: event.end, catchUp: false, test: true,
                                      title: text.title, body: text.body,
-                                     category: SystemNotificationTransport.category(join: false, snooze: false), sound: settings.soundEnabled))
+                                     category: SystemNotificationTransport.category(join: false, snooze: canSnooze), sound: settings.soundEnabled))
     }
 
     private func sendTest(_ item: ReminderNotification) {

@@ -9,13 +9,12 @@ struct FeatureGuideDefinition: Identifiable, Equatable {
         case information(title: String, message: String)
     }
     let id: String
-    let includeInInitialSetup: Bool
     let content: Content
 }
 
 enum FeatureGuideCatalog {
     static let notificationsID = "notification-setup-v1"
-    static let entries = [FeatureGuideDefinition(id: notificationsID, includeInInitialSetup: true, content: .notifications)]
+    static let entries = [FeatureGuideDefinition(id: notificationsID, content: .notifications)]
 }
 
 struct FeatureGuideState: Codable, Equatable {
@@ -27,12 +26,12 @@ struct FeatureGuideState: Codable, Equatable {
     mutating func acknowledge(catalog: [FeatureGuideDefinition], installedUpdate: Bool, hasCalendar: Bool) -> [String] {
         let introduced = catalog.filter { !encountered.contains($0.id) }
         encountered.formUnion(catalog.map(\.id))
+        pendingSettings.removeAll() // Retire the former inline Settings guide.
         if installedUpdate {
             let ids = introduced.map(\.id)
             pendingSettings.subtract(ids)
             return ids
         }
-        pendingSettings.formUnion(introduced.filter { hasCalendar || $0.includeInInitialSetup }.map(\.id))
         return []
     }
 }
@@ -85,7 +84,7 @@ final class FeatureGuideController: ObservableObject {
     }
 }
 
-/// Shared by initial setup and update success. Future informational
+/// Update-success feature guides. Future informational
 /// cards require only a catalog entry; interactive features add a content case.
 struct FeatureGuideView: View {
     @ObservedObject var store: AppStore
@@ -113,8 +112,8 @@ struct FeatureGuideView: View {
             ForEach(guides.definitions(for: ids)) { guide in
                 switch guide.content {
                 case .notifications:
-                    Text("Set up notifications").font(.headline)
-                    Text("Choose when now should notify you. Your regular reminder style stays as it is.")
+                    Text("New in this version: Notifications").font(.headline)
+                    Text("You can now receive meeting reminders and update alerts as macOS notifications. Choose when to use them below.")
                         .font(.callout).foregroundStyle(.secondary)
                     Toggle("During another meeting", isOn: $choices.duringMeetings)
                         .disabled(!MeetingActivityProbe.platformPotentiallySupported || busy)
@@ -140,7 +139,7 @@ struct FeatureGuideView: View {
             HStack {
                 if busy { ProgressView().controlSize(.small) }
                 Spacer(minLength: 0)
-                Button(hasNotifications ? "Keep Current Settings" : "Close") { finish() }
+                Button(hasNotifications ? "Maybe Later" : "Close") { finish() }
                     .keyboardShortcut(usesKeyboardShortcuts ? .cancelAction : nil)
                 Button(hasNotifications && choices.needsPermission ? (permissionBlocked ? "Check Permission & Enable" : "Enable Notifications…") : "Continue") { enable() }
                     .keyboardShortcut(usesKeyboardShortcuts ? .defaultAction : nil)
@@ -190,18 +189,6 @@ struct FeatureGuideView: View {
             }
             store.applyNotificationSetup(selected, owners: owners)
             finish()
-        }
-    }
-}
-
-struct InitialFeatureGuideView: View {
-    @ObservedObject var store: AppStore
-    @ObservedObject var guides: FeatureGuideController
-    var body: some View {
-        if (!store.subscriptions.isEmpty || !store.nativeCalendars.isEmpty) && !guides.settingsIDs.isEmpty {
-            FeatureGuideView(store: store, guides: guides, ids: guides.settingsIDs)
-                .padding(16)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.08)))
         }
     }
 }

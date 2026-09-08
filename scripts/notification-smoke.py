@@ -19,9 +19,16 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
         "CFBundleIdentifier": identifier, "CFBundleExecutable": "notification-smoke", "CFBundlePackageType": "APPL", "CFBundleVersion": "1", "CFBundleShortVersionString": "1.0.0", "CFBundleName": "now Notification Preview", "CFBundleDisplayName": "now Notification Preview", "LSUIElement": True
     }))
     app = directory / "App.swift"
-    app.write_text((ROOT / "Sources/App.swift").read_text().replace("@main\nenum NowApp", "enum NowApp", 1))
+    app_text = (ROOT / "Sources/App.swift").read_text().replace("@main\nenum NowApp", "enum NowApp", 1)
+    app_text = app_text.replace("private lazy var setupAssistant", "lazy var setupAssistant")
+    app_text = app_text.replace("private var setupWindow", "var setupWindow")
+    app_text = app_text.replace("private func finishInitialSetup", "func finishInitialSetup")
+    if "--startup-smoke" in sys.argv:
+        app_text = app_text.replace("let transport = SystemNotificationTransport()", "let transport = FakeNotifications()")
+    app.write_text(app_text)
     store = directory / "AppStore.swift"
     text = (ROOT / "Sources/AppStore.swift").read_text()
+    text = text.replace('legacyDomain = "local.tboch.now"', 'legacyDomain = "' + identifier + '.legacy"')
     for method in ["tick", "commitEvents", "finishRefresh", "merge", "appBecameActive"]:
         text = text.replace("private func " + method + "(", "func " + method + "(")
     text = text.replace("@Published private(set) var isRefreshing", "@Published var isRefreshing")
@@ -53,6 +60,12 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
         subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", "-f", str(contents.parent)], check=True)
         print("Isolated notification preview: " + str(contents.parent), flush=True)
     try:
-        subprocess.run([str(executable), str(directory)] + (["--gui"] if gui else []), check=True, timeout=1800 if gui else 60)
+        if "--startup-smoke" in sys.argv:
+            for mode in ["--startup-new", "--startup-existing", "--startup-legacy"]:
+                subprocess.run(["defaults", "delete", identifier], capture_output=True)
+                subprocess.run([str(executable), str(directory), mode], check=True, timeout=15)
+        else:
+            subprocess.run([str(executable), str(directory)] + (["--gui"] if gui else []), check=True, timeout=1800 if gui else 60)
     finally:
         subprocess.run(["defaults", "delete", identifier], capture_output=True)
+        subprocess.run(["defaults", "delete", identifier + ".legacy"], capture_output=True)

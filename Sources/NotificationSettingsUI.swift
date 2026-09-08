@@ -14,7 +14,17 @@ struct NotificationSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Toggle("Use notifications for meetings already in progress at launch or wake", isOn: feature(\.notifyOnCatchUp))
+            Picker("On launch or wake, meetings already in progress", selection: Binding(
+                get: { store.settings.catchUpDelivery },
+                set: { value in
+                    store.settings.catchUpDelivery = value
+                    if value == .notification { notifications.requestPermission() }
+                })) {
+                Text("Use normal reminder style").tag(CatchUpDelivery.normal)
+                Text("Use notification").tag(CatchUpDelivery.notification)
+                Text("Skip reminder").tag(CatchUpDelivery.skip)
+            }
+            .fixedSize()
             Toggle("Notify about new updates", isOn: feature(\.notifyUpdates))
                 .disabled(!store.settings.automaticUpdateChecks)
             Toggle("Notify about calendar sync problems", isOn: feature(\.notifySyncErrors))
@@ -30,8 +40,6 @@ struct NotificationSettingsView: View {
                 if notifications.permission.authorization == .notRequested {
                     Button("Enable Notifications…") { notifications.requestPermission() }
                         .disabled(notifications.requesting)
-                } else if notifications.permission.canSubmit {
-                    Button("Send Test Notification") { notifications.test(sound: store.settings.soundEnabled) }
                 }
                 Button("Notification Settings…") { notifications.openSettings() }
                 Button { showHelp.toggle() } label: {

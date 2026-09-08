@@ -77,3 +77,68 @@ final class NotificationPreview: NSObject, NSApplicationDelegate {
     }
     func show() { NSApp.setActivationPolicy(.regular); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
 }
+
+/// Runs the actual AppDelegate in a disposable domain with the build harness's
+/// fake transport. No notification registration, Calendar query or feed fetch.
+@MainActor
+final class SetupAppSmoke {
+    static func run(existingProfile: Bool, legacyProfile: Bool = false) {
+        if existingProfile {
+            let state = Persisted(subscriptions: [], settings: AppSettings())
+            let defaults = legacyProfile ? UserDefaults(suiteName: AppStore.legacyDomain)! : UserDefaults.standard
+            defaults.set(try! JSONEncoder().encode(state), forKey: AppStore.storageKey)
+        }
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            Task { @MainActor in
+                func require(_ result: Bool, _ label: String) {
+                    if !result { print("FAIL: " + label); exit(1) }
+                }
+                require(delegate.store.hadSavedProfile == existingProfile, "profile presence captured before migration")
+                if existingProfile {
+                    require(NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible }, "existing empty profile opens Settings")
+                    require(!delegate.setupAssistant.pending, "existing profile bypasses assistant")
+                } else {
+                    require(delegate.setupWindow?.isVisible == true, "fresh launch displays assistant without sources")
+                    require(NSApp.activationPolicy() == .regular, "assistant owns app menus")
+                    delegate.setupAssistant.next()
+                    delegate.setupWindow?.close()
+                    delegate.openSettings()
+                    require(delegate.setupWindow?.isVisible == true && delegate.setupAssistant.state.step == .reminders,
+                            "close and reopen resumes same step")
+                    delegate.setupAssistant.draft.leadSeconds = 45
+                    delegate.setupAssistant.next()
+                    let completed = await delegate.setupAssistant.complete(store: delegate.store, permission: { false }, probe: { .success([]) })
+                    require(completed, "fullscreen setup completes without permission")
+                    delegate.finishInitialSetup()
+                    require(delegate.setupWindow?.isVisible == false && NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible }, "finish opens source Settings and closes assistant")
+                    require(delegate.store.settings.leadSeconds == 45, "real AppDelegate retains setup settings")
+                }
+                func settingsVisible() -> Bool { NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible } }
+                delegate.notificationInteraction()
+                require(settingsVisible(), "notification preserves already-open Settings")
+                NSApp.windows.first { $0.title == "now · Settings" }?.close()
+                _ = delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false)
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                require(!settingsVisible(), "notification-before-reopen does not open Settings")
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                _ = delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false)
+                delegate.notificationInteraction()
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                require(!settingsVisible(), "reopen-before-notification is cancelled")
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                _ = delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false)
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                require(settingsVisible(), "ordinary Finder reopen still opens Settings")
+                delegate.notificationInteraction()
+                require(!settingsVisible(), "late notification undoes only competing reopen window")
+                print("SETUP APP SMOKE OK — " + (legacyProfile ? "legacy profile migration bypass" : (existingProfile ? "existing profile bypass" : "fresh launch, close/reopen, completion to Settings")))
+                exit(0)
+            }
+        }
+        app.run()
+        withExtendedLifetime(delegate) {}
+    }
+}

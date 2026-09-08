@@ -30,6 +30,7 @@ struct MenuBarFocus {
 @MainActor
 final class AppStore: ObservableObject {
     nonisolated static let storageKey = "local.tboch.now.state.v1"
+    let hadSavedProfile: Bool
     nonisolated static let legacyDomain = "local.tboch.now"
     nonisolated static let soundNames = ["Basso", "Blow", "Bottle", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"]
 
@@ -89,6 +90,7 @@ final class AppStore: ObservableObject {
     var updateNotificationSubmitted: ((ReminderNotification) -> Void)?
     var updateNotificationResponse: ((ReminderNotification, String) -> Void)?
     var updateNotificationTick: (() -> Void)?
+    var openNotificationMeetings: (([MeetingEvent]) -> Void)?
     var openNotificationAgenda: (() -> Void)?
     var openNotificationSyncSettings: (() -> Void)?
     private var reminderLedger = ReminderLedger()
@@ -154,6 +156,8 @@ final class AppStore: ObservableObject {
     }()
 
     init(eventCache: CalendarEventCache = CalendarEventCache(), initialState: Persisted? = nil) {
+        hadSavedProfile = initialState != nil || UserDefaults.standard.data(forKey: Self.storageKey) != nil
+            || UserDefaults(suiteName: Self.legacyDomain)?.data(forKey: Self.storageKey) != nil
         let state = initialState ?? Self.loadState()
         self.eventCache = eventCache
         cacheLoadTask = Task { await eventCache.load(subscriptions: state.subscriptions) }
@@ -287,6 +291,10 @@ final class AppStore: ObservableObject {
 
     func calendarCacheStatus(_ id: UUID) -> String? {
         guard let info = cacheInfo[id] else { return cacheIssues[id] }
+        // Healthy calendars use the shared “Last synced” beside Refresh.
+        // Per-source age only adds useful context while something needs attention.
+        guard errors[id] != nil || offlineCalendarIDs.contains(id)
+                || cacheIssues[id] != nil || !info.covers(displayTime) else { return nil }
         let stamp = info.fetchedAt.formatted(date: .abbreviated, time: .shortened)
         let prefix = info.usingSavedData ? "Using saved data. " : ""
         let coverage = info.covers(displayTime) ? "" : " Saved coverage expired; refresh needed."
@@ -763,9 +771,13 @@ final class AppStore: ObservableObject {
     func applyNotificationSetup(_ choices: NotificationSetupChoices, owners: [MeetingAudioOwner]?) {
         var updated = settings
         updated.inMeetingDelivery = choices.duringMeetings ? .notification : (settings.inMeetingDelivery == .notification ? .normal : settings.inMeetingDelivery)
-        updated.notifyOnCatchUp = choices.catchUp
+        updated.catchUpDelivery = choices.catchUp ? .notification : (settings.catchUpDelivery == .skip ? .skip : .normal)
         updated.notifyUpdates = choices.updates
-        settings = updated
+        applyInitialSetup(updated, owners: owners)
+    }
+
+    func applyInitialSetup(_ draft: AppSettings, owners: [MeetingAudioOwner]?) {
+        settings = SetupAssistantState.applying(draft, to: settings)
         meetingEnableGeneration += 1
         meetingDetectionChecking = false
         if settings.needsMeetingDetection, let owners {
@@ -1046,6 +1058,7 @@ final class AppStore: ObservableObject {
 
     func connectNotifications(_ controller: ReminderNotificationController) {
         notifications = controller
+        controller.onMeetingPreview = { [weak self] in self?.alertController?.cancelPreview() }
         controller.validate = { [weak self] item in self?.validNotification(item) ?? false }
         controller.onSubmitted = { [weak self] item in
             guard let self else { return }
@@ -1151,11 +1164,11 @@ final class AppStore: ObservableObject {
             if let plan = AlertController.primarySnoozePlan(options: options, defaultSeconds: settings.snoozeSeconds),
                let schedule = AlertController.snoozeSchedule(plan: plan, events: current, now: now()) {
                 snooze(schedule)
-            } else { acknowledge(current); openNotificationAgenda?() }
+            } else { acknowledge(current); openNotificationMeetings?(current) }
         } else {
             acknowledge(current)
             if action == "join", current.count == 1, let url = current[0].link { NSWorkspace.shared.open(url) }
-            else if action != UNNotificationDismissActionIdentifier { openNotificationAgenda?() }
+            else if action != UNNotificationDismissActionIdentifier { openNotificationMeetings?(current) }
         }
     }
 

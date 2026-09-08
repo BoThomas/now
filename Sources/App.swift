@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     lazy var updateController = UpdateController(store: store)
     private var menuBarController: MenuBarController?
     private var settingsWindow: NSWindow?
+    private var setupWindow: NSWindow?
+    private lazy var setupAssistant = SetupAssistantController(isNewProfile: !store.hadSavedProfile, settings: store.settings)
     private var updateWindow: NSWindow?
     /// A window request that arrived while a reminder was showing — shown
     /// when the alert closes (via `policyDidChange`).
@@ -19,14 +21,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingFirstRunSettings = false
     private var windowRequestObserver: Any?
     private var wakeObserver: Any?
+    private var pendingReopen: DispatchWorkItem?
+    private var notificationInteractionUntil = Date.distantPast
+    private var reopenOpenedSettingsAt: Date?
+
+    func notificationInteraction() {
+        notificationInteractionUntil = Date().addingTimeInterval(1)
+        pendingReopen?.cancel()
+        pendingReopen = nil
+        // Only undo a window opened by the competing reopen event, never a
+        // Settings window the user already had open.
+        if let opened = reopenOpenedSettingsAt, Date().timeIntervalSince(opened) < 1 {
+            settingsWindow?.close()
+        }
+        reopenOpenedSettingsAt = nil
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
+        _ = setupAssistant
         let transport = SystemNotificationTransport()
         let notifications = ReminderNotificationController(transport: transport)
-        transport.response = { [weak notifications] id, action in notifications?.receive(id: id, action: action) }
+        transport.response = { [weak self, weak notifications] id, action in
+            self?.notificationInteraction()
+            notifications?.receive(id: id, action: action)
+        }
         store.connectNotifications(notifications)
         store.featureGuides = FeatureGuideController()
+        store.openNotificationMeetings = { [weak self] events in self?.menuBarController?.showMeetingDetails(events) }
         store.openNotificationAgenda = { [weak self] in self?.menuBarController?.openAgenda() }
         store.openNotificationSyncSettings = { [weak self] in self?.openSettings() }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -91,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         store.start()
         updateController.start()
-        if store.subscriptions.isEmpty && !store.nativeCalendars.contains(where: \.isEnabled) {
+        if setupAssistant.pending || (store.subscriptions.isEmpty && !store.nativeCalendars.contains(where: \.isEnabled)) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                 guard let self else { return }
                 // An install confirmation is pending (shown at +2 s) — let it
@@ -140,7 +162,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// to surface, making that double-click appear broken (especially when the
     /// status item is hidden in a crowded menu bar).
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        openSettings()
+        guard Date() >= notificationInteractionUntil else { return true }
+        pendingReopen?.cancel()
+        let request = DispatchWorkItem { [weak self] in
+            guard let self, Date() >= self.notificationInteractionUntil else { return }
+            if self.settingsWindow?.isVisible != true { self.reopenOpenedSettingsAt = Date() }
+            self.openSettings()
+        }
+        pendingReopen = request
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: request)
         return true
     }
 
@@ -189,6 +219,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             handleQuitFromWindow(window, closeTitle: "Close Settings")
         } else if alertController.isOpen {
             handleQuitFromAlert()
+        } else if let window = setupWindow, window.isVisible {
+            handleQuitFromWindow(window, closeTitle: "Close Setup")
         } else if let window = updateWindow, window.isVisible {
             handleQuitFromWindow(window, closeTitle: "Close Window")
         } else {
@@ -244,7 +276,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func openSetupAssistant() {
+        guard let notifications = store.notifications else { return }
+        if setupWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 430),
+                                  styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+            window.title = "Set up now"
+            window.isReleasedWhenClosed = false
+            window.delegate = self
+            window.contentView = NSHostingView(rootView: SetupAssistantView(assistant: setupAssistant, store: store,
+                alerts: alertController, notifications: notifications, onFinish: { [weak self] in
+                    self?.finishInitialSetup()
+                }))
+            window.center()
+            setupWindow = window
+        }
+        setupWindow?.makeKeyAndOrderFront(nil)
+        syncActivationPolicy()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func finishInitialSetup() {
+        setupWindow?.orderOut(nil)
+        openSettings()
+        presentPendingUpdateWindow()
+    }
+
     func openSettings() {
+        if setupAssistant.pending { openSetupAssistant(); return }
         if settingsWindow == nil {
             // Default 940×720 shows the section sidebar (threshold 880 — a bit
             // of headroom so the first tiny resize doesn't drop it); clamped to
@@ -292,7 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (menu-bar-only). Called whenever any of them appears/disappears —
     /// never set the policy anywhere else.
     private func syncActivationPolicy() {
-        let wantRegular = (settingsWindow?.isVisible ?? false) || alertController.isOpen || (updateWindow?.isVisible ?? false)
+        let wantRegular = (settingsWindow?.isVisible ?? false) || alertController.isOpen || (updateWindow?.isVisible ?? false) || (setupWindow?.isVisible ?? false)
         let current = NSApp.activationPolicy()
         if wantRegular, current == .accessory {
             NSApp.setActivationPolicy(.regular)
@@ -316,7 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Return/Esc, so the window would sit underneath it, invisible.
     private func presentUpdateWindow() {
         guard updateController.windowContent != nil else { return }
-        guard !alertController.isOpen else {
+        guard !alertController.isOpen, !(setupWindow?.isVisible ?? false) else {
             pendingUpdateWindow = true
             return
         }
@@ -340,7 +399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// A deferred request fires when the reminder alert closes.
     private func presentPendingUpdateWindow() {
-        guard pendingUpdateWindow, !alertController.isOpen else { return }
+        guard pendingUpdateWindow, !alertController.isOpen, !(setupWindow?.isVisible ?? false) else { return }
         pendingUpdateWindow = false
         presentUpdateWindow()
     }
@@ -366,6 +425,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension AppDelegate: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow, window === setupWindow {
+            setupAssistant.cancelPendingWork()
+        }
         // The update window "closing" is just hiding (orderOut semantics with
         // isReleasedWhenClosed = false); mirror the state to the controller so
         // a ⌘W close and the Later button agree.
@@ -378,6 +440,7 @@ extension AppDelegate: NSWindowDelegate {
         // the close completes — `syncActivationPolicy()` is idempotent.
         DispatchQueue.main.async { [weak self] in
             self?.syncActivationPolicy()
+            self?.presentPendingUpdateWindow()
         }
     }
 }

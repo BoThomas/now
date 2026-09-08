@@ -7,6 +7,7 @@ final class FakeNotifications: NotificationTransport {
     var status = NotificationPermission(authorization: .allowed, alerts: true, sound: true)
     var submissions: [ReminderNotification] = []
     var removed: [String] = []
+    var response: ((String, String) -> Void)?
     var permissionRequests = 0
     var fail = false
     var hold = false
@@ -28,11 +29,17 @@ struct NotificationSmoke {
         for _ in 0..<30 { await Task.yield() }
         try? await Task.sleep(nanoseconds: 20_000_000)
     }
+    @MainActor static func pumpPreviewTimer() {
+        RunLoop.main.run(until: Date().addingTimeInterval(1.1))
+    }
     @MainActor static func main() async {
         func require(_ condition: @autoclosure () -> Bool, _ label: String) {
             if !condition() { print("FAIL: \(label)"); exit(1) }
         }
         let root = URL(fileURLWithPath: CommandLine.arguments[1])
+        if CommandLine.arguments.contains("--startup-new") { SetupAppSmoke.run(existingProfile: false); return }
+        if CommandLine.arguments.contains("--startup-legacy") { SetupAppSmoke.run(existingProfile: true, legacyProfile: true); return }
+        if CommandLine.arguments.contains("--startup-existing") { SetupAppSmoke.run(existingProfile: true); return }
         if CommandLine.arguments.contains("--gui") { NotificationPreview.run(root: root); return }
         var clock = Date()
         let transport = FakeNotifications()
@@ -90,7 +97,20 @@ struct NotificationSmoke {
         controller.previewMeeting(settings: previewSettings); await settle()
         require(transport.submissions.last?.title == "A meeting is starting", "notification preview honors privacy")
         require(transport.submissions.last?.keys.isEmpty == true && transport.submissions.last?.test == true,
-                "notification preview has no real event identity or real actions")
+                "notification preview has no real event identity")
+        require(transport.submissions.last?.category == SystemNotificationTransport.category(join: false, snooze: true),
+                "sample notification offers safe snooze without a real Join action")
+        previewSettings.leadSeconds = 60
+        previewSettings.snoozeSeconds = 1
+        controller.previewMeeting(settings: previewSettings); await settle()
+        let sampleCount = transport.submissions.count
+        let sampleToken = controller.receipts.values.first { $0.test }!.id
+        controller.receive(id: sampleToken, action: "snooze")
+        clock = clock.addingTimeInterval(1)
+        pumpPreviewTimer()
+        await settle()
+        require(transport.submissions.count == sampleCount && !controller.receipts.values.contains { $0.test },
+                "preview snooze dismisses the sample without scheduling another reminder")
         for id in Array(controller.receipts.keys) { controller.discard(id) }
 
         // Production AppStore orchestration, isolated preferences/cache and no UI.
@@ -108,9 +128,9 @@ struct NotificationSmoke {
         var fullscreen: [String] = []
         store.onAlert = { fullscreen += $0.map(\.id) }
         await store.restoreCachedEvents()
-        func meeting(_ id: String, start: TimeInterval = 120, end: TimeInterval = 1800, muted: Bool = false) -> MeetingEvent {
+        func meeting(_ id: String, start: TimeInterval = 120, end: TimeInterval = 1800, muted: Bool = false, link: URL? = nil) -> MeetingEvent {
             MeetingEvent(uid: id, title: "Synthetic \(id)", start: base.addingTimeInterval(start), end: base.addingTimeInterval(end), location: nil, notes: nil,
-                         link: nil, calendarID: source.id, calendarName: source.name, colorIndex: 0, isMuted: muted)
+                         link: link, calendarID: source.id, calendarName: source.name, colorIndex: 0, isMuted: muted)
         }
         let one = meeting("one")
         store.commitEvents([one]); store.tick(); store.tick(); await settle()
@@ -249,10 +269,19 @@ struct NotificationSmoke {
             previewUpdates.windowContent = .installed(version: "1.11.0")
             NotificationPreview.render(UpdateView(controller: previewUpdates), size: NSSize(width: 460, height: 424), name: "update-guide", directory: directory)
             previewDefaults.removePersistentDomain(forName: previewDomain)
-            let initialGuides = FeatureGuideController(defaults: previewDefaults)
-            initialGuides.startupHealthAcknowledged(installedUpdate: false, hasCalendar: true)
-            previewStore.featureGuides = initialGuides
+            let assistant = SetupAssistantController(isNewProfile: true, settings: AppSettings(), defaults: previewDefaults)
             let previewAlerts = AlertController()
+            previewAlerts.store = previewStore
+            for step in SetupAssistantState.Step.allCases {
+                NotificationPreview.render(SetupAssistantView(assistant: assistant, store: previewStore, alerts: previewAlerts,
+                    notifications: previewDelivery, onFinish: {}), size: NSSize(width: 560, height: 430), name: "setup-" + step.rawValue, directory: directory)
+                assistant.next()
+            }
+            assistant.back()
+            previewTransport.status.authorization = .allowed
+            _ = await previewDelivery.checkPermission()
+            NotificationPreview.render(SetupAssistantView(assistant: assistant, store: previewStore, alerts: previewAlerts,
+                notifications: previewDelivery, onFinish: {}), size: NSSize(width: 560, height: 430), name: "setup-reminders-enabled", directory: directory)
             NotificationPreview.renderSettings(store: previewStore, alerts: previewAlerts, updates: previewUpdates, directory: directory)
             previewDefaults.removePersistentDomain(forName: previewDomain)
         }
@@ -302,6 +331,56 @@ struct NotificationSmoke {
         system.hold = false
         updateRestart.applyDecision(.available(nextRelease), userInitiated: true)
         if case .available = updateRestart.windowContent {} else { require(false, "manual check opens window even with update notices disabled") }
+        let setupDomain = "now-setup-tests-" + UUID().uuidString
+        let setupDefaults = UserDefaults(suiteName: setupDomain)!
+        defer { setupDefaults.removePersistentDomain(forName: setupDomain) }
+        let assistant = SetupAssistantController(isNewProfile: true, settings: AppSettings(), defaults: setupDefaults)
+        let unchanged = store.settings
+        assistant.draft.leadSeconds = 90
+        assistant.next(); assistant.next()
+        require(store.settings == unchanged, "assistant draft does not alter live settings")
+        let resumed = SetupAssistantController(isNewProfile: false, settings: AppSettings(), defaults: setupDefaults)
+        require(resumed.pending && resumed.state.step == .ready && resumed.draft.leadSeconds == 90, "assistant resumes draft and current step after restart")
+        let unsupported = await resumed.complete(store: store, permission: { true }, probe: { .failure(.processListUnavailable) })
+        require(!unsupported && resumed.state.step == .reminders && store.settings == unchanged, "assistant capability failure leaves settings unchanged and returns to context")
+        resumed.draft.inMeetingDelivery = .normal
+        resumed.next()
+        var permissionWait: CheckedContinuation<Bool, Never>?
+        let pendingSetup = Task { await resumed.complete(store: store, permission: {
+            await withCheckedContinuation { permissionWait = $0 }
+        }, probe: { .success([]) }) }
+        await settle()
+        resumed.cancelPendingWork()
+        permissionWait!.resume(returning: true)
+        let cancelled = await pendingSetup.value
+        require(!cancelled && resumed.pending && store.settings == unchanged, "assistant closing during validation cancels commit")
+        let finished = await resumed.complete(store: store, permission: { true }, probe: { .success([]) })
+        require(finished && !resumed.pending && store.settings.leadSeconds == 90, "assistant completes and applies selected reminder timing")
+        let completedSetup = SetupAssistantController(isNewProfile: false, settings: store.settings, defaults: setupDefaults)
+        require(!completedSetup.pending, "completed assistant never restarts on later launches")
+        setupDefaults.removePersistentDomain(forName: setupDomain)
+        let noPermission = SetupAssistantController(isNewProfile: true, settings: AppSettings(), defaults: setupDefaults)
+        noPermission.next(); noPermission.next()
+        let finishedWithoutPermission = await noPermission.complete(store: store, permission: { false }, probe: { fatalError("disabled notifications must not probe meeting detection") })
+        require(finishedWithoutPermission && !store.settings.usesNotifications && store.settings.reminderDelivery == .fullscreen,
+                "assistant can finish without enabling notifications, with all notification routes disabled")
+        // Notification body clicks resolve live details for linked, linkless, and grouped meetings.
+        var details: [MeetingEvent] = []
+        var agendaOpened = false
+        store.openNotificationMeetings = { details = $0 }
+        store.openNotificationAgenda = { agendaOpened = true }
+        store.settings.reminderDelivery = .notification
+        clock = base
+        let detailOne = meeting("detail-one")
+        let detailTwo = meeting("detail-two", link: URL(string: "https://zoom.us/j/123456789"))
+        store.commitEvents([detailOne, detailTwo])
+        for selected in [[detailOne], [detailTwo], [detailOne, detailTwo]] {
+            let item = ReminderNotification(id: UUID().uuidString, keys: selected.map { NotificationLogic.key($0.id) },
+                fingerprints: selected.map(NotificationLogic.fingerprint), expires: base.addingTimeInterval(1800),
+                catchUp: selected.count > 1, title: "Test", body: "Test", category: "", sound: false)
+            delivery.onResponse?(item, UNNotificationDefaultActionIdentifier)
+            require(details.map(\.id) == selected.map(\.id) && !agendaOpened, "notification body opens matching meeting details without agenda/settings")
+        }
         print("NOTIFICATION SMOKE OK — async races, permission recovery, routing, privacy, snooze, restart, wake grouping, cleanup, update notices, feature migration")
     }
 }

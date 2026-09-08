@@ -1448,7 +1448,7 @@ struct SectionTopKey: PreferenceKey {
 private let settingsContentBottomKey = "__contentBottom"
 
 /// Shared editor for reminder lead time and custom snooze duration.
-private struct CustomTimingEditor: View {
+struct CustomTimingEditor: View {
     let title: String
     let initialSeconds: Int
     let range: ClosedRange<Int>
@@ -1623,7 +1623,6 @@ struct SettingsView: View {
         GeometryReader { viewport in
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    if let guides = store.featureGuides { InitialFeatureGuideView(store: store, guides: guides) }
                     trackedSection(.calendars) { calendarsSection }
                     trackedSection(.native) { nativeSection }
                     trackedSection(.reminder) { reminderSection }

@@ -37,6 +37,7 @@ struct CalendarSubscription: Codable, Identifiable, Equatable {
 }
 
 enum ReminderDelivery: String, Codable, CaseIterable { case fullscreen, notification }
+enum CatchUpDelivery: String, Codable, CaseIterable { case normal, notification, skip }
 enum InMeetingDelivery: String, Codable, CaseIterable { case normal, notification, suppress }
 
 struct AppSettings: Codable, Equatable {
@@ -65,6 +66,15 @@ struct AppSettings: Codable, Equatable {
     var reminderDelivery: ReminderDelivery = .fullscreen
     var notifyDuringMeetings = false
     var notifyOnCatchUp = false
+    var skipMeetingsOnCatchUp = false
+
+    var catchUpDelivery: CatchUpDelivery {
+        get { skipMeetingsOnCatchUp ? .skip : (notifyOnCatchUp ? .notification : .normal) }
+        set {
+            notifyOnCatchUp = newValue == .notification
+            skipMeetingsOnCatchUp = newValue == .skip
+        }
+    }
     var hideNotificationDetails = false
     var notifySyncErrors = false
     var notifyUpdates = false
@@ -104,7 +114,7 @@ struct AppSettings: Codable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case reminderDelivery, notifyDuringMeetings, notifyOnCatchUp, hideNotificationDetails, notifySyncErrors, notifyUpdates
+        case reminderDelivery, notifyDuringMeetings, notifyOnCatchUp, skipMeetingsOnCatchUp, hideNotificationDetails, notifySyncErrors, notifyUpdates
         case menuMeetingLimit, leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
     }
 
@@ -151,6 +161,8 @@ struct AppSettings: Codable, Equatable {
         notifyDuringMeetings = (try? c.decode(Bool.self, forKey: .notifyDuringMeetings)) ?? false
         if notifyDuringMeetings { suppressRemindersDuringMeetings = false }
         notifyOnCatchUp = (try? c.decode(Bool.self, forKey: .notifyOnCatchUp)) ?? false
+        skipMeetingsOnCatchUp = (try? c.decode(Bool.self, forKey: .skipMeetingsOnCatchUp)) ?? false
+        if skipMeetingsOnCatchUp { notifyOnCatchUp = false }
         hideNotificationDetails = (try? c.decode(Bool.self, forKey: .hideNotificationDetails)) ?? false
         notifySyncErrors = (try? c.decode(Bool.self, forKey: .notifySyncErrors)) ?? false
         notifyUpdates = (try? c.decode(Bool.self, forKey: .notifyUpdates)) ?? false

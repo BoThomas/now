@@ -3,20 +3,54 @@ import Foundation
 extension SelfTest {
     static func notificationTests(_ c: inout Checker) {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var setup = SetupAssistantState(isNewProfile: true, settings: AppSettings(), supportsMeetings: true)
+        c.expect(setup.draft.leadSeconds == 60 && setup.draft.snoozeSeconds == 0, "assistant: new-user timing defaults to one minute and just in time")
+        c.expect(!setup.completed && setup.step == .welcome && setup.draft.notifyDuringMeetings && setup.draft.notifyOnCatchUp && setup.draft.notifyUpdates, "assistant: new user starts with recommended notification draft")
+        c.expect(setup.draft.launchAtLogin == AppSettings().launchAtLogin && setup.draft.refreshMinutes == AppSettings().refreshMinutes && !setup.draft.notifySyncErrors, "assistant: general defaults untouched")
+        c.expect(SetupAssistantState(isNewProfile: false, settings: AppSettings(), supportsMeetings: true).completed, "assistant: existing empty profiles not mistaken for new installs")
+        setup.next(); c.expect(setup.step == .reminders, "assistant: welcome precedes reminder options")
+        setup.next(); c.expect(setup.step == .ready && setup.steps.count == 3, "assistant: three-screen flow ends after combined reminders")
+        setup.back(); c.expect(setup.step == .reminders, "assistant: back revisits combined reminder screen")
+        let disabled = SetupAssistantState.effective(setup.draft, notificationsAllowed: false)
+        c.expect(!disabled.usesNotifications && disabled.reminderDelivery == .fullscreen && disabled.inMeetingDelivery == .normal, "assistant: permission off disables every notification route")
+        c.expect(SetupAssistantState.effective(setup.draft, notificationsAllowed: true) == setup.draft && setup.draft.notifyDuringMeetings, "assistant: later grant restores draft choices without losing them")
+        let legacyDraft = #"{"completed":false,"step":"context","draft":{}}"#.data(using: .utf8)!
+        c.expect((try? JSONDecoder().decode(SetupAssistantState.self, from: legacyDraft))?.step == .reminders, "assistant: old context step migrates to combined reminders")
+        var current = AppSettings()
+        current.refreshMinutes = 30; current.launchAtLogin = true; current.automaticUpdateChecks = false
+        current.showMenuBarCountdown = false; current.elapsedStartMinutes = 60
+        var draft = AppSettings(); draft.leadSeconds = 90; draft.snoozeSeconds = 45; draft.hideNotificationDetails = true
+        let applied = SetupAssistantState.applying(draft, to: current)
+        c.expect(applied.leadSeconds == 90 && applied.snoozeSeconds == current.snoozeSeconds && applied.hideNotificationDetails, "assistant: selected reminder choices applied")
+        c.expect(applied.refreshMinutes == 30 && applied.launchAtLogin == draft.launchAtLogin && applied.automaticUpdateChecks == draft.automaticUpdateChecks && !applied.showMenuBarCountdown && applied.elapsedStartMinutes == 60, "assistant: selected startup/update choices apply while other general settings stay unchanged")
+        let encodedSetup = try? JSONEncoder().encode(setup)
+        c.expect(encodedSetup.flatMap { try? JSONDecoder().decode(SetupAssistantState.self, from: $0) } == setup, "assistant: draft and step survive restart")
+        for lead in [0, 60, 300] {
+            for snooze in [0, 45, 7200] {
+                var previewSettings = AppSettings()
+                previewSettings.leadSeconds = lead
+                previewSettings.snoozeSeconds = snooze == 0 && lead == 0 ? 60 : snooze
+                let sample = AlertController.previewEvent(at: now, settings: previewSettings)
+                c.expect(sample.start == now.addingTimeInterval(TimeInterval(lead)), "preview: sample respects reminder lead time")
+                let options = AlertController.snoozeOptions(events: [sample], now: now, customSeconds: previewSettings.snoozeSeconds)
+                let plan = AlertController.primarySnoozePlan(options: options, defaultSeconds: previewSettings.snoozeSeconds)
+                c.expect(plan == (previewSettings.snoozeSeconds == 0 ? .atStart : .duration(previewSettings.snoozeSeconds)), "preview: selected snooze fits sample meeting")
+            }
+        }
         let catalog = FeatureGuideCatalog.entries
         var guides = FeatureGuideState()
         c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true) == [FeatureGuideCatalog.notificationsID], "guide: legacy user sees feature on crossing its introduction")
         for _ in 0..<3 {
             c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true).isEmpty, "guide: subsequent updates never repeat introduction")
         }
-        let futureGuide = FeatureGuideDefinition(id: "future-feature", includeInInitialSetup: false, content: .information(title: "Future", message: "Explanation"))
+        let futureGuide = FeatureGuideDefinition(id: "future-feature", content: .information(title: "Future", message: "Explanation"))
         c.expect(guides.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true, hasCalendar: true) == [futureGuide.id], "guide: future update introduces only its new feature")
         var skipped = FeatureGuideState()
         c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true, hasCalendar: true).count == 2, "guide: skipped releases collect all new features")
         _ = skipped.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true)
         c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true, hasCalendar: true).isEmpty, "guide: downgrade preserves feature history")
         var initial = FeatureGuideState()
-        c.expect(initial.acknowledge(catalog: catalog + [futureGuide], installedUpdate: false, hasCalendar: false).isEmpty && initial.pendingSettings == [FeatureGuideCatalog.notificationsID], "guide: new install queues only initial setup cards")
+        c.expect(initial.acknowledge(catalog: catalog + [futureGuide], installedUpdate: false, hasCalendar: false).isEmpty && initial.pendingSettings.isEmpty, "guide: first-run assistant replaces inline setup cards")
         c.expect(initial.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true).isEmpty, "guide: later update does not repeat pending initial setup")
         let savedGuides = try? JSONEncoder().encode(guides)
         c.expect(savedGuides.flatMap { try? JSONDecoder().decode(FeatureGuideState.self, from: $0) } == guides, "guide: introduction history persists")
@@ -77,6 +111,21 @@ extension SelfTest {
             let text = NotificationLogic.content(events: grouped ? [future, running] : [future], privateDetails: true, catchUp: grouped, now: now)
             let combined = text.title + text.body
             c.expect(!combined.contains("Private") && !combined.contains("Secret") && !combined.contains("zoom") && !combined.contains("pwd"), "notification: private content omits all identifying data")
+        }
+        settings.catchUpDelivery = .skip
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: .unknown, catchUp: true, snoozed: false, now: now) == .handled, "catch-up: skip handles ongoing meeting")
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: .unknown, catchUp: true, snoozed: true, now: now) == .fullscreen, "catch-up: skip preserves explicit snooze")
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: .unknown, catchUp: false, snoozed: false, now: now) == .fullscreen, "catch-up: skip does not affect ordinary reminders")
+        settings.inMeetingDelivery = .notification
+        c.expect(NotificationLogic.route(event: running, settings: settings, activity: meeting, catchUp: true, snoozed: false, now: now) == .notification, "catch-up: during-meeting rule retains priority")
+        for mode in CatchUpDelivery.allCases {
+            var choice = AppSettings(); choice.catchUpDelivery = mode
+            let restored = try? JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(choice))
+            c.expect(restored?.catchUpDelivery == mode, "catch-up: choice round trips")
+        }
+        for enabled in [false, true] {
+            let legacy = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"notifyOnCatchUp\":\(enabled)}".utf8))
+            c.expect(legacy?.catchUpDelivery == (enabled ? .notification : .normal), "catch-up: legacy checkbox preserves behavior")
         }
         let plain = NotificationLogic.content(events: [future], privateDetails: false, catchUp: false, now: now)
         c.expect(plain.title == future.title && !plain.body.contains("secret") && !plain.body.contains("Secret"), "notification: normal content includes only title and timing")
