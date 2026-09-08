@@ -699,7 +699,7 @@ enum SelfTest {
 
         // DST: a daily 02:30 Berlin meeting across the 2026-03-29 spring-forward
         // gap and the 2026-10-25 fall-back overlap yields exactly one occurrence
-        // on each of those days (never zero, never two).
+        // on the overlap day, and none at the nonexistent gap-day time.
         var berlinCal = Calendar(identifier: .gregorian)
         berlinCal.timeZone = berlin
         let dstNow = berlinCal.date(from: DateComponents(timeZone: berlin, year: 2026, month: 3, day: 27, hour: 12))!
@@ -713,7 +713,22 @@ enum SelfTest {
         """, now: dstNow)
         let dstDates = dates(dst.events, uid: "dstdaily@test")
         let gapDay = dstDates.filter { berlinCal.isDate($0, inSameDayAs: berlinCal.date(from: DateComponents(timeZone: berlin, year: 2026, month: 3, day: 29))!) }
-        c.expect(gapDay.count == 1, "DST gap day has exactly one occurrence (got \(gapDay.count))")
+        c.expect(gapDay.isEmpty, "F07: nonexistent DST recurrence is skipped (got \(gapDay.count))")
+        for rule in ["FREQ=DAILY;COUNT=5", "FREQ=WEEKLY;BYDAY=TH,FR,SA,SU,MO,TU;COUNT=5",
+                     "FREQ=MONTHLY;BYMONTHDAY=26,27,28,29,30,31;COUNT=5",
+                     "FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=26,27,28,29,30,31;COUNT=5"] {
+            let countedGap = build("""
+            BEGIN:VEVENT
+            UID:gapcount@test
+            DTSTART;TZID=Europe/Berlin:20260326T023000
+            RRULE:\(rule)
+            END:VEVENT
+            """, now: berlinCal.date(from: DateComponents(year: 2026, month: 3, day: 26))!)
+            let days = countedGap.events.map { berlinCal.component(.day, from: $0.start) }
+            c.expect(days == [26, 27, 28, 30, 31], "F07: gap consumes no COUNT for \(rule) (got \(days))")
+            c.expect(countedGap.events.allSatisfy { berlinCal.component(.hour, from: $0.start) == 2 && berlinCal.component(.minute, from: $0.start) == 30 },
+                     "F07: generated occurrences preserve exact local time")
+        }
         let overlapNow = berlinCal.date(from: DateComponents(timeZone: berlin, year: 2026, month: 10, day: 23, hour: 12))!
         let overlap = build("""
         BEGIN:VEVENT

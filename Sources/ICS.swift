@@ -848,10 +848,22 @@ enum RRULEExpander {
         var produced = 0
         var exhausted = false
 
-        @discardableResult func consider(_ day: Date) -> Bool {
+        @discardableResult func consider(_ day: Date, isAnchor: Bool = false) -> Bool {
             guard budget > 0 else { exhausted = true; return false }
             budget -= 1
-            guard let occ = cal.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: time.second ?? 0, of: day), occ >= dtStart else { return true }
+            let occ: Date
+            if isAnchor {
+                // DTSTART is explicit input, not a generated local time.
+                occ = dtStart
+            } else {
+                guard let candidate = cal.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: time.second ?? 0, of: day),
+                      cal.isDate(candidate, inSameDayAs: day),
+                      cal.dateComponents([.hour, .minute, .second], from: candidate) == time else { return true }
+                // Calendar can normalize a DST gap to a different wall time.
+                // Such generated instances must neither appear nor use COUNT.
+                occ = candidate
+            }
+            guard occ >= dtStart else { return true }
             if let until = rule.until, occ > until { exhausted = true; return false }
             produced += 1
             if occ >= windowStart, occ <= windowEnd, !event.exdates.contains(occ) {
@@ -863,7 +875,7 @@ enum RRULEExpander {
 
         // DTSTART is always the first recurrence-set member, even when it does
         // not satisfy a BYxxx filter. COUNT includes it.
-        consider(anchor)
+        consider(anchor, isAnchor: true)
 
         switch rule.freq {
         case .daily, .weekly:
@@ -873,7 +885,7 @@ enum RRULEExpander {
                     ? matchesDaily(day, cal: cal, rule: rule, anchor: anchor, interval: interval)
                     : matchesWeekly(day, cal: cal, rule: rule, anchor: anchor, anchorWeekday: cal.component(.weekday, from: anchor), interval: interval)
                 if matches {
-                    if let occurrence = cal.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: time.second ?? 0, of: day), occurrence != dtStart {
+                    if !cal.isDate(day, inSameDayAs: anchor) {
                         consider(day)
                     }
                 } else if budget > 0 {
@@ -894,7 +906,7 @@ enum RRULEExpander {
                 if monthsAlign(month, cal: cal, rule: rule, anchorComps: anchorComps, interval: interval) {
                     for day in matchingDays(ofMonth: month, cal: cal, rule: rule, anchorComps: anchorComps) {
                         guard day >= firstDay, day <= lastDay else { continue }
-                        if let occurrence = cal.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: time.second ?? 0, of: day), occurrence != dtStart {
+                        if !cal.isDate(day, inSameDayAs: anchor) {
                             consider(day)
                         }
                         if exhausted { break }
