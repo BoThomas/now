@@ -1939,6 +1939,7 @@ enum SelfTest {
             SettingsSection.calendars.rawValue: -900,
             SettingsSection.native.rawValue: -500,
             SettingsSection.reminder.rawValue: -100,
+            SettingsSection.notifications.rawValue: 40,
             SettingsSection.general.rawValue: 170,
             SettingsSection.about.rawValue: 620,
         ]

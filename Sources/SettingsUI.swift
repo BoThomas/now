@@ -10,7 +10,7 @@ enum Links {
 /// The settings sections, in display order — shared by the section headers and
 /// the sidebar navigation.
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case calendars, native, reminder, general, about
+    case calendars, native, reminder, notifications, general, about
 
     var id: String { rawValue }
 
@@ -19,6 +19,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .calendars: return "External Calendars"
         case .native: return "Apple Calendars"
         case .reminder: return "Reminder"
+        case .notifications: return "Notifications"
         case .general: return "General"
         case .about: return "About"
         }
@@ -29,6 +30,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .calendars: return "calendar"
         case .native: return "calendar.badge.clock"
         case .reminder: return "bell.badge"
+        case .notifications: return "bell"
         case .general: return "gearshape"
         case .about: return "info.circle"
         }
@@ -1626,6 +1628,7 @@ struct SettingsView: View {
                     trackedSection(.calendars) { calendarsSection }
                     trackedSection(.native) { nativeSection }
                     trackedSection(.reminder) { reminderSection }
+                    trackedSection(.notifications) { notificationsSection }
                     trackedSection(.general) { generalSection }
                     trackedSection(.about) { aboutSection }
                     GeometryReader { geo in
@@ -2035,6 +2038,17 @@ struct SettingsView: View {
                     onCancel: { showCustomSnoozeTime = false })
             }
             Divider()
+            Picker("On launch or wake, meetings already in progress", selection: Binding(
+                get: { store.settings.catchUpDelivery },
+                set: { value in
+                    store.settings.catchUpDelivery = value
+                    if value == .notification { store.notifications?.requestPermission() }
+                })) {
+                Text("Use normal reminder style").tag(CatchUpDelivery.normal)
+                Text("Use notification").tag(CatchUpDelivery.notification)
+                Text("Skip reminder").tag(CatchUpDelivery.skip)
+            }
+            .fixedSize()
             Picker("During another meeting", selection: Binding(
                 get: { store.settings.inMeetingDelivery },
                 set: { mode in
@@ -2121,15 +2135,23 @@ struct SettingsView: View {
                 }
             }
             Divider()
-            if let notifications = store.notifications {
-                NotificationSettingsView(store: store, notifications: notifications)
-            }
-            Divider()
             ViewThatFits(in: .horizontal) {
                 HStack { reminderPreviewButtons }
                 VStack(alignment: .leading) { reminderPreviewButtons }
             }
         }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.05)))
+    }
+
+    private var notificationsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader(SettingsSection.notifications.title, SettingsSection.notifications.symbol)
+            if let notifications = store.notifications {
+                NotificationSettingsView(store: store, notifications: notifications)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.05)))
     }
