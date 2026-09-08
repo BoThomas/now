@@ -35,7 +35,10 @@ final class AppStore: ObservableObject {
     @Published var subscriptions: [CalendarSubscription] {
         didSet {
             persist()
-            reconcileEvents()
+            let changedURLs = Self.changedSubscriptionURLs(previous: oldValue, current: subscriptions)
+            // Invalidate even A → B → A edits before the replacement fetch starts.
+            for id in changedURLs { _ = fetchTracker.begin(subscriptionID: id) }
+            reconcileEvents(invalidatedCalendarIDs: changedURLs)
             let enabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
             let newlyEnabled = enabledIDs.subtracting(previousEnabledIDs)
             previousEnabledIDs = enabledIDs
@@ -452,22 +455,23 @@ final class AppStore: ObservableObject {
     ///   are dropped.
     /// - Successful results carry feed warnings (degraded events) alongside
     ///   events; failures keep the previous warning untouched.
-    nonisolated static func mergeICS(current: [MeetingEvent], results: [FetchResult], live: [CalendarSubscription], previousErrors: [UUID: String], previousWarnings: [UUID: String] = [:], latestRequestIDs: [UUID: Int] = [:]) -> (events: [MeetingEvent], errors: [UUID: String], warnings: [UUID: String], allSucceeded: Bool, observedCalendarIDs: Set<UUID>) {
+    nonisolated static func mergeICS(current: [MeetingEvent], results: [FetchResult], live: [CalendarSubscription], previousErrors: [UUID: String], previousWarnings: [UUID: String] = [:], latestRequestIDs: [UUID: Int] = [:], invalidatedCalendarIDs: Set<UUID> = []) -> (events: [MeetingEvent], errors: [UUID: String], warnings: [UUID: String], allSucceeded: Bool, observedCalendarIDs: Set<UUID>) {
         let liveByID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0) })
         let colorByID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
         // Muted flags come from the LIVE rules — a fetch that started before a
         // rule edit must land with the new flags applied, exactly like colors.
         let matchers = TitleFilterMatcher.byCalendar(subscriptions: live)
         var events = current.compactMap { event -> MeetingEvent? in
-            guard let subscription = liveByID[event.calendarID], subscription.isEnabled else { return nil }
+            guard !invalidatedCalendarIDs.contains(event.calendarID),
+                  let subscription = liveByID[event.calendarID], subscription.isEnabled else { return nil }
             var copy = event
             if let hex = colorByID[event.calendarID] { copy.colorHex = hex }
             copy.isMuted = matchers[event.calendarID]?.matches(title: event.title) ?? false
             return copy
         }
         let enabledIDs = Set(live.filter(\.isEnabled).map(\.id))
-        var errors = previousErrors.filter { enabledIDs.contains($0.key) }
-        var warnings = previousWarnings.filter { enabledIDs.contains($0.key) }
+        var errors = previousErrors.filter { enabledIDs.contains($0.key) && !invalidatedCalendarIDs.contains($0.key) }
+        var warnings = previousWarnings.filter { enabledIDs.contains($0.key) && !invalidatedCalendarIDs.contains($0.key) }
         var allSucceeded = true
         var observedCalendarIDs: Set<UUID> = []
         for result in results {
@@ -748,22 +752,26 @@ final class AppStore: ObservableObject {
         (alerted.intersection(retainedIDs), snoozed.filter { retainedIDs.contains($0.key) })
     }
 
-    private func reconcileEvents() {
-        let enabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
-        errors = errors.filter { enabledIDs.contains($0.key) }
-        warnings = warnings.filter { enabledIDs.contains($0.key) }
-        let byID = Dictionary(uniqueKeysWithValues: subscriptions.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
-        let enabled = Set(subscriptions.filter(\.isEnabled).map(\.id))
+    nonisolated static func changedSubscriptionURLs(previous: [CalendarSubscription], current: [CalendarSubscription]) -> Set<UUID> {
+        let oldURLs = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0.url) })
+        return Set(current.filter { subscription in
+            guard let oldURL = oldURLs[subscription.id] else { return false }
+            return oldURL != subscription.url
+        }.map(\.id))
+    }
+
+    private func reconcileEvents(invalidatedCalendarIDs: Set<UUID> = []) {
         let native = events.filter { knownNativeCalendarIDs.contains($0.calendarID) }
-        let tintedICS = events.compactMap { event -> MeetingEvent? in
-            if knownNativeCalendarIDs.contains(event.calendarID) { return nil }
-            guard enabled.contains(event.calendarID) else { return nil }
-            var copy = event
-            if let hex = byID[event.calendarID] { copy.colorHex = hex }
-            return copy
-        }
-        let next = TitleFilterMatcher.applying(to: tintedICS, subscriptions: subscriptions) + native
-        commitEvents(next)
+        let reconciled = Self.mergeICS(
+            current: currentICSEvents, results: [], live: subscriptions,
+            previousErrors: errors, previousWarnings: warnings,
+            invalidatedCalendarIDs: invalidatedCalendarIDs)
+        errors = reconciled.errors
+        warnings = reconciled.warnings
+        // A replacement source must not inherit snoozes or suppression history,
+        // including bookkeeping for meetings absent from the last snapshot.
+        reminderSnapshots.invalidate(calendarIDs: invalidatedCalendarIDs)
+        commitEvents(reconciled.events + native)
     }
 
     private func tick() {
@@ -1191,6 +1199,11 @@ private actor CalendarDownloadSlots {
 struct ReminderSnapshotTracker {
     private var calendarByID: [String: UUID] = [:]
     private var missingOnce: Set<String> = []
+
+    mutating func invalidate(calendarIDs: Set<UUID>) {
+        calendarByID = calendarByID.filter { !calendarIDs.contains($0.value) }
+        missingOnce.formIntersection(Set(calendarByID.keys))
+    }
 
     mutating func retainedIDs(current: [MeetingEvent], observedCalendarIDs: Set<UUID>, enabledCalendarIDs: Set<UUID>) -> Set<String> {
         let active = Set(current.map(\.id))

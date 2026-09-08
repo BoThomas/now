@@ -2036,13 +2036,59 @@ enum SelfTest {
         c.expect(disabled.events.map(\.id) == [cachedA.id], "disabled subscription's late result dropped with its events")
         c.expect(disabled.errors[subB.id] == nil && disabled.warnings[subB.id] == nil, "disabled subscription diagnostics are pruned")
 
-        // URL edited mid-flight: old-URL result is stale and dropped; cached events kept.
+        // A URL edit immediately retires the old source, before any fetch response.
+        let oldA = subA
+        var editTracker = FetchTracker()
+        let oldRequest = editTracker.begin(subscriptionID: subA.id)
         subA.url = "https://a.example.com/edited.ics"
-        let edited = AppStore.mergeICS(current: current, results: [
-            FetchResult(subscription: CalendarSubscription(name: "A", url: "https://a.example.com/cal.ics", colorIndex: 0), events: [event("a4", cal: subA.id, minutesFromNow: 1)], error: nil),
+        let invalidated = AppStore.changedSubscriptionURLs(previous: [oldA, subB], current: [subA, subB])
+        c.expect(invalidated == [subA.id], "only changed URLs invalidate sources")
+        var renamed = oldA
+        renamed.name = "Renamed"
+        renamed.colorHex = "#abcdef"
+        c.expect(AppStore.changedSubscriptionURLs(previous: [oldA], current: [renamed, subB]).isEmpty,
+                 "name/color edits and newly added sources do not invalidate cache")
+        for id in invalidated { _ = editTracker.begin(subscriptionID: id) }
+        let cleared = AppStore.mergeICS(current: current, results: [], live: [subA, subB],
+            previousErrors: [subA.id: "old A error", subB.id: "B error"],
+            previousWarnings: [subA.id: "old A warning", subB.id: "B warning"],
+            invalidatedCalendarIDs: invalidated)
+        c.expect(cleared.events.map(\.id) == [cachedB.id], "URL edit immediately clears only old source meetings")
+        c.expect(cleared.errors[subA.id] == nil && cleared.warnings[subA.id] == nil
+                 && cleared.errors[subB.id] == "B error" && cleared.warnings[subB.id] == "B warning",
+                 "URL edit clears only old source diagnostics")
+        let edited = AppStore.mergeICS(current: cleared.events, results: [
+            FetchResult(subscription: oldA, events: [cachedA], error: nil, requestID: oldRequest),
+        ], live: [subA, subB], previousErrors: [:], latestRequestIDs: editTracker.latestPerSubscription)
+        c.expect(edited.events.map(\.id) == [cachedB.id], "old URL result cannot resurrect cleared meetings")
+        let replacementFailure = AppStore.mergeICS(current: cleared.events, results: [
+            FetchResult(subscription: subA, events: [], error: "replacement failed"),
         ], live: [subA, subB], previousErrors: [:])
-        c.expect(edited.events.contains { $0.id == cachedA.id }, "stale URL result keeps cached events")
-        c.expect(!edited.events.contains { $0.uid == "a4" }, "stale URL result not applied")
+        c.expect(replacementFailure.events.map(\.id) == [cachedB.id]
+                 && replacementFailure.errors[subA.id] == "replacement failed",
+                 "broken replacement reports error without old meetings")
+        _ = editTracker.begin(subscriptionID: subA.id)
+        let reverted = AppStore.mergeICS(current: cleared.events, results: [
+            FetchResult(subscription: oldA, events: [cachedA], error: nil, requestID: oldRequest),
+        ], live: [oldA, subB], previousErrors: [:], latestRequestIDs: editTracker.latestPerSubscription)
+        c.expect(reverted.events.map(\.id) == [cachedB.id], "A to B to A edit rejects original in-flight request")
+        let recovered = AppStore.mergeICS(current: replacementFailure.events, results: [
+            FetchResult(subscription: subA, events: [freshA], error: nil),
+        ], live: [subA, subB], previousErrors: replacementFailure.errors)
+        c.expect(recovered.events.contains { $0.id == freshA.id } && recovered.errors[subA.id] == nil,
+                 "successful replacement loads new meetings and clears failure")
+
+        var snapshots = ReminderSnapshotTracker()
+        _ = snapshots.retainedIDs(current: current, observedCalendarIDs: [oldA.id, subB.id], enabledCalendarIDs: [oldA.id, subB.id])
+        _ = snapshots.retainedIDs(current: [cachedB], observedCalendarIDs: [oldA.id], enabledCalendarIDs: [oldA.id, subB.id])
+        snapshots.invalidate(calendarIDs: invalidated)
+        let retained = snapshots.retainedIDs(current: cleared.events, observedCalendarIDs: [], enabledCalendarIDs: [subA.id, subB.id])
+        let bookkeeping = AppStore.prunedBookkeeping(alerted: [cachedA.id, cachedB.id],
+            snoozed: [cachedA.id: cachedA.start, cachedB.id: cachedB.start], retainedIDs: retained)
+        c.expect(bookkeeping.alerted == [cachedB.id] && bookkeeping.snoozed[cachedA.id] == nil
+                 && bookkeeping.snoozed[cachedB.id] != nil,
+                 "replacement clears old reminder history including previously missing meetings")
+
 
         // Empty success (no enabled subscriptions fetched) is vacuous success.
         let empty = AppStore.mergeICS(current: [], results: [], live: [subA, subB], previousErrors: [:])
