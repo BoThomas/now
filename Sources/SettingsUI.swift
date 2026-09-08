@@ -613,6 +613,7 @@ struct SubscriptionRow: View {
     let events: [MeetingEvent]
     let error: String?
     let warning: String?
+    let cacheStatus: String?
     let existingURLs: [String]
     let onMute: (MeetingEvent) -> Void
     let onRemoveRules: (Set<UUID>) -> Void
@@ -708,6 +709,10 @@ struct SubscriptionRow: View {
             Text(subscription.name).font(.system(size: 13, weight: .semibold))
             Text(Self.displayURL(subscription.url)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 .help("Full URL is visible in the edit sheet")
+            if let cacheStatus {
+                Text(cacheStatus).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let error = error {
                 Text(error).font(.system(size: 11)).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
@@ -1761,6 +1766,7 @@ struct SettingsView: View {
                             events: upcomingEvents(for: subscription),
                             error: store.errors[subscription.id],
                             warning: store.warnings[subscription.id],
+                            cacheStatus: store.calendarCacheStatus(subscription.id),
                             existingURLs: store.subscriptions.map(\.url),
                             onMute: { event in store.toggleMute(for: event) },
                             onRemoveRules: { ids in

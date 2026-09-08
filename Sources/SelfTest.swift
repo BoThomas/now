@@ -34,6 +34,7 @@ enum SelfTest {
         settingsTests(&settings)
         var fetch = Checker()
         fetchMergeTests(&fetch)
+        calendarCacheTests(&fetch)
         var bookkeeping = Checker()
         bookkeepingTests(&bookkeeping)
         var filters = Checker()

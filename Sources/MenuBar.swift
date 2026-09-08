@@ -226,7 +226,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return fields.map { "\($0.utf8.count):\($0)" }.joined()
         }.joined(separator: "|")
         let checked = store.lastChecked?.timeIntervalSinceReferenceDate ?? 0
-        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)"
+        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.calendarSyncProblemTitle ?? "")|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -304,9 +304,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             lastSyncItem = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
             updateLastSyncItem(last: last, at: store.displayTime)
         }
-        if !store.errors.isEmpty {
-            let count = store.errors.count
-            let title = "\(count) calendar\(count == 1 ? "" : "s") failed to sync · Details…"
+        if let title = store.calendarSyncProblemTitle {
             let item = menu.addItem(withTitle: title, action: #selector(settingsAction), keyEquivalent: "")
             item.target = self
             item.attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: NSColor.systemRed])

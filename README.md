@@ -50,6 +50,8 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 - Any shared iCal/ICS feed: Google, Outlook, iCloud, CalDAV, …
 - **Apple Calendar**, no links needed; changes show up near-instantly.
 - Recurring events, including moved and cancelled instances.
+- Saved ICS calendars keep meetings and reminders available after an offline restart.
+- Offline status appears in the menu; Settings shows each calendar’s last successful sync.
 - Per-calendar color, on/off switch, title filters.
 - Hide events you've declined.
 
@@ -59,6 +61,14 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 - Native Swift, no Electron.
 
 </details>
+
+## Offline calendars
+
+After a successful ICS sync, `now` saves the fetched meeting occurrences locally. On restart it restores upcoming and ongoing meetings before refreshing. Offline reminders use the same pause, title-filter, and meeting-detection settings as online reminders.
+
+Saved data covers the original fetch window (up to 14 days ahead); it cannot know about later edits or cancellations, or generate meetings beyond that window. The menu reports offline/sync problems in its existing red status row. Settings shows the last successful sync, whether saved data is in use, and when its coverage has expired. “Last synced” still means the last completed full refresh attempt.
+
+Copies live in `~/Library/Application Support/com.thomasboch.now/CalendarCache-v1/`, with owner-only file permissions. They contain meeting details and Join links; feed URLs are represented by a fingerprint. Disabling, removing, or changing a calendar URL clears its saved copy. Storage is bounded to 16 MB per calendar and 64 MB total; storage failures are surfaced without discarding the live agenda. Snoozes and dismissed-reminder history still reset on restart.
 
 ## Building from source
 
@@ -77,6 +87,7 @@ Builds `outputs/now.app` and `outputs/now.zip`. macOS 13+, arm64.
 ./outputs/now.app/Contents/MacOS/now --parse <url-or-file> # inspect any iCal feed
 ./outputs/now.app/Contents/MacOS/now --native [list]       # inspect Apple Calendar access
 ./outputs/now.app/Contents/MacOS/now --meeting            # inspect active meeting audio metadata
+python3 scripts/calendar-cache-smoke.py                 # isolated offline restart/cache checks
 ./release.sh --dry-run                                     # release pipeline check
 ```
 
