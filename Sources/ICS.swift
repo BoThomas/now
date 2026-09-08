@@ -250,29 +250,68 @@ enum ICSParser {
         var events: [ParsedEvent] = []
         var warnings: [String] = []
         var current: [ICSProperty] = []
-        var inEvent = false
-        var nestedComponents: [String] = []
+        var components: [String] = []
+        var completedCalendars = 0
         let lines: [String]
-        do { lines = try unfolded(text) }
+        // Some otherwise valid exports begin with a UTF-8 byte-order mark.
+        let source = text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
+        do { lines = try unfolded(source) }
         catch let error as ICSInputError { return ICSParseResult(error: error.message) }
         catch { return ICSParseResult(error: "Could not read feed") }
         for line in lines {
-            let token = line.trimmingCharacters(in: .whitespaces).uppercased()
-            if inEvent, token.hasPrefix("BEGIN:") {
-                nestedComponents.append(String(token.dropFirst(6)))
-            } else if inEvent, !nestedComponents.isEmpty {
-                if token == "END:\(nestedComponents.last!)" { nestedComponents.removeLast() }
-            } else if token == "BEGIN:VEVENT" {
-                inEvent = true
-                current = []
-            } else if token == "END:VEVENT" {
-                if inEvent, let event = makeEvent(current, warnings: &warnings) { events.append(event) }
-                inEvent = false
-                current = []
-            } else if inEvent, !line.isEmpty, let property = splitProperty(line) {
-                current.append(property)
+            if line.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+            guard let property = splitProperty(line) else {
+                return ICSParseResult(error: "Malformed iCal feed: invalid content line")
+            }
+            if property.name == "BEGIN" || property.name == "END" {
+                let component = property.value.trimmingCharacters(in: .whitespaces).uppercased()
+                guard property.params.isEmpty, !component.isEmpty,
+                      component.utf8.allSatisfy({ (65...90).contains($0) || (48...57).contains($0) || $0 == 45 }) else {
+                    return ICSParseResult(error: "Malformed iCal feed: invalid component boundary")
+                }
+                if property.name == "BEGIN" {
+                    if components.isEmpty {
+                        guard component == "VCALENDAR" else {
+                            return ICSParseResult(error: "Not an iCal feed: expected BEGIN:VCALENDAR")
+                        }
+                    } else if component == "VCALENDAR" {
+                        return ICSParseResult(error: "Malformed iCal feed: nested VCALENDAR")
+                    }
+                    if component == "VEVENT" {
+                        guard components.count == 1, components.first == "VCALENDAR" else {
+                            return ICSParseResult(error: "Malformed iCal feed: VEVENT must belong directly to VCALENDAR")
+                        }
+                        current = []
+                    }
+                    components.append(component)
+                } else {
+                    guard components.last == component else {
+                        return ICSParseResult(error: "Malformed iCal feed: mismatched END component")
+                    }
+                    if component == "VEVENT" {
+                        if let event = makeEvent(current, warnings: &warnings) { events.append(event) }
+                        current = []
+                    }
+                    components.removeLast()
+                    if component == "VCALENDAR" { completedCalendars += 1 }
+                }
+            } else {
+                guard !components.isEmpty else {
+                    return ICSParseResult(error: "Malformed iCal feed: content outside VCALENDAR")
+                }
+                // Only direct VEVENT properties belong to the meeting. Alarm,
+                // timezone, task, and extension-component properties stay out.
+                if components.last == "VEVENT" { current.append(property) }
             }
         }
+        guard components.isEmpty else {
+            return ICSParseResult(error: "Incomplete iCal feed: unclosed component")
+        }
+        guard completedCalendars > 0 else {
+            return ICSParseResult(error: "Not an iCal feed: missing VCALENDAR")
+        }
+        // Do not return any collected events until the entire envelope passes:
+        // a complete prefix followed by a cut-off component is still a failure.
         return ICSParseResult(events: events, warnings: warnings)
     }
 

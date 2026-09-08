@@ -361,8 +361,7 @@ enum SelfTest {
         DTEND:20260826T143000Z
         SUMMARY:End before start
         END:VEVENT
-        END:VCALENDAR
-        """.replacingOccurrences(of: "END:VCALENDAR\n        BEGIN", with: "BEGIN")) // placeholder, replaced below
+        """)
         c.expect(timed.first { $0.uid == "pt30m@test" }.map { $0.end.timeIntervalSince($0.start) } == 1800, "PT30M event duration")
         c.expect(timed.first { $0.uid == "p1dt2h@test" }.map { $0.end.timeIntervalSince($0.start) } == 93_600, "P1DT2H event duration")
         c.expect(timed.first { $0.uid == "negdur@test" }.map { $0.end.timeIntervalSince($0.start) } == 3600, "negative duration falls back to default hour")
@@ -410,8 +409,7 @@ enum SelfTest {
         SUMMARY:Hourly
         RRULE:FREQ=HOURLY
         END:VEVENT
-        END:VCALENDAR
-        """.replacingOccurrences(of: "\n        END:VCALENDAR", with: ""))
+        """)
         c.expect(dates(hourly.events, uid: "hourly@test").count == 1, "HOURLY never expands (got \(dates(hourly.events, uid: "hourly@test").count))")
         c.expect(hourly.warnings.contains { $0.contains("Unsupported RRULE") }, "HOURLY produces a warning")
 
@@ -1045,6 +1043,7 @@ enum SelfTest {
     // MARK: - Parser compliance
 
     static func parserComplianceTests(_ c: inout Checker) {
+        feedStructureTests(&c)
         // Resource limits must reject the input, not continue with truncated properties.
         for description in ["DESCRIPTION:" + String(repeating: "x", count: 20_000),
                             "DESCRIPTION:" + String(repeating: "x", count: 9_000) + "\n " + String(repeating: "y", count: 9_000)] {
@@ -1150,6 +1149,67 @@ enum SelfTest {
         ])
         c.expect(multiConf?.conference == "zoommtg://zoom.us/join?confno=42&pwd=x", "first VALID conference wins over garbage")
         c.expect(multiConf?.attach == "https://meetings.ringcentral.com/j/9", "first VALID attach wins over garbage")
+    }
+
+    static func feedStructureTests(_ c: inout Checker) {
+        let event = "BEGIN:VEVENT\nUID:structure@test\nDTSTART:20260826T100000Z\nSUMMARY:Kept\nEND:VEVENT"
+        let complete = wrap(event)
+        let invalid: [(String, String)] = [
+            ("missing calendar close", "BEGIN:VCALENDAR\nVERSION:2.0"),
+            ("unfinished event", "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:partial\nDTSTART:20260826T100000Z"),
+            ("complete event in incomplete calendar", "BEGIN:VCALENDAR\n" + event),
+            ("complete event followed by partial event", "BEGIN:VCALENDAR\n" + event + "\nBEGIN:VEVENT\nUID:partial"),
+            ("mismatched nested close", "BEGIN:VCALENDAR\nBEGIN:VEVENT\nBEGIN:VALARM\nEND:VEVENT\nEND:VCALENDAR"),
+            ("unclosed timezone", "BEGIN:VCALENDAR\nBEGIN:VTIMEZONE\nBEGIN:STANDARD\nEND:VTIMEZONE\nEND:VCALENDAR"),
+            ("extra closing component", complete + "\nEND:VCALENDAR"),
+            ("event outside calendar", event),
+            ("nested calendar", wrap(wrap(event))),
+            ("nested event", wrap("BEGIN:VEVENT\n" + event + "\nEND:VEVENT")),
+            ("calendar marker in unrelated text", "<html>BEGIN:VCALENDAR</html>"),
+            ("trailing server error", complete + "\nExport failed"),
+            ("empty body", ""),
+        ]
+        let sub = CalendarSubscription(name: "Structure", url: "https://example.com/cal.ics", colorIndex: 0)
+        let now = ISO8601DateFormatter().date(from: "2026-08-25T12:00:00Z")!
+        let cached = MeetingEvent(uid: "cached", title: "Cached meeting", start: now.addingTimeInterval(60),
+                                  end: now.addingTimeInterval(3660), location: nil, notes: nil, link: nil,
+                                  calendarID: sub.id, calendarName: sub.name, colorIndex: 0)
+        for (label, text) in invalid {
+            let parsed = ICSParser.parse(text)
+            c.expect(parsed.error != nil && parsed.events.isEmpty, "\(label): parser rejects whole feed")
+            let fetched = AppStore.decodeFeed(Data(text.utf8), request: FetchRequest(subscription: sub, requestID: 19), now: now)
+            let merged = AppStore.mergeICS(current: [cached], results: [fetched], live: [sub], previousErrors: [:], latestRequestIDs: [sub.id: 19])
+            c.expect(fetched.error != nil && fetched.requestID == 19 && merged.events.map(\.id) == [cached.id]
+                     && merged.errors[sub.id] != nil && !merged.allSucceeded,
+                     "\(label): failed fetch preserves cache and last synced")
+        }
+        for empty in [wrap(""), "\u{FEFF}" + wrap("").replacingOccurrences(of: "\n", with: "\r\n")] {
+            let fetched = AppStore.decodeFeed(Data(empty.utf8), request: FetchRequest(subscription: sub, requestID: 20), now: now)
+            let merged = AppStore.mergeICS(current: [cached], results: [fetched], live: [sub], previousErrors: [sub.id: "previous failure"], latestRequestIDs: [sub.id: 20])
+            c.expect(fetched.error == nil && merged.events.isEmpty && merged.errors.isEmpty && merged.allSucceeded,
+                     "well-formed empty calendar intentionally clears cache and sync error")
+        }
+        let withOtherComponents = wrap("""
+        BEGIN:VTIMEZONE
+        TZID:Europe/Berlin
+        BEGIN:STANDARD
+        DTSTART:20251026T030000
+        TZOFFSETFROM:+0200
+        TZOFFSETTO:+0100
+        END:STANDARD
+        END:VTIMEZONE
+        BEGIN:VTODO
+        SUMMARY:Task
+        END:VTODO
+        \(event)
+        """)
+        for valid in [complete, withOtherComponents, complete.replacingOccurrences(of: "BEGIN:", with: "begin:").replacingOccurrences(of: "END:", with: "end:"), "\u{FEFF}" + complete,
+                      complete.replacingOccurrences(of: "\n", with: "\r\n")] {
+            let parsed = ICSParser.parse(valid)
+            c.expect(parsed.error == nil && parsed.events.count == 1, "balanced feed with supported envelope variants remains accepted")
+        }
+        let multiple = ICSParser.parse(complete + "\n" + wrap(""))
+        c.expect(multiple.error == nil && multiple.events.count == 1, "complete sibling calendar objects accepted")
     }
 
     // MARK: - Link ranking

@@ -17,9 +17,34 @@ struct CalendarFetchSmoke {
         print("PASS: \(message)")
     }
 
+    static func structureTests(base: String) async {
+        var sub = CalendarSubscription(name: "HTTP structure", url: base + "/populated", colorIndex: 0)
+        let populated = await AppStore.performFetch(requests: [FetchRequest(subscription: sub, requestID: 1)])
+        require(populated.count == 1 && populated[0].error == nil && populated[0].events.count == 1, "HTTP complete calendar produces a meeting")
+        let cached = populated[0].events
+        for path in ["incomplete", "incomplete-after-event", "mismatched"] {
+            sub.url = base + "/" + path
+            let results = await AppStore.performFetch(requests: [FetchRequest(subscription: sub, requestID: 2)])
+            let merged = AppStore.mergeICS(current: cached, results: results, live: [sub], previousErrors: [:], latestRequestIDs: [sub.id: 2])
+            require(results.count == 1 && results[0].error != nil && results[0].events.isEmpty,
+                    "HTTP 200 \(path) is a feed failure, not an empty success")
+            require(merged.events.map(\.id) == cached.map(\.id) && merged.errors[sub.id] != nil && !merged.allSucceeded,
+                    "\(path) preserves cached meetings and cannot advance last synced")
+        }
+        sub.url = base + "/fast"
+        let empty = await AppStore.performFetch(requests: [FetchRequest(subscription: sub, requestID: 3)])
+        let cleared = AppStore.mergeICS(current: cached, results: empty, live: [sub], previousErrors: [sub.id: "old failure"], latestRequestIDs: [sub.id: 3])
+        require(cleared.events.isEmpty && cleared.errors.isEmpty && cleared.allSucceeded, "HTTP well-formed empty calendar clears meetings and old errors")
+    }
+
     static func main() async {
         setbuf(stdout, nil)
         let base = CommandLine.arguments[1]
+        await structureTests(base: base)
+        if CommandLine.arguments.contains("--structure-only") {
+            print("CALENDAR STRUCTURE SMOKE OK")
+            return
+        }
         let cap = AppStore.maxFeedBytes
         let exact = await AppStore.fetchData(base + "/exact")
         require(exact.1 == nil && exact.0?.count == cap, "exactly 5 MB accepted")

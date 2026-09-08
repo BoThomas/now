@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Local F03 transport smoke; compiles production sources without starting the app."""
+"""Local calendar ingestion smoke; compiles production sources without starting the app."""
+import argparse
+import datetime
 import gzip
 import http.server
 import json
@@ -9,8 +11,13 @@ import tempfile
 import threading
 import time
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--structure-only", action="store_true", help="Run only HTTP feed-structure/cache checks")
+args = parser.parse_args()
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CAP = 5_000_000
+event_start = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ")
+event = f"BEGIN:VEVENT\r\nUID:http-structure\r\nDTSTART:{event_start}\r\nSUMMARY:HTTP meeting\r\nEND:VEVENT\r\n".encode()
 state = {"active": 0, "peak": 0, "stream_bytes": 0, "stream_stopped": False}
 lock = threading.Lock()
 
@@ -22,7 +29,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         try:
-            if path == "/stats":
+            if path == "/incomplete":
+                body = b"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:partial\r\nDTSTART:20260909T120000Z\r\n"
+            elif path == "/incomplete-after-event":
+                body = b"BEGIN:VCALENDAR\r\n" + event + b"BEGIN:VEVENT\r\nUID:partial\r\n"
+            elif path == "/mismatched":
+                body = b"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nBEGIN:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+            elif path == "/populated":
+                body = b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" + event + b"END:VCALENDAR\r\n"
+            elif path == "/stats":
                 with lock:
                     body = json.dumps(state).encode()
             elif path == "/hold":
@@ -112,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix="now-calendar-smoke-") as directory:
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        subprocess.run([str(executable), f"http://127.0.0.1:{server.server_port}"], check=True, timeout=110)
+        subprocess.run([str(executable), f"http://127.0.0.1:{server.server_port}", *(["--structure-only"] if args.structure_only else [])], check=True, timeout=110)
     finally:
         server.shutdown()
         server.server_close()

@@ -814,10 +814,6 @@ enum NowApp {
             }
             text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
         }
-        guard text.uppercased().contains("BEGIN:VCALENDAR") else {
-            print("Not an iCal feed (\(text.prefix(80))…)")
-            return
-        }
         let subscription = CalendarSubscription(name: "cli", url: target, colorIndex: 0)
         let parsed = ICSParser.parse(text)
         if let error = parsed.error { print("PARSE FAILED: \(error)"); return }

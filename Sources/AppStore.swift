@@ -640,9 +640,6 @@ final class AppStore: ObservableObject {
             return FetchResult(subscription: sub, events: [], error: "Feed larger than \(maxFeedBytes / 1_000_000) MB", requestID: request.requestID)
         }
         let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
-        guard text.uppercased().contains("BEGIN:VCALENDAR") else {
-            return FetchResult(subscription: sub, events: [], error: "Not an iCal feed", requestID: request.requestID)
-        }
         let parsed = ICSBuilder.meetings(fromICS: text, subscription: sub, now: now)
         let warning = parsed.warnings.isEmpty ? nil : parsed.warnings.prefix(5).joined(separator: " · ")
         return FetchResult(subscription: sub, events: parsed.events, error: parsed.error, warning: warning, requestID: request.requestID)
