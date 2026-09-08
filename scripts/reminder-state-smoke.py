@@ -83,6 +83,7 @@ with tempfile.TemporaryDirectory(prefix="now-reminder-smoke-") as directory:
     # Full-refresh tests exercise production ICS orchestration without querying
     # the user's native Calendar store. This test-only stub replaces that query.
     store_text = store.read_text()
+    store_text = store_text.replace("eventCache: CalendarEventCache = CalendarEventCache()", "eventCache: CalendarEventCache = CalendarEventCache(directory: URL(fileURLWithPath: " + json.dumps(str(directory / "cache")) + "))")
     store_text = store_text.replace("    private func commitEvents(", "    func commitEvents(", 1)
     native_start = store_text.index("    func fetchNativeEvents() {")
     native_end = store_text.index("    private func scheduleNativeStoreRefresh()", native_start)

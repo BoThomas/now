@@ -111,6 +111,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        store.prepareForTermination {
+            // terminateLater runs a modal loop; ordinary main-queue Tasks may
+            // stall there. Deliver the reply in the common run-loop modes.
+            RunLoop.main.perform(inModes: [.common]) {
+                MainActor.assumeIsolated { sender.reply(toApplicationShouldTerminate: true) }
+            }
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)

@@ -38,6 +38,10 @@ final class AppStore: ObservableObject {
             let changedURLs = Self.changedSubscriptionURLs(previous: oldValue, current: subscriptions)
             // Invalidate even A → B → A edits before the replacement fetch starts.
             for id in changedURLs { _ = fetchTracker.begin(subscriptionID: id) }
+            let retired = Set(oldValue.filter { old in
+                !subscriptions.contains { $0.id == old.id && $0.isEnabled && $0.url == old.url }
+            }.map(\.id)).union(changedURLs)
+            invalidateCache(retired)
             reconcileEvents(invalidatedCalendarIDs: changedURLs)
             let enabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
             let newlyEnabled = enabledIDs.subtracting(previousEnabledIDs)
@@ -111,6 +115,15 @@ final class AppStore: ObservableObject {
     private var tickTimer: Timer?
     private var refreshTimer: Timer?
     private var started = false
+    private let eventCache: CalendarEventCache
+    private var cacheLoadTask: Task<CalendarCacheLoad, Never>?
+    private var cacheLoaded = false
+    private var shuttingDown = false
+    private var invalidatedRestoreIDs: Set<UUID> = []
+    private var cacheWriteVersions: [UUID: Int] = [:]
+    @Published private(set) var cacheInfo: [UUID: CalendarCacheInfo] = [:]
+    @Published private(set) var cacheIssues: [UUID: String] = [:]
+    @Published private(set) var offlineCalendarIDs: Set<UUID> = []
 
     nonisolated static let transportDelegate = CalendarTransportDelegate()
     nonisolated static let session: URLSession = {
@@ -121,8 +134,11 @@ final class AppStore: ObservableObject {
         return URLSession(configuration: config, delegate: transportDelegate, delegateQueue: nil)
     }()
 
-    init() {
-        let state = Self.loadState()
+    init(eventCache: CalendarEventCache = CalendarEventCache(), initialState: Persisted? = nil) {
+        let state = initialState ?? Self.loadState()
+        self.eventCache = eventCache
+        cacheLoadTask = Task { await eventCache.load(subscriptions: state.subscriptions) }
+        eventCache.retain(Set(state.subscriptions.filter(\.isEnabled).map(\.id)))
         subscriptions = state.subscriptions
         settings = state.settings
         nativeCalendars = state.nativeCalendars
@@ -180,6 +196,80 @@ final class AppStore: ObservableObject {
         refresh()
     }
 
+    /// Restoration is shared by full/targeted refreshes and completes before tick.
+    /// Awaiters re-check the flag after suspension so a snapshot is applied once.
+    func restoreCachedEvents() async {
+        guard !cacheLoaded, let task = cacheLoadTask else { return }
+        let loaded = await task.value
+        guard !cacheLoaded else { return }
+        var restored: [MeetingEvent] = []
+        let date = now()
+        displayTime = date
+        for sub in subscriptions where sub.isEnabled && !invalidatedRestoreIDs.contains(sub.id) {
+            if let snapshot = loaded.snapshots[sub.id], snapshot.matches(sub) {
+                restored += snapshot.events(subscription: sub, now: date)
+                cacheInfo[sub.id] = CalendarCacheInfo(snapshot: snapshot, usingSavedData: true)
+                warnings[sub.id] = snapshot.warning
+            }
+            cacheIssues[sub.id] = loaded.issues[sub.id]
+        }
+        let merged = Self.mergeICS(current: restored, results: [], live: subscriptions,
+                                   previousErrors: errors, previousWarnings: warnings)
+        // Disk restore is not a source observation, nor a successful refresh.
+        commitEvents(merged.events + coloredNativeSnapshot())
+        cacheLoaded = true
+        cacheLoadTask = nil
+        invalidatedRestoreIDs.removeAll()
+    }
+
+    /// Ordinary quit waits for already accepted snapshots, not network requests.
+    func prepareForTermination(_ completion: @escaping @Sendable () -> Void) {
+        shuttingDown = true
+        tickTimer?.invalidate()
+        refreshTimer?.invalidate()
+        eventCache.whenIdle(completion)
+    }
+
+    private func invalidateCache(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        invalidatedRestoreIDs.formUnion(ids)
+        for id in ids {
+            cacheWriteVersions[id, default: 0] += 1
+            cacheInfo.removeValue(forKey: id)
+            cacheIssues.removeValue(forKey: id)
+            offlineCalendarIDs.remove(id)
+        }
+        eventCache.remove(ids)
+    }
+
+    var calendarSyncProblemTitle: String? {
+        let enabled = Set(subscriptions.filter(\.isEnabled).map(\.id))
+        let offline = offlineCalendarIDs.intersection(enabled)
+        let saved = cacheInfo.contains { enabled.contains($0.key) && $0.value.usingSavedData && $0.value.covers(displayTime) }
+        let expired = cacheInfo.contains { enabled.contains($0.key) && !$0.value.covers(displayTime) }
+        if !offline.isEmpty {
+            let detail = expired ? "Saved calendar coverage expired" : (saved ? "Using saved calendars" : "Calendar sync unavailable")
+            let label = offline == enabled ? "Offline" : "\(offline.count) calendar\(offline.count == 1 ? "" : "s") offline"
+            return "\(label) · \(detail) · Details…"
+        }
+        if !errors.isEmpty {
+            let count = errors.count
+            return "\(count) calendar\(count == 1 ? "" : "s") failed to sync · Details…"
+        }
+        if expired { return "Saved calendar coverage expired · Refresh needed · Details…" }
+        if !cacheIssues.isEmpty { return "Offline calendar storage needs attention · Details…" }
+        return nil
+    }
+
+    func calendarCacheStatus(_ id: UUID) -> String? {
+        guard let info = cacheInfo[id] else { return cacheIssues[id] }
+        let stamp = info.fetchedAt.formatted(date: .abbreviated, time: .shortened)
+        let prefix = info.usingSavedData ? "Using saved data. " : ""
+        let coverage = info.covers(displayTime) ? "" : " Saved coverage expired; refresh needed."
+        let issue = cacheIssues[id].map { " " + $0 } ?? ""
+        return "\(prefix)Last successful sync: \(stamp).\(coverage)\(issue)"
+    }
+
     /// Timers must fire in `.common` mode: `.default`-mode timers stall while a
     /// menu is tracking (status menu open) or a modal loop runs — exactly when a
     /// reminder deadline is most likely to pass unnoticed.
@@ -206,7 +296,10 @@ final class AppStore: ObservableObject {
     }
 
     var emptyAgendaText: String {
-        Self.emptyAgendaText(
+        if cacheInfo.values.contains(where: { !$0.covers(displayTime) }) {
+            return "Saved calendar coverage expired. Refresh needed."
+        }
+        return Self.emptyAgendaText(
             configuredCount: subscriptions.count + nativeCalendars.count,
             enabledCount: subscriptions.filter(\.isEnabled).count + nativeCalendars.filter(\.isEnabled).count,
             isRefreshing: isRefreshing,
@@ -438,9 +531,11 @@ final class AppStore: ObservableObject {
     }
 
     func resync(subscriptionID: UUID) {
+        guard !shuttingDown else { return }
         guard let subscription = subscriptions.first(where: { $0.id == subscriptionID }) else { return }
         let requestID = fetchTracker.begin(subscriptionID: subscriptionID)
         Task { [weak self] in
+            await self?.restoreCachedEvents()
             let results = await Self.performFetch(requests: [FetchRequest(subscription: subscription, requestID: requestID)])
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
@@ -450,9 +545,33 @@ final class AppStore: ObservableObject {
     }
 
     private func merge(results: [FetchResult]) {
+        guard !shuttingDown else { return }
         let merged = Self.mergeICS(current: currentICSEvents, results: results, live: subscriptions, previousErrors: errors, previousWarnings: warnings, latestRequestIDs: fetchTracker.latestPerSubscription)
         errors = merged.errors
         warnings = merged.warnings
+        for result in results {
+            guard let live = subscriptions.first(where: { $0.id == result.subscription.id }),
+                  live.isEnabled, live.url == result.subscription.url,
+                  fetchTracker.latestPerSubscription[live.id, default: result.requestID] == result.requestID else { continue }
+            if result.isOffline { offlineCalendarIDs.insert(live.id) }
+            else { offlineCalendarIDs.remove(live.id) }
+            if result.error != nil {
+                if var info = cacheInfo[live.id] { info.usingSavedData = true; cacheInfo[live.id] = info }
+                continue
+            }
+            let snapshot = CalendarCacheSnapshot(subscription: live, events: result.events,
+                                                 fetchedAt: result.fetchedAt ?? now(), warning: result.warning)
+            cacheInfo[live.id] = CalendarCacheInfo(snapshot: snapshot, usingSavedData: false)
+            cacheIssues.removeValue(forKey: live.id)
+            let version = cacheWriteVersions[live.id, default: 0] + 1
+            cacheWriteVersions[live.id] = version
+            eventCache.save(snapshot) { [weak self] issue in
+                Task { @MainActor [weak self] in
+                    guard let self, self.cacheWriteVersions[live.id] == version else { return }
+                    self.cacheIssues[live.id] = issue
+                }
+            }
+        }
         commitEvents(merged.events + coloredNativeSnapshot(), observedCalendarIDs: merged.observedCalendarIDs)
     }
 
@@ -609,6 +728,7 @@ final class AppStore: ObservableObject {
     }
 
     func refresh() {
+        guard !shuttingDown else { return }
         fetchNativeEvents()
         let enabled = subscriptions.filter(\.isEnabled)
         guard !isRefreshing else {
@@ -618,6 +738,7 @@ final class AppStore: ObservableObject {
         isRefreshing = true
         let requestID = fetchTracker.beginFull(subscriptionIDs: enabled.map(\.id))
         Task { [weak self] in
+            await self?.restoreCachedEvents()
             _ = await Self.performFetch(requests: enabled.map { FetchRequest(subscription: $0, requestID: requestID) }) { [weak self] result in
                 await self?.merge(results: [result])
             }
@@ -651,8 +772,9 @@ final class AppStore: ObservableObject {
     }
 
     nonisolated private static func fetch(_ request: FetchRequest) async -> FetchResult {
-        let (data, error) = await fetchData(request.subscription.url)
-        if let error { return FetchResult(subscription: request.subscription, events: [], error: error, requestID: request.requestID) }
+        let transport = await fetchTransport(request.subscription.url)
+        let (data, error) = (transport.data, transport.error)
+        if let error { return FetchResult(subscription: request.subscription, events: [], error: error, requestID: request.requestID, isOffline: transport.isOffline) }
         guard let data else { return FetchResult(subscription: request.subscription, events: [], error: "Empty response", requestID: request.requestID) }
         return decodeFeed(data, request: request, now: Date())
     }
@@ -666,7 +788,7 @@ final class AppStore: ObservableObject {
         let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
         let parsed = ICSBuilder.meetings(fromICS: text, subscription: sub, now: now)
         let warning = parsed.warnings.isEmpty ? nil : parsed.warnings.prefix(5).joined(separator: " · ")
-        return FetchResult(subscription: sub, events: parsed.events, error: parsed.error, warning: warning, requestID: request.requestID)
+        return FetchResult(subscription: sub, events: parsed.events, error: parsed.error, warning: warning, requestID: request.requestID, fetchedAt: now)
     }
 
     /// Count decoded bytes while streaming; never retain an oversized body.
@@ -675,18 +797,20 @@ final class AppStore: ObservableObject {
     nonisolated private static let downloadSlots = CalendarDownloadSlots(limit: maxConcurrentFeeds)
 
     nonisolated static func fetchData(_ urlString: String) async -> (Data?, String?) {
-        guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
-            return (nil, "Invalid URL")
-        }
-        await downloadSlots.acquire()
-        let result = await downloadFeed(url)
-        await downloadSlots.release()
-        return result
+        let result = await fetchTransport(urlString)
+        return (result.data, result.error)
     }
 
-    nonisolated private static func downloadFeed(_ url: URL) async -> (Data?, String?) {
-        guard !Task.isCancelled else { return (nil, "Calendar fetch cancelled") }
-        return await transportDelegate.download(from: url, session: session)
+    nonisolated private static func fetchTransport(_ urlString: String) async -> CalendarTransportResult {
+        guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            return CalendarTransportResult(error: "Invalid URL")
+        }
+        await downloadSlots.acquire()
+        let result: CalendarTransportResult
+        if Task.isCancelled { result = CalendarTransportResult(error: "Calendar fetch cancelled") }
+        else { result = await transportDelegate.download(from: url, session: session) }
+        await downloadSlots.release()
+        return result
     }
 
     private func finishRefresh(fetched: [CalendarSubscription]) {
@@ -793,6 +917,7 @@ final class AppStore: ObservableObject {
     }
 
     private func tick() {
+        guard cacheLoaded, !shuttingDown else { return }
         let now = self.now()
         displayTime = now
         if let until = pausedUntil, now >= until { pausedUntil = nil }
@@ -1014,7 +1139,7 @@ final class CalendarTransportDelegate: NSObject, URLSessionDataDelegate, @unchec
     private let lock = NSLock()
     private var downloads: [Int: CalendarDownload] = [:]
 
-    func download(from url: URL, session: URLSession) async -> (Data?, String?) {
+    func download(from url: URL, session: URLSession) async -> CalendarTransportResult {
         let download = CalendarDownload()
         let task = session.dataTask(with: url)
         register(download, for: task)
@@ -1058,7 +1183,7 @@ final class CalendarTransportDelegate: NSObject, URLSessionDataDelegate, @unchec
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        download(for: task, removing: true)?.complete(error: error?.localizedDescription)
+        download(for: task, removing: true)?.complete(error: error?.localizedDescription, isOffline: CalendarTransportResult.isOffline(error))
     }
 
     nonisolated static func allowsRedirect(from source: URL?, to destination: URL?) -> Bool {
@@ -1082,10 +1207,10 @@ private final class CalendarDownload: @unchecked Sendable {
     static let sizeError = "Feed larger than \(AppStore.maxFeedBytes / 1_000_000) MB"
     private let lock = NSLock()
     private var data = Data()
-    private var outcome: (Data?, String?)?
-    private var continuation: CheckedContinuation<(Data?, String?), Never>?
+    private var outcome: CalendarTransportResult?
+    private var continuation: CheckedContinuation<CalendarTransportResult, Never>?
 
-    func install(_ continuation: CheckedContinuation<(Data?, String?), Never>) {
+    func install(_ continuation: CheckedContinuation<CalendarTransportResult, Never>) {
         lock.lock()
         if let outcome {
             lock.unlock()
@@ -1109,10 +1234,10 @@ private final class CalendarDownload: @unchecked Sendable {
         return true
     }
 
-    func complete(error: String?) {
+    func complete(error: String?, isOffline: Bool = false) {
         lock.lock()
         guard outcome == nil else { lock.unlock(); return }
-        let result: (Data?, String?) = error == nil ? (data, nil) : (nil, error)
+        let result = CalendarTransportResult(data: error == nil ? data : nil, error: error, isOffline: isOffline)
         outcome = result
         data = Data()
         let callback = continuation
@@ -1179,13 +1304,17 @@ struct FetchResult {
     let error: String?
     var warning: String?
     var requestID = 0
+    var fetchedAt: Date?
+    var isOffline = false
 
-    init(subscription: CalendarSubscription, events: [MeetingEvent], error: String?, warning: String? = nil, requestID: Int = 0) {
+    init(subscription: CalendarSubscription, events: [MeetingEvent], error: String?, warning: String? = nil, requestID: Int = 0, fetchedAt: Date? = nil, isOffline: Bool = false) {
         self.subscription = subscription
         self.events = events
         self.error = error
         self.warning = warning
         self.requestID = requestID
+        self.fetchedAt = fetchedAt
+        self.isOffline = isOffline
     }
 }
 
