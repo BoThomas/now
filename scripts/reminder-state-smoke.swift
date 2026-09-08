@@ -1,6 +1,49 @@
 import Foundation
 import AppKit
 
+@MainActor enum QuitSmoke {
+    static var response: NSApplication.ModalResponse = .alertThirdButtonReturn
+    static var buttons: [String] = []
+    static var terminations = 0
+    static func respond(to alert: NSAlert) -> NSApplication.ModalResponse {
+        buttons = alert.buttons.map(\.title)
+        return response
+    }
+    static func terminate() { terminations += 1 }
+
+    static func run() throws {
+        guard let domain = Bundle.main.bundleIdentifier, domain.hasPrefix("com.thomasboch.now.review-smoke.") else {
+            throw ReminderStateSmoke.Failure(message: "Quit test requires disposable bundle")
+        }
+        UserDefaults.standard.setVolatileDomain([AppStore.storageKey: try JSONEncoder().encode(Persisted())], forName: UserDefaults.argumentDomain)
+        defer {
+            UserDefaults.standard.removePersistentDomain(forName: domain)
+            UserDefaults.standard.removeVolatileDomain(forName: UserDefaults.argumentDomain)
+        }
+        _ = NSApplication.shared
+        let delegate = AppDelegate()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        delegate.updateWindow = window
+        window.orderFront(nil)
+        response = .alertThirdButtonReturn
+        delegate.handleQuitRequest()
+        try ReminderStateSmoke.require(buttons == ["Quit now", "Close Window", "Cancel"] && window.isVisible && terminations == 0,
+            "update-window Quit offers shared confirmation; Cancel keeps app and window")
+        response = .alertSecondButtonReturn
+        delegate.handleQuitRequest()
+        try ReminderStateSmoke.require(!window.isVisible && terminations == 0, "Close Window does not quit the app")
+        window.orderFront(nil)
+        response = .alertFirstButtonReturn
+        delegate.handleQuitRequest()
+        try ReminderStateSmoke.require(terminations == 1, "confirmed Quit invokes termination")
+        response = .alertThirdButtonReturn
+        delegate.handleQuitFromWindow(window, closeTitle: "Close Settings")
+        try ReminderStateSmoke.require(buttons == ["Quit now", "Close Settings", "Cancel"], "Settings retains its existing dialog choices")
+        window.close()
+    }
+}
+
 @main
 struct ReminderStateSmoke {
     struct Failure: Error { let message: String }
@@ -229,7 +272,8 @@ struct ReminderStateSmoke {
     @MainActor static func main() async {
         setbuf(stdout, nil)
         do {
-            try await run(base: CommandLine.arguments[1])
+            if CommandLine.arguments.contains("--quit") { try QuitSmoke.run() }
+            else { try await run(base: CommandLine.arguments[1]) }
             print("REMINDER STATE SMOKE OK")
         } catch {
             print("FAIL: \(error)")

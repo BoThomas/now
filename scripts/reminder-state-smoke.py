@@ -69,7 +69,15 @@ with tempfile.TemporaryDirectory(prefix="now-reminder-smoke-") as directory:
     }))
     # Keep the production helpers and tick body; only change test entry/access.
     app = directory / "App.swift"
-    app.write_text((ROOT / "Sources/App.swift").read_text().replace("@main\nenum NowApp", "enum NowApp", 1))
+    app_text = (ROOT / "Sources/App.swift").read_text().replace("@main\nenum NowApp", "enum NowApp", 1)
+    # Exercise the production quit routing/dialog construction without actually
+    # quitting or blocking on a modal. Only the disposable test copy gets hooks.
+    app_text = app_text.replace("private var settingsWindow:", "var settingsWindow:")
+    app_text = app_text.replace("private var updateWindow:", "var updateWindow:")
+    app_text = app_text.replace("private func handleQuitFromWindow(", "func handleQuitFromWindow(")
+    app_text = app_text.replace("alert.runModal()", "QuitSmoke.respond(to: alert)")
+    app_text = app_text.replace("NSApp.terminate(nil)", "QuitSmoke.terminate()")
+    app.write_text(app_text)
     store = directory / "AppStore.swift"
     store.write_text((ROOT / "Sources/AppStore.swift").read_text().replace("private func tick()", "func tick()", 1))
     # Full-refresh tests exercise production ICS orchestration without querying
@@ -95,6 +103,7 @@ with tempfile.TemporaryDirectory(prefix="now-reminder-smoke-") as directory:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         subprocess.run([str(executable), f"http://127.0.0.1:{server.server_port}"], check=True, timeout=30)
+        subprocess.run([str(executable), "--quit"], check=True, timeout=30)
     finally:
         server.shutdown()
         server.server_close()

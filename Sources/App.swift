@@ -168,9 +168,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// showing, otherwise terminate. Every Quit entry point routes through here.
     @objc func handleQuitRequest() {
         if let window = NSApp.keyWindow, window === settingsWindow {
-            handleQuitFromSettings()
+            handleQuitFromWindow(window, closeTitle: "Close Settings")
         } else if alertController.isOpen {
             handleQuitFromAlert()
+        } else if let window = updateWindow, window.isVisible {
+            handleQuitFromWindow(window, closeTitle: "Close Window")
         } else {
             NSApp.terminate(nil)
         }
@@ -204,13 +206,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func handleQuitFromSettings() {
+    private func handleQuitFromWindow(_ window: NSWindow, closeTitle: String) {
         let alert = NSAlert()
         alert.messageText = "Quit now?"
         alert.informativeText = "Reminders will stop until you launch the app again."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Quit now")
-        alert.addButton(withTitle: "Close Settings")
+        alert.addButton(withTitle: closeTitle)
         alert.addButton(withTitle: "Cancel")
         alert.window.level = .floating
         NSApp.activate(ignoringOtherApps: true)
@@ -218,7 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .alertFirstButtonReturn:
             NSApp.terminate(nil)
         case .alertSecondButtonReturn:
-            settingsWindow?.close()
+            window.close()
         default:
             break
         }
