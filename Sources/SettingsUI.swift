@@ -1955,101 +1955,53 @@ struct SettingsView: View {
         seconds == 0 ? "Just in time" : "\(Fmt.leadTime(seconds)) before"
     }
 
-    private func timingMenuLabel(_ title: String) -> some View {
-        HStack(spacing: 12) {
-            Text(title).lineLimit(1)
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 12)
-        .frame(width: 184, height: 32)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.055)))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
-    }
-
     private var reminderSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader(SettingsSection.reminder.title, SettingsSection.reminder.symbol)
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Remind me")
-                    Spacer(minLength: 16)
-                    Menu {
-                        ForEach(Self.leadPresets, id: \.self) { seconds in
-                            Button {
-                                store.settings.leadSeconds = seconds
-                            } label: {
-                                if store.settings.leadSeconds == seconds {
-                                    Label(reminderTimingLabel(seconds), systemImage: "checkmark")
-                                } else {
-                                    Text(reminderTimingLabel(seconds))
-                                }
-                            }
-                        }
-                        Divider()
-                        Button("Custom…") {
-                            showCustomReminderTime = true
-                        }
-                    } label: {
-                        timingMenuLabel(reminderTimingLabel(store.settings.leadSeconds))
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .accessibilityLabel("Reminder timing")
-                    .popover(isPresented: $showCustomReminderTime, arrowEdge: .bottom) {
-                        CustomTimingEditor(title: "Remind me before start", seconds: store.settings.leadSeconds, range: AppSettings.leadSecondsRange,
-                            onApply: { store.settings.leadSeconds = $0; showCustomReminderTime = false },
-                            onCancel: { showCustomReminderTime = false })
-                    }
+            Picker("Remind me", selection: Binding(
+                get: { store.settings.leadSeconds },
+                set: { value in
+                    if value == -1 { showCustomReminderTime = true }
+                    else { store.settings.leadSeconds = value }
                 }
-                .padding(.vertical, 10)
+            )) {
+                ForEach(Array(Set(Self.leadPresets + [store.settings.leadSeconds])).sorted(), id: \.self) { seconds in
+                    Text(reminderTimingLabel(seconds)).tag(seconds)
+                }
                 Divider()
-                HStack {
-                    Text("Snooze")
-                    Spacer(minLength: 16)
-                    Menu {
-                        if store.settings.leadSeconds > 0 {
-                            Button {
-                                store.settings.snoozeSeconds = 0
-                            } label: {
-                                if store.settings.snoozeSeconds == 0 {
-                                    Label("Just in time", systemImage: "checkmark")
-                                } else {
-                                    Text("Just in time")
-                                }
-                            }
-                            Divider()
-                        }
-                        ForEach(AppSettings.snoozeDurations(including: store.settings.snoozeSeconds), id: \.self) { seconds in
-                            Button {
-                                store.settings.snoozeSeconds = seconds
-                            } label: {
-                                if store.settings.snoozeSeconds == seconds {
-                                    Label(Fmt.leadTime(seconds), systemImage: "checkmark")
-                                } else {
-                                    Text(Fmt.leadTime(seconds))
-                                }
-                            }
-                        }
-                        Divider()
-                        Button("Custom…") { showCustomSnoozeTime = true }
-                    } label: {
-                        timingMenuLabel(store.settings.snoozeSeconds == 0 ? "Just in time" : Fmt.leadTime(store.settings.snoozeSeconds))
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .accessibilityLabel("Default snooze")
-                    .popover(isPresented: $showCustomSnoozeTime, arrowEdge: .bottom) {
-                        CustomTimingEditor(title: "Snooze for", seconds: store.settings.snoozeSeconds == 0 ? 60 : store.settings.snoozeSeconds, range: AppSettings.snoozeSecondsRange,
-                            onApply: { store.settings.snoozeSeconds = $0; showCustomSnoozeTime = false },
-                            onCancel: { showCustomSnoozeTime = false })
-                    }
+                Text("Custom…").tag(-1)
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 280, alignment: .leading)
+            .accessibilityLabel("Reminder timing")
+            .popover(isPresented: $showCustomReminderTime, arrowEdge: .bottom) {
+                CustomTimingEditor(title: "Remind me before start", seconds: store.settings.leadSeconds, range: AppSettings.leadSecondsRange,
+                    onApply: { store.settings.leadSeconds = $0; showCustomReminderTime = false },
+                    onCancel: { showCustomReminderTime = false })
+            }
+            Picker("Snooze", selection: Binding(
+                get: { store.settings.snoozeSeconds },
+                set: { value in
+                    if value == -1 { showCustomSnoozeTime = true }
+                    else { store.settings.snoozeSeconds = value }
                 }
-                .padding(.vertical, 10)
+            )) {
+                if store.settings.leadSeconds > 0 {
+                    Text("Just in time").tag(0)
+                }
+                ForEach(AppSettings.snoozeDurations(including: store.settings.snoozeSeconds), id: \.self) { seconds in
+                    Text(Fmt.leadTime(seconds)).tag(seconds)
+                }
+                Divider()
+                Text("Custom…").tag(-1)
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 280, alignment: .leading)
+            .accessibilityLabel("Default snooze")
+            .popover(isPresented: $showCustomSnoozeTime, arrowEdge: .bottom) {
+                CustomTimingEditor(title: "Snooze for", seconds: store.settings.snoozeSeconds == 0 ? 60 : store.settings.snoozeSeconds, range: AppSettings.snoozeSecondsRange,
+                    onApply: { store.settings.snoozeSeconds = $0; showCustomSnoozeTime = false },
+                    onCancel: { showCustomSnoozeTime = false })
             }
             Divider()
             Toggle("Don't interrupt me while I'm in a meeting", isOn: Binding(
@@ -2103,7 +2055,7 @@ struct SettingsView: View {
                         ForEach(AppStore.soundNames, id: \.self) { Text($0) }
                     }
                     .pickerStyle(.menu)
-                    .frame(width: 160)
+                    .frame(width: 160, alignment: .leading)
                     Button {
                         NSSound(named: NSSound.Name(store.settings.soundName))?.play()
                     } label: {
@@ -2133,7 +2085,7 @@ struct SettingsView: View {
                 Text("60 min").tag(60)
             }
             .pickerStyle(.menu)
-            .frame(maxWidth: 240)
+            .frame(maxWidth: 240, alignment: .leading)
             HStack(spacing: 6) {
                 Picker("Show elapsed start time for", selection: $store.settings.elapsedStartMinutes) {
                     Text("Never").tag(-1)
@@ -2145,7 +2097,7 @@ struct SettingsView: View {
                     Text("60 minutes").tag(60)
                 }
                 .pickerStyle(.menu)
-                .frame(maxWidth: 320)
+                .frame(maxWidth: 320, alignment: .leading)
                 Button {
                     showStartedCountdownInfo.toggle()
                 } label: {
@@ -2155,7 +2107,7 @@ struct SettingsView: View {
                 .help("How recently started meetings affect the menu bar countdown")
                 .accessibilityLabel("About elapsed start time")
                 .popover(isPresented: $showStartedCountdownInfo, arrowEdge: .trailing) {
-                    Text("After a meeting starts, now briefly counts backward so you can see that you may still join late. The selected duration is the maximum. If another meeting start is closer, now switches at the midpoint between both starts. This only affects the menu bar countdown; reminder delivery and running meetings in the menu are independent.")
+                    Text("After a meeting starts, now briefly counts backward so you can see that you may still join late. The selected duration is the maximum. If another meeting start is closer, now switches at the midpoint between both starts.")
                         .font(.system(size: 12))
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(14)
