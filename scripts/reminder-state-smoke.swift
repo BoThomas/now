@@ -82,6 +82,17 @@ struct ReminderStateSmoke {
                     "F11: native Resume action clears pause")
         store.tick()
         try require(deliveries.count == 3, "F11: reminder delivery resumes after Resume Now")
+        // Retain the actual scheduled timer independently, then release its
+        // owner. Reflection keeps this lifecycle check out of the production API.
+        var disposable: MenuBarController? = MenuBarController(store: store, alerts: alerts, updates: updates, openSettings: {}, quit: {})
+        weak var releasedController = disposable
+        guard let timer = Mirror(reflecting: disposable!).children.first(where: { $0.label == "buttonTimer" })?.value as? Timer else {
+            throw Failure(message: "Controller timer missing")
+        }
+        try require(timer.isValid, "B3: controller owns a live repeating timer")
+        disposable = nil
+        try require(releasedController == nil, "B3: controller deinitializes when released")
+        try require(!timer.isValid, "B3: deinit invalidates the scheduled timer")
         // Never invoke Join: synthetic URLs must not open a browser.
     }
 

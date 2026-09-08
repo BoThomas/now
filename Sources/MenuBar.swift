@@ -56,6 +56,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     deinit {
+        buttonTimer?.invalidate()
         for observer in trackingObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
