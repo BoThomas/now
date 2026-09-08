@@ -130,3 +130,4 @@ TCC grants (Calendar permission) are keyed to the code signature's *designated r
 - Icon: `make-icon.swift` renders the SF `alarm` symbol white-on-gradient; menu bar uses the same symbol for consistency.
 
 - **Preview isolation**: real delivery replaces preview cards and resets preview state; Preview requests while real reminders are open are ignored. Preview Join only dismisses, preview snooze never writes bookkeeping, and stale Join actions are ignored. Real-to-real deliveries still merge. Pure transition/action tests cover cancellation, mute, and reschedule reconciliation.
+- **Paused agenda**: pause suppresses reminder delivery but keeps dropdown event rows and Join actions available alongside Resume Now. `python3 scripts/reminder-state-smoke.py` checks production reminder state and native menu actions using disposable loopback feeds and a unique app/preferences domain, without opening reminder panels or accessing real calendars.

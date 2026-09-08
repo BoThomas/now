@@ -226,7 +226,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let until = store.pausedUntil == Date.distantFuture ? "indefinitely" : "until \(Fmt.time.string(from: store.pausedUntil ?? Date()))"
             menu.addItem(withTitle: "Reminders paused \(until)", action: nil, keyEquivalent: "")
             menu.addItem(withTitle: "Resume Now", action: #selector(resumeAction), keyEquivalent: "").target = self
-        } else if visible.isEmpty {
+            menu.addItem(.separator())
+        }
+        if visible.isEmpty {
             menu.addItem(withTitle: store.events.isEmpty ? "No calendars loaded" : "No upcoming events", action: nil, keyEquivalent: "")
         } else {
             let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)

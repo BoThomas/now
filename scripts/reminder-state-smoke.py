@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Exercise reminder retention and the native paused menu with synthetic data only."""
+import datetime
+import http.server
+import pathlib
+import plistlib
+import subprocess
+import tempfile
+import threading
+import uuid
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+state = {"empty": False}
+anchor = datetime.datetime.now(datetime.timezone.utc)
+
+def feed(uid):
+    if uid == "a" and state["empty"]:
+        event = ""
+    else:
+        start = anchor + datetime.timedelta(seconds=120 if uid == "a" else 7200)
+        end = start + datetime.timedelta(hours=1)
+        event = (f"BEGIN:VEVENT\nUID:{uid}\nSUMMARY:Synthetic {uid.upper()}\n"
+                 f"DTSTART:{start:%Y%m%dT%H%M%SZ}\nDTEND:{end:%Y%m%dT%H%M%SZ}\n"
+                 f"URL:https://zoom.us/j/{123 if uid == 'a' else 456}\nEND:VEVENT\n")
+    return ("BEGIN:VCALENDAR\nVERSION:2.0\n" + event + "END:VCALENDAR\n").encode()
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        if self.path == "/a-empty":
+            state["empty"] = True
+            body = b"ok"
+        elif self.path == "/a-full":
+            state["empty"] = False
+            body = b"ok"
+        else:
+            body = feed("b" if self.path == "/b" else "a")
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+with tempfile.TemporaryDirectory(prefix="now-reminder-smoke-") as directory:
+    directory = pathlib.Path(directory)
+    bundle = directory / "ReminderSmoke.app" / "Contents"
+    (bundle / "MacOS").mkdir(parents=True)
+    identifier = "com.thomasboch.now.review-smoke." + uuid.uuid4().hex
+    (bundle / "Info.plist").write_bytes(plistlib.dumps({
+        "CFBundleIdentifier": identifier, "CFBundleExecutable": "reminder-smoke", "LSUIElement": True
+    }))
+    # Keep the production helpers and tick body; only change test entry/access.
+    app = directory / "App.swift"
+    app.write_text((ROOT / "Sources/App.swift").read_text().replace("@main\nenum NowApp", "enum NowApp", 1))
+    store = directory / "AppStore.swift"
+    store.write_text((ROOT / "Sources/AppStore.swift").read_text().replace("private func tick()", "func tick()", 1))
+    sources = sorted(str(p) for p in (ROOT / "Sources").glob("*.swift") if p.name not in ["App.swift", "AppStore.swift"])
+    sdk = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
+    executable = bundle / "MacOS/reminder-smoke"
+    subprocess.run(["swiftc", "-parse-as-library", "-swift-version", "5", "-sdk", sdk,
+                    "-target", "arm64-apple-macos13.0", "-module-cache-path", str(directory / "modules"),
+                    *sources, str(app), str(store), str(ROOT / "scripts/reminder-state-smoke.swift"),
+                    "-o", str(executable), "-framework", "SwiftUI", "-framework", "AppKit",
+                    "-framework", "ServiceManagement", "-framework", "EventKit", "-framework", "CoreAudio"], check=True)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        subprocess.run([str(executable), f"http://127.0.0.1:{server.server_port}"], check=True, timeout=30)
+    finally:
+        server.shutdown()
+        server.server_close()
