@@ -54,7 +54,7 @@ struct RRULE: Equatable {
     /// else. Unsupported: non-day-based frequencies, ordinals on DAILY/WEEKLY,
     /// BYWEEKNUM/BYYEARDAY/BYHOUR/BYMINUTE/BYSECOND, unknown fields, COUNT+UNTIL
     /// together, plain YEARLY BYDAY without BYMONTH.
-    static func parse(_ text: String, eventTz: TimeZone?) -> RRULE? {
+    static func parse(_ text: String, eventTz: TimeZone?, dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> RRULE? {
         var freq: Freq?
         var interval = 1
         var count: Int?
@@ -80,7 +80,7 @@ struct RRULE: Equatable {
                 guard let parsed = Int(value), parsed >= 1 else { return nil }
                 count = parsed
             case "UNTIL":
-                guard let parsed = parseUntil(value, eventTz: eventTz) else { return nil }
+                guard let parsed = parseUntil(value, eventTz: eventTz, dateFormatters: dateFormatters) else { return nil }
                 until = parsed
             case "BYDAY":
                 for token in value.split(separator: ",") {
@@ -135,25 +135,17 @@ struct RRULE: Equatable {
         return ByDay(ordinal: ordinal, weekday: weekday)
     }
 
-    static func parseUntil(_ value: String, eventTz: TimeZone?) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
+    static func parseUntil(_ value: String, eventTz: TimeZone?, dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> Date? {
         if value.hasSuffix("Z") {
-            formatter.timeZone = TimeZone(identifier: "UTC")
-            formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
-            return formatter.date(from: value)
+            return dateFormatters.date(value, format: "yyyyMMdd'T'HHmmss'Z'", zone: TimeZone(identifier: "UTC")!)
         }
-        formatter.timeZone = eventTz ?? .current
+        let zone = eventTz ?? .current
         if value.contains("T") {
-            formatter.dateFormat = "yyyyMMdd'T'HHmmss"
-            return formatter.date(from: value)
+            return dateFormatters.date(value, format: "yyyyMMdd'T'HHmmss", zone: zone)
         }
-        formatter.dateFormat = "yyyyMMdd"
-        if let date = formatter.date(from: value) {
-            return date.addingTimeInterval(86399)
-        }
-        return nil
+        return dateFormatters.date(value, format: "yyyyMMdd", zone: zone)?.addingTimeInterval(86399)
     }
+
 }
 
 // MARK: - Parsed event
@@ -238,6 +230,33 @@ enum ICSInputError: Error {
     }
 }
 
+/// Owned by one synchronous feed build; never shared between concurrent feeds.
+/// Lazily retains only the first 16 format/zone combinations. Other combinations
+/// still parse normally, without growing the cache or changing parsing results.
+final class ICSDateFormatters {
+    private struct Key: Hashable {
+        let format: String
+        let zone: TimeZone
+    }
+    private var formatters: [Key: DateFormatter] = [:]
+    var retainedCount: Int { formatters.count }
+
+    func date(_ text: String, format: String, zone: TimeZone) -> Date? {
+        let key = Key(format: format, zone: zone)
+        let formatter: DateFormatter
+        if let existing = formatters[key] {
+            formatter = existing
+        } else {
+            formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = zone
+            formatter.dateFormat = format
+            if formatters.count < 16 { formatters[key] = formatter }
+        }
+        return formatter.date(from: text)
+    }
+}
+
 enum ICSParser {
     // Full span of RFC four-digit calendar years; larger durations cannot
     // describe a supported event and must never reach date/Int arithmetic.
@@ -246,7 +265,7 @@ enum ICSParser {
     static let maxLineLength = 10_000
     private static let consumedDateProperties: Set<String> = ["DTSTART", "DTEND", "DTSTAMP", "EXDATE", "RDATE", "RECURRENCE-ID"]
 
-    static func parse(_ text: String) -> ICSParseResult {
+    static func parse(_ text: String, dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> ICSParseResult {
         var events: [ParsedEvent] = []
         var warnings: [String] = []
         var current: [ICSProperty] = []
@@ -289,7 +308,7 @@ enum ICSParser {
                         return ICSParseResult(error: "Malformed iCal feed: mismatched END component")
                     }
                     if component == "VEVENT" {
-                        if let event = makeEvent(current, warnings: &warnings) { events.append(event) }
+                        if let event = makeEvent(current, warnings: &warnings, dateFormatters: dateFormatters) { events.append(event) }
                         current = []
                     }
                     components.removeLast()
@@ -415,7 +434,7 @@ enum ICSParser {
         return makeEvent(properties, warnings: &sink)
     }
 
-    static func makeEvent(_ properties: [ICSProperty], warnings: inout [String]) -> ParsedEvent? {
+    static func makeEvent(_ properties: [ICSProperty], warnings: inout [String], dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> ParsedEvent? {
         var uid = ""
         var title = ""
         var location = ""
@@ -463,12 +482,12 @@ enum ICSParser {
             case "STATUS":
                 status = property.value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             case "DTSTART":
-                let parsed = parseDate(property, fallbackTimeZone: tz)
+                let parsed = parseDate(property, fallbackTimeZone: tz, dateFormatters: dateFormatters)
                 dtStart = parsed.date
                 tz = parsed.tz
                 isAllDay = parsed.allDay
             case "DTEND":
-                dtEnd = parseDate(property, fallbackTimeZone: tz).date
+                dtEnd = parseDate(property, fallbackTimeZone: tz, dateFormatters: dateFormatters).date
             case "DURATION":
                 duration = parseDuration(property.value)
                 if duration == nil {
@@ -490,7 +509,7 @@ enum ICSParser {
             case "SEQUENCE":
                 sequence = Int(property.value.trimmingCharacters(in: .whitespaces)) ?? 0
             case "DTSTAMP":
-                dtstamp = parseDate(property).date
+                dtstamp = parseDate(property, dateFormatters: dateFormatters).date
             case "CONFERENCE", "X-GOOGLE-CONFERENCE", "X-MICROSOFT-SKYPETEAMSMEETINGURL", "X-MICROSOFT-ONLINEMEETINGURL":
                 // First *valid* link wins — a garbage first property must not
                 // hide a usable later one.
@@ -504,13 +523,13 @@ enum ICSParser {
                 break
             }
         }
-        let rule = rruleText.isEmpty ? nil : RRULE.parse(rruleText, eventTz: tz)
+        let rule = rruleText.isEmpty ? nil : RRULE.parse(rruleText, eventTz: tz, dateFormatters: dateFormatters)
         if !rruleText.isEmpty, rule == nil {
             unsupportedRRULE = rruleText
         }
         // Events need a start unless they are recurrence overrides (a bare
         // RECURRENCE-ID + STATUS:CANCELLED cancellation may omit DTSTART).
-        let ridBestEffort = recurrenceIDProperty.flatMap { parseDate($0, fallbackTimeZone: tz).date }
+        let ridBestEffort = recurrenceIDProperty.flatMap { parseDate($0, fallbackTimeZone: tz, dateFormatters: dateFormatters).date }
         if dtStart == nil, recurrenceIDProperty == nil { return nil }
         if uid.isEmpty {
             let anchor = dtStart?.timeIntervalSince1970 ?? ridBestEffort?.timeIntervalSince1970 ?? 0
@@ -560,14 +579,10 @@ enum ICSParser {
         return timeZone(fromTZID: tzid) == nil
     }
 
-    static func parseDate(_ property: ICSProperty, fallbackTimeZone: TimeZone? = nil) -> (date: Date?, tz: TimeZone?, allDay: Bool) {
+    static func parseDate(_ property: ICSProperty, fallbackTimeZone: TimeZone? = nil, dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> (date: Date?, tz: TimeZone?, allDay: Bool) {
         let value = property.value.trimmingCharacters(in: .whitespaces)
         if property.params["VALUE"] == "DATE" || (value.count == 8 && !value.contains("T")) {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.timeZone = TimeZone(identifier: "UTC")
-            formatter.dateFormat = "yyyyMMdd"
-            return (formatter.date(from: value), nil, true)
+            return (dateFormatters.date(value, format: "yyyyMMdd", zone: TimeZone(identifier: "UTC")!), nil, true)
         }
         var text = value
         var zone: TimeZone?
@@ -577,11 +592,8 @@ enum ICSParser {
         } else if let tzid = property.params["TZID"] {
             zone = timeZone(fromTZID: tzid)
         }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = zone ?? fallbackTimeZone ?? .current
-        formatter.dateFormat = "yyyyMMdd'T'HHmmss"
-        return (formatter.date(from: text), zone, false)
+        return (dateFormatters.date(text, format: "yyyyMMdd'T'HHmmss",
+                                    zone: zone ?? fallbackTimeZone ?? .current), zone, false)
     }
 
     /// Pragmatic Windows/Outlook TZID → IANA mapping (the names Outlook
@@ -1279,7 +1291,8 @@ enum ICSBuilder {
         let resolvedHex = subscription.colorHex.isEmpty ? Palette.hex(for: subscription.colorIndex) : subscription.colorHex
         let windowStart = now.addingTimeInterval(-6 * 3600)
         let windowEnd = now.addingTimeInterval(14 * 86400)
-        let parsed = ICSParser.parse(text)
+        let dateFormatters = ICSDateFormatters()
+        let parsed = ICSParser.parse(text, dateFormatters: dateFormatters)
         if let error = parsed.error { return ICSBuildResult(error: error) }
         var warnings = parsed.warnings
         var result: [MeetingEvent] = []
@@ -1295,7 +1308,7 @@ enum ICSBuilder {
             var occurrences: [(start: Date, event: ParsedEvent)] = []
             if let originalMaster = master {
                 var m = originalMaster
-                m.exdates = Self.resolvedDates(m.exdateProperties, masterTz: m.tz)
+                m.exdates = Self.resolvedDates(m.exdateProperties, masterTz: m.tz, dateFormatters: dateFormatters)
                 if m.unsupportedRRULEText != nil {
                     warnings.append("Unsupported RRULE \"\(m.unsupportedRRULEText!)\" — “\(m.title)” shows only its first occurrence")
                 }
@@ -1321,7 +1334,7 @@ enum ICSBuilder {
                 // RDATE: extra occurrence dates beyond the rule.
                 if !m.isAllDay {
                     let excluded = Set(m.exdates)
-                    let resolvedRDates = Self.resolvedDates(m.rdateProperties, masterTz: m.tz,
+                    let resolvedRDates = Self.resolvedDates(m.rdateProperties, masterTz: m.tz, dateFormatters: dateFormatters,
                         limit: maxEventsPerFeed + 1, window: windowStart...windowEnd,
                         minimum: m.dtStart, excluding: excluded)
                     if resolvedRDates.count > maxEventsPerFeed {
@@ -1345,7 +1358,7 @@ enum ICSBuilder {
                     warnings.append("RECURRENCE-ID RANGE=\(range) is not supported — override ignored")
                     continue
                 }
-                guard let rid = Self.resolvedRecurrenceID(of: override, masterTz: master?.tz) else { continue }
+                guard let rid = Self.resolvedRecurrenceID(of: override, masterTz: master?.tz, dateFormatters: dateFormatters) else { continue }
                 guard seenRids.insert(rid).inserted else { continue } // duplicate revision
                 if let index = occurrences.firstIndex(where: { $0.start == rid }) {
                     occurrences.remove(at: index)
@@ -1400,13 +1413,13 @@ enum ICSBuilder {
 
     /// Resolves EXDATE/RDATE values: their own TZID/`Z` when present, otherwise
     /// the master's DTSTART zone (never the local zone).
-    private static func resolvedDates(_ properties: [ICSProperty], masterTz: TimeZone?, limit: Int? = nil, window: ClosedRange<Date>? = nil, minimum: Date? = nil, excluding: Set<Date> = []) -> [Date] {
+    private static func resolvedDates(_ properties: [ICSProperty], masterTz: TimeZone?, dateFormatters: ICSDateFormatters, limit: Int? = nil, window: ClosedRange<Date>? = nil, minimum: Date? = nil, excluding: Set<Date> = []) -> [Date] {
         var dates: [Date] = []
         var seen = Set<Date>()
         for property in properties {
             for part in property.value.split(separator: ",") {
                 let piece = ICSProperty(name: property.name, params: property.params, value: String(part))
-                if let date = ICSParser.parseDate(piece, fallbackTimeZone: masterTz).date {
+                if let date = ICSParser.parseDate(piece, fallbackTimeZone: masterTz, dateFormatters: dateFormatters).date {
                     guard window?.contains(date) ?? true, minimum.map({ date >= $0 }) ?? true,
                           !excluding.contains(date), seen.insert(date).inserted else { continue }
                     dates.append(date)
@@ -1417,10 +1430,10 @@ enum ICSBuilder {
         return dates
     }
 
-    private static func resolvedRecurrenceID(of override: ParsedEvent, masterTz: TimeZone?) -> Date? {
+    private static func resolvedRecurrenceID(of override: ParsedEvent, masterTz: TimeZone?, dateFormatters: ICSDateFormatters) -> Date? {
         guard let property = override.recurrenceIDProperty else { return nil }
         if override.recurrenceIDHasExplicitZone { return override.recurrenceID }
-        return ICSParser.parseDate(property, fallbackTimeZone: masterTz).date
+        return ICSParser.parseDate(property, fallbackTimeZone: masterTz, dateFormatters: dateFormatters).date
     }
 
     /// A detached override inherits omitted fields from its master: title,

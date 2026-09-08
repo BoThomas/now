@@ -21,6 +21,7 @@ enum SelfTest {
         recurrenceTests(&recurrence)
         var zones = Checker()
         zoneTests(&zones)
+        formatterCacheTests(&zones)
         var overrides = Checker()
         overrideTests(&overrides)
         var compliance = Checker()
@@ -51,6 +52,33 @@ enum SelfTest {
             print("SELFTEST FAILED: \(all.joined(separator: "; "))")
             exit(1)
         }
+    }
+
+    static func formatterCacheTests(_ c: inout Checker) {
+        weak var released: ICSDateFormatters?
+        do {
+            let cache = ICSDateFormatters()
+            released = cache
+            c.expect(cache.retainedCount == 0, "formatter cache starts empty")
+            let zones = ["UTC", "Europe/Berlin", "America/New_York", "Asia/Kathmandu", "Australia/Lord_Howe"]
+                + Array(TimeZone.knownTimeZoneIdentifiers.sorted().prefix(32))
+            for zone in zones {
+                for value in ["20260329T023000", "20261025T023000", "20240229T120000", "20260230T120000", "bad", "20260908T120000Z", "20260908"] {
+                    let property = ICSProperty(name: "DTSTART", params: ["TZID": zone], value: value)
+                    let fresh = ICSParser.parseDate(property)
+                    let reused = ICSParser.parseDate(property, dateFormatters: cache)
+                    c.expect(fresh.date == reused.date && fresh.tz == reused.tz && fresh.allDay == reused.allDay,
+                             "cached date matches fresh formatter: \(zone) \(value)")
+                }
+            }
+            c.expect(cache.retainedCount == 16, "formatter cache stays bounded with excess zones")
+            let floating = ICSProperty(name: "DTSTART", params: [:], value: "20260908T120000")
+            for zone in [TimeZone(identifier: "Europe/Berlin")!, TimeZone(identifier: "America/New_York")!] {
+                c.expect(ICSParser.parseDate(floating, fallbackTimeZone: zone, dateFormatters: cache).date
+                         == ICSParser.parseDate(floating, fallbackTimeZone: zone).date, "cache honors changed fallback zone")
+            }
+        }
+        c.expect(released == nil, "formatter cache released when feed scope ends")
     }
 
     // MARK: - Parser / ICS builder
