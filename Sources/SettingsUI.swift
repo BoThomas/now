@@ -2114,6 +2114,13 @@ struct SettingsView: View {
                         .frame(width: 360, alignment: .leading)
                 }
             }
+            Picker("Meetings in menu", selection: $store.settings.menuMeetingLimit) {
+                ForEach(AppSettings.allowedMenuMeetingLimits, id: \.self) { count in
+                    Text("\(count)").tag(count)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 280, alignment: .leading)
             Toggle("Show countdown in menu bar", isOn: $store.settings.showMenuBarCountdown)
             Toggle("Launch at Login", isOn: $store.settings.launchAtLogin)
             if case .requiresApproval = store.loginItemState {

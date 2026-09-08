@@ -1754,6 +1754,20 @@ enum SelfTest {
     // MARK: - Settings & login item
 
     static func settingsTests(_ c: inout Checker) {
+        c.expect(AppSettings().menuMeetingLimit == 5, "menu defaults to five meetings")
+        let legacyMenu = try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        c.expect(legacyMenu?.menuMeetingLimit == 5, "existing settings retain five-meeting default")
+        for limit in AppSettings.allowedMenuMeetingLimits {
+            var settings = AppSettings()
+            settings.menuMeetingLimit = limit
+            let encoded = try? JSONEncoder().encode(settings)
+            let decoded = encoded.flatMap { try? JSONDecoder().decode(AppSettings.self, from: $0) }
+            c.expect(decoded?.menuMeetingLimit == limit, "menu limit round trips: \(limit)")
+        }
+        for limit in [-1, 0, 4, 16, Int.max] {
+            let decoded = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"menuMeetingLimit\":\(limit)}".utf8))
+            c.expect(decoded?.menuMeetingLimit == 5, "unsupported menu limit falls back to five")
+        }
         c.expect(AppSettings().snoozeSeconds == 0, "new installs default to just-in-time snooze")
         c.expect(Persisted().settings.snoozeSeconds == 0, "new persisted state uses just-in-time snooze")
         let legacySnooze = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\":30,\"soundEnabled\":false}".utf8))

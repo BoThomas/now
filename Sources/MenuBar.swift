@@ -226,7 +226,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return fields.map { "\($0.utf8.count):\($0)" }.joined()
         }.joined(separator: "|")
         let checked = store.lastChecked?.timeIntervalSinceReferenceDate ?? 0
-        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)"
+        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.settings.menuMeetingLimit)"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -250,7 +250,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let timeWidth = visible.map { (Fmt.time.string(from: $0.start) as NSString).size(withAttributes: measure).width }.max() ?? 0
             let running = visible.filter { $0.start <= now && now < $0.end }
             let future = visible.filter { $0.start > now }
-            var remainingSlots = 5
+            var remainingSlots = AppSettings.normalizedMenuMeetingLimit(store.settings.menuMeetingLimit)
 
             func addSection(_ title: String, events: [MeetingEvent]) {
                 let shown = Array(events.prefix(remainingSlots))
