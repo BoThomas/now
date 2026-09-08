@@ -1236,13 +1236,14 @@ enum LinkExtractor {
     }
 
     static func decodeHTMLEntities(_ value: String) -> String {
+        // Decode ampersands last so escaped entity text is not decoded twice.
         value
-            .replacingOccurrences(of: "&amp;", with: "&")
             .replacingOccurrences(of: "&#13;", with: "")
             .replacingOccurrences(of: "&#10;", with: "\n")
             .replacingOccurrences(of: "&quot;", with: "\"")
             .replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&amp;", with: "&")
     }
 }
 

@@ -1271,6 +1271,21 @@ enum SelfTest {
     // MARK: - Link ranking
 
     static func linkRankingTests(_ c: inout Checker) {
+        for (encoded, expected) in [("&amp;lt;", "&lt;"), ("&amp;gt;", "&gt;"),
+                                    ("&amp;quot;", "&quot;"), ("&amp;#10;", "&#10;"),
+                                    ("&amp;#13;", "&#13;"), ("&amp;amp;", "&amp;")] {
+            c.expect(LinkExtractor.decodeHTMLEntities(encoded) == expected, "B7a: decode one layer of \(encoded)")
+        }
+        c.expect(LinkExtractor.decodeHTMLEntities("&lt;&gt;&quot;&#13;&#10;&amp;") == "<>\"\n&", "B7a: supported entities still decode normally")
+        c.expect(LinkExtractor.decodeHTMLEntities("plain &unknown; &") == "plain &unknown; &", "B7a: plain text and unsupported entities stay intact")
+        let htmlLink = ICSParser.parse(wrap("""
+        BEGIN:VEVENT
+        UID:html-entities@test
+        DTSTART:20260826T100000Z
+        X-ALT-DESC;FMTTYPE=text/html:<a href="https://zoom.us/j/123?pwd=abc&amp;lang=en">Join</a>
+        END:VEVENT
+        """))
+        c.expect(htmlLink.events.first.flatMap(LinkExtractor.link)?.absoluteString == "https://zoom.us/j/123?pwd=abc&lang=en", "B7a: HTML Join extraction decodes query separators")
         // F08: scheduled Webex links use a site path plus MTID, not /meet/.
         let webex = "https://example.webex.com/example/j.php?MTID=m123456"
         c.expect(LinkExtractor.isMeetingLink(URL(string: webex)!), "F08: Webex scheduled meeting recognized")
