@@ -1150,6 +1150,14 @@ enum LinkExtractor {
             return true
         }
 
+        // Webex scheduled meetings use /<site>/j.php?MTID=<opaque id>.
+        if host == "webex.com" || host.hasSuffix(".webex.com") {
+            if segments.count == 2, segments[1] == "j.php" {
+                let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                return query.contains { $0.name.uppercased() == "MTID" && !($0.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            }
+        }
+
         if host == "meet.google.com" || host.hasSuffix(".meet.google.com") {
             let code = path.split(separator: "/").first.map(String.init) ?? ""
             let groups = code.split(separator: "-")

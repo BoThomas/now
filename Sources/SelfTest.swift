@@ -1271,6 +1271,23 @@ enum SelfTest {
     // MARK: - Link ranking
 
     static func linkRankingTests(_ c: inout Checker) {
+        // F08: scheduled Webex links use a site path plus MTID, not /meet/.
+        let webex = "https://example.webex.com/example/j.php?MTID=m123456"
+        c.expect(LinkExtractor.isMeetingLink(URL(string: webex)!), "F08: Webex scheduled meeting recognized")
+        c.expect(LinkExtractor.isMeetingLink(URL(string: "https://EXAMPLE.webex.com/example/j.php?mtid=870f_I_167&pwd=abc")!), "F08: Webex query casing and opaque IDs accepted")
+        for bad in ["https://example.webex.com", "https://example.webex.com/help", "https://example.webex.com/recording/123",
+                    "https://example.webex.com/example/j.php", "https://example.webex.com/example/j.php?MTID=%20",
+                    "https://example.webex.com/example/j.php?OTHER=123", "https://webex.com.evil.example/example/j.php?MTID=m123",
+                    "https://fakewebex.com/example/j.php?MTID=m123", "https://example.com/example/j.php?MTID=m123"] {
+            c.expect(!LinkExtractor.isMeetingLink(URL(string: bad)!), "F08: nonmeeting Webex lookalike rejected: \(bad)")
+        }
+        for field in ["URL", "LOCATION", "DESCRIPTION"] {
+            let parsed = ICSParser.parse(wrap("BEGIN:VEVENT\nUID:webex@test\nDTSTART:20260826T100000Z\n\(field):\(webex)\nEND:VEVENT"))
+            c.expect(parsed.events.first.flatMap(LinkExtractor.link)?.absoluteString == webex, "F08: Webex Join extracted from \(field)")
+        }
+        let nativeWebex = NativeCalendarSource.parsedEvent(uid: "webex-native", title: "Webex", location: nil, notes: webex, url: nil,
+                                                         start: Date(timeIntervalSince1970: 1_800_000_000), end: Date(timeIntervalSince1970: 1_800_003_600))
+        c.expect(LinkExtractor.link(from: nativeWebex)?.absoluteString == webex, "F08: native Calendar mapping retains Webex Join")
         let utc = TimeZone(identifier: "UTC")!
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = utc
