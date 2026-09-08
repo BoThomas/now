@@ -1641,15 +1641,19 @@ enum SelfTest {
 
         // Active-meeting policy: defer before start, permanently dismiss from
         // the event start onward, and fail open for inactive/unknown states.
-        let deferred = AppStore.meetingReminderDecision(due: [imminent], suppressionEnabled: true, activity: .meeting(.zoom), now: now)
-        c.expect(deferred.present.isEmpty && deferred.dismiss.isEmpty, "active meeting defers an imminent event")
-        let dismissed = AppStore.meetingReminderDecision(due: [running], suppressionEnabled: true, activity: .meeting(.zoom), now: now)
-        c.expect(dismissed.present.isEmpty && dismissed.dismiss.map(\.uid) == ["running"], "active meeting dismisses a started event")
-        let mixedSuppression = AppStore.meetingReminderDecision(due: [imminent, running], suppressionEnabled: true, activity: .meeting(.zoom), now: now)
-        c.expect(mixedSuppression.present.isEmpty && mixedSuppression.dismiss.map(\.uid) == ["running"], "active meeting handles mixed start boundaries")
-        c.expect(AppStore.meetingReminderDecision(due: [imminent], suppressionEnabled: true, activity: .inactive, now: now).present.count == 1, "inactive meeting detector presents")
-        c.expect(AppStore.meetingReminderDecision(due: [imminent], suppressionEnabled: true, activity: .unknown, now: now).present.count == 1, "unknown meeting detector fails open")
-        c.expect(AppStore.meetingReminderDecision(due: [imminent], suppressionEnabled: false, activity: .meeting(.zoom), now: now).present.count == 1, "disabled meeting suppression presents")
+        var suppression = AppSettings()
+        suppression.inMeetingDelivery = .suppress
+        func route(_ event: MeetingEvent, _ activity: MeetingActivity) -> ReminderRoute {
+            NotificationLogic.route(event: event, settings: suppression, activity: activity,
+                                    catchUp: false, snoozed: false, now: now)
+        }
+        c.expect(route(imminent, .meeting(.zoom)) == .deferReminder, "active meeting defers an imminent event")
+        c.expect(route(running, .meeting(.zoom)) == .handled, "active meeting handles a started event")
+        c.expect([imminent, running].map { route($0, .meeting(.zoom)) } == [.deferReminder, .handled], "active meeting handles mixed start boundaries")
+        c.expect(route(imminent, .inactive) == .fullscreen, "inactive meeting detector presents")
+        c.expect(route(imminent, .unknown) == .fullscreen, "unknown meeting detector fails open")
+        suppression.inMeetingDelivery = .normal
+        c.expect(route(imminent, .meeting(.zoom)) == .fullscreen, "disabled meeting suppression presents")
 
         // Newly due events merge into an open reminder instead of replacing it.
         let shown = event("shown", startIn: 60, duration: 1800)

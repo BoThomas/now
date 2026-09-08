@@ -204,6 +204,14 @@ final class MeetingActivitySource {
     var onActivityChange: ((MeetingActivity) -> Void)?
     var onProbeFailure: ((String) -> Void)?
 
+    private let snapshot: @Sendable () async -> Result<[MeetingAudioOwner], MeetingActivityProbeError>
+
+    init(snapshot: @escaping @Sendable () async -> Result<[MeetingAudioOwner], MeetingActivityProbeError> = {
+        await Task.detached(priority: .utility) { MeetingActivityProbe.snapshot() }.value
+    }) {
+        self.snapshot = snapshot
+    }
+
     private var timer: Timer?
     private var generation = 0
     private var probeInFlight = false
@@ -217,9 +225,7 @@ final class MeetingActivitySource {
 
     func checkCapability(_ completion: @escaping (Result<[MeetingAudioOwner], MeetingActivityProbeError>) -> Void) {
         Task {
-            let result = await Task.detached(priority: .utility) {
-                MeetingActivityProbe.snapshot()
-            }.value
+            let result = await snapshot()
             completion(result)
         }
     }
@@ -269,9 +275,7 @@ final class MeetingActivitySource {
         probeInFlight = true
         let requestGeneration = generation
         Task {
-            let result = await Task.detached(priority: .utility) {
-                MeetingActivityProbe.snapshot()
-            }.value
+            let result = await snapshot()
             guard requestGeneration == generation else { return }
             probeInFlight = false
             switch result {

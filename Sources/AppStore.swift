@@ -4,11 +4,6 @@ import EventKit
 import ServiceManagement
 import UserNotifications
 
-struct MeetingReminderDecision {
-    let present: [MeetingEvent]
-    let dismiss: [MeetingEvent]
-}
-
 enum MenuBarCountdownKind: Equatable {
     /// Count toward (or briefly back from) one or more meetings' shared start.
     case start
@@ -95,6 +90,7 @@ final class AppStore: ObservableObject {
     var openNotificationSyncSettings: (() -> Void)?
     private var reminderLedger = ReminderLedger()
     private let ledgerKey = "local.tboch.now.reminder-ledger.v1"
+    private var catchUpRefresh = CatchUpRefreshTracker()
     private var catchUpBoundary: [UUID: Date] = [:]
     private var catchUpIDs: Set<String> = []
     private var syncNotificationTracker = SyncNotificationTracker()
@@ -112,7 +108,7 @@ final class AppStore: ObservableObject {
 
     /// Owns the single long-lived EKEventStore (see NativeCalendarSource docs).
     let nativeSource = NativeCalendarSource()
-    private let meetingActivitySource = MeetingActivitySource()
+    private let meetingActivitySource: MeetingActivitySource
     private var nativeEvents: [MeetingEvent] = []
     /// Every calendar that ever fed us native events this session — used to tell native
     /// events apart from ICS ones by `calendarID` even after the calendar is removed.
@@ -124,6 +120,8 @@ final class AppStore: ObservableObject {
     private var nativeChangeDebounce: Timer?
     private var activeObserver: NSObjectProtocol?
     private var meetingEnableGeneration = 0
+    private var meetingRetryAt: Date?
+    private var meetingRetryAttempts = 0
 
     private var alerted: Set<String> = []
     private var snoozed: [String: Date] = [:]
@@ -155,11 +153,12 @@ final class AppStore: ObservableObject {
         return URLSession(configuration: config, delegate: transportDelegate, delegateQueue: nil)
     }()
 
-    init(eventCache: CalendarEventCache = CalendarEventCache(), initialState: Persisted? = nil) {
+    init(eventCache: CalendarEventCache = CalendarEventCache(), initialState: Persisted? = nil, meetingActivitySource: MeetingActivitySource? = nil) {
         hadSavedProfile = initialState != nil || UserDefaults.standard.data(forKey: Self.storageKey) != nil
             || UserDefaults(suiteName: Self.legacyDomain)?.data(forKey: Self.storageKey) != nil
         let state = initialState ?? Self.loadState()
         self.eventCache = eventCache
+        self.meetingActivitySource = meetingActivitySource ?? MeetingActivitySource()
         cacheLoadTask = Task { await eventCache.load(subscriptions: state.subscriptions) }
         eventCache.retain(Set(state.subscriptions.filter(\.isEnabled).map(\.id)))
         subscriptions = state.subscriptions
@@ -328,23 +327,22 @@ final class AppStore: ObservableObject {
     }
 
     var emptyAgendaText: String {
-        if cacheInfo.values.contains(where: { !$0.covers(displayTime) }) {
-            return "Saved calendar coverage expired. Refresh needed."
-        }
         return Self.emptyAgendaText(
             configuredCount: subscriptions.count + nativeCalendars.count,
             enabledCount: subscriptions.filter(\.isEnabled).count + nativeCalendars.filter(\.isEnabled).count,
             isRefreshing: isRefreshing,
             hasErrors: !errors.isEmpty,
-            nativeAccessMissing: nativeCalendars.contains(where: \.isEnabled) && !nativeSource.isAuthorized)
+            nativeAccessMissing: nativeCalendars.contains(where: \.isEnabled) && !nativeSource.isAuthorized,
+            expiredCache: cacheInfo.values.contains { !$0.covers(displayTime) })
     }
 
-    nonisolated static func emptyAgendaText(configuredCount: Int, enabledCount: Int, isRefreshing: Bool, hasErrors: Bool, nativeAccessMissing: Bool) -> String {
+    nonisolated static func emptyAgendaText(configuredCount: Int, enabledCount: Int, isRefreshing: Bool, hasErrors: Bool, nativeAccessMissing: Bool, expiredCache: Bool = false) -> String {
         if configuredCount == 0 { return "No calendars added" }
         if enabledCount == 0 { return "No calendars enabled" }
         if isRefreshing { return "Checking calendars…" }
         if hasErrors { return "No upcoming meetings. Some calendars failed to sync." }
         if nativeAccessMissing { return "No upcoming meetings. Calendar access needed." }
+        if expiredCache { return "No upcoming meetings. Some saved calendars need refreshing." }
         return "No upcoming meetings"
     }
 
@@ -518,6 +516,7 @@ final class AppStore: ObservableObject {
     /// Calendar while the app runs must clear native events immediately instead of
     /// showing them until the next periodic refresh.
     private func appBecameActive() {
+        retryMeetingDetection(force: true)
         notifications?.refreshPermission(force: true)
         let before = nativeAuthorization
         refreshNativeAuthorization()
@@ -727,16 +726,18 @@ final class AppStore: ObservableObject {
         meetingEnableGeneration += 1
         let requestGeneration = meetingEnableGeneration
         meetingDetectionError = nil
+        meetingRetryAt = nil
 
         guard enabled else {
             meetingDetectionChecking = false
+            meetingRetryAttempts = 0
             settings.inMeetingDelivery = .normal
             meetingActivitySource.stop()
             return
         }
         guard MeetingActivityProbe.platformPotentiallySupported else {
             meetingDetectionAvailable = false
-            settings.inMeetingDelivery = .normal
+            meetingDetectionChecking = false
             meetingDetectionError = "Meeting detection requires macOS 14 or later."
             return
         }
@@ -744,11 +745,12 @@ final class AppStore: ObservableObject {
         meetingDetectionChecking = true
         meetingActivity = .unknown
         meetingActivitySource.checkCapability { [weak self] result in
-            guard let self, requestGeneration == self.meetingEnableGeneration else { return }
+            guard let self, !self.shuttingDown, requestGeneration == self.meetingEnableGeneration else { return }
             self.meetingDetectionChecking = false
             switch result {
             case .success(let owners):
                 self.meetingDetectionAvailable = true
+                self.meetingRetryAttempts = 0
                 self.settings.inMeetingDelivery = mode
                 self.meetingActivitySource.start(
                     includeBrowsers: self.settings.includeBrowserMeetings,
@@ -761,11 +763,23 @@ final class AppStore: ObservableObject {
                     // changing. Keep the toggle retryable for transient errors.
                     self.meetingDetectionAvailable = nil
                 }
-                self.settings.inMeetingDelivery = .normal
-                self.meetingDetectionError = error.message
+                // A failed opt-in leaves the old choice intact. Restore/retry of
+                // an existing choice must never erase persisted user intent.
+                if self.settings.needsMeetingDetection, error != .processListUnavailable {
+                    self.meetingRetryAttempts = min(self.meetingRetryAttempts + 1, 7)
+                    let delay = min(300.0, 5.0 * pow(2.0, Double(self.meetingRetryAttempts - 1)))
+                    self.meetingRetryAt = self.now().addingTimeInterval(delay)
+                }
+                self.meetingDetectionError = error.message + (self.meetingRetryAt == nil ? "" : " Retrying automatically.")
                 self.meetingActivitySource.stop()
             }
         }
+    }
+
+    private func retryMeetingDetection(force: Bool = false) {
+        guard !shuttingDown, !meetingDetectionChecking, settings.needsMeetingDetection,
+              let retryAt = meetingRetryAt, force || now() >= retryAt else { return }
+        setInMeetingDelivery(settings.inMeetingDelivery)
     }
 
     func applyNotificationSetup(_ choices: NotificationSetupChoices, owners: [MeetingAudioOwner]?) {
@@ -779,6 +793,8 @@ final class AppStore: ObservableObject {
     func applyInitialSetup(_ draft: AppSettings, owners: [MeetingAudioOwner]?) {
         settings = SetupAssistantState.applying(draft, to: settings)
         meetingEnableGeneration += 1
+        meetingRetryAt = nil
+        meetingRetryAttempts = 0
         meetingDetectionChecking = false
         if settings.needsMeetingDetection, let owners {
             meetingDetectionAvailable = true
@@ -790,6 +806,7 @@ final class AppStore: ObservableObject {
     }
 
     func refreshMeetingActivityAfterWake() {
+        retryMeetingDetection(force: true)
         beginNotificationCatchUp()
         notifications?.refreshPermission(force: true)
         meetingActivitySource.refreshAfterWake()
@@ -803,8 +820,7 @@ final class AppStore: ObservableObject {
             pendingRefresh = true
             return
         }
-        isRefreshing = true
-        let requestID = fetchTracker.beginFull(subscriptionIDs: enabled.map(\.id))
+        let requestID = beginFullRefresh(subscriptionIDs: enabled.map(\.id))
         Task { [weak self] in
             await self?.restoreCachedEvents()
             _ = await Self.performFetch(requests: enabled.map { FetchRequest(subscription: $0, requestID: requestID) }) { [weak self] result in
@@ -812,9 +828,16 @@ final class AppStore: ObservableObject {
             }
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
-                self.finishRefresh(fetched: enabled)
+                self.finishRefresh(fetched: enabled, requestID: requestID)
             }
         }
+    }
+
+    private func beginFullRefresh(subscriptionIDs: [UUID]) -> Int {
+        isRefreshing = true
+        let requestID = fetchTracker.beginFull(subscriptionIDs: subscriptionIDs)
+        catchUpRefresh.started(requestID)
+        return requestID
     }
 
     /// A rolling group bounds parsing work; the shared download gate also
@@ -881,7 +904,7 @@ final class AppStore: ObservableObject {
         return result
     }
 
-    private func finishRefresh(fetched: [CalendarSubscription]) {
+    private func finishRefresh(fetched: [CalendarSubscription], requestID: Int) {
         // Results are applied independently on arrival. Completion means checked,
         // not necessarily successful; failures remain visible in per-source errors.
         let completedAt = now()
@@ -889,11 +912,12 @@ final class AppStore: ObservableObject {
         displayTime = completedAt
         isRefreshing = false
         completedInitialRefresh = true
-        // All sources from this launch/wake refresh have had a chance to arrive.
-        // Group catch-up only now; normal upcoming reminders never wait for it.
+        // Only the batch owned by the latest launch/wake releases catch-up.
+        // An older completion may still need to start a queued replacement.
+        let completesCatchUp = catchUpRefresh.finish(requestID)
         drainNotificationResponses()
         tick()
-        catchUpBoundary = [:]
+        if completesCatchUp { catchUpBoundary = [:] }
         if pendingRefresh || fetched.map(\.id) != subscriptions.filter(\.isEnabled).map(\.id) || fetched.map(\.url) != subscriptions.filter(\.isEnabled).map(\.url) {
             pendingRefresh = false
             refresh()
@@ -1011,6 +1035,7 @@ final class AppStore: ObservableObject {
 
     private func tick() {
         guard cacheLoaded, !shuttingDown else { return }
+        retryMeetingDetection()
         let now = self.now()
         displayTime = now
         if let until = pausedUntil, now >= until { pausedUntil = nil }
@@ -1034,7 +1059,7 @@ final class AppStore: ObservableObject {
             case .fullscreen: fullscreen.append(event)
             case .notification: offerNotification([event], catchUp: false, at: now)
             case .catchUp:
-                if !isRefreshing { catchUp.append(event) }
+                if !isRefreshing && !catchUpRefresh.pending { catchUp.append(event) }
             }
         }
         if !catchUp.isEmpty { offerNotification(catchUp, catchUp: true, at: now) }
@@ -1045,6 +1070,7 @@ final class AppStore: ObservableObject {
     }
 
     func beginNotificationCatchUp() {
+        catchUpRefresh.begin()
         let boundary = now()
         catchUpBoundary = Dictionary(uniqueKeysWithValues:
             (subscriptions.filter(\.isEnabled).map(\.id) + nativeCalendars.filter(\.isEnabled).map(\.id)).map { ($0, boundary) })
@@ -1122,7 +1148,7 @@ final class AppStore: ObservableObject {
             sound: settings.soundEnabled && !(settings.notifyDuringMeetings && meetingActivity.isDetectedMeeting)), now: date)
     }
 
-    /// An explicit join from the menu/agenda also handles its reminder.
+    /// Persist an explicit acknowledgement or accepted reminder delivery.
     func acknowledge(_ handled: [MeetingEvent]) {
         for event in handled {
             alerted.insert(event.id)
@@ -1133,10 +1159,16 @@ final class AppStore: ObservableObject {
     }
 
     func joinedMeeting(_ event: MeetingEvent) {
-        acknowledge([event])
+        guard let current = events.first(where: { $0.id == event.id }),
+              Self.joinHandlesReminder(current, leadSeconds: settings.leadSeconds, now: now()) else { return }
+        acknowledge([current])
         for item in notifications?.receipts.values.map({ $0 }) ?? [] where item.keys.contains(NotificationLogic.key(event.id)) {
             notifications?.discard(item.id)
         }
+    }
+
+    nonisolated static func joinHandlesReminder(_ event: MeetingEvent, leadSeconds: Int, now: Date) -> Bool {
+        now >= event.start.addingTimeInterval(-TimeInterval(leadSeconds)) && now < event.end
     }
 
     private func persistReminderLedger() {
@@ -1159,7 +1191,7 @@ final class AppStore: ObservableObject {
             if action != UNNotificationDismissActionIdentifier { openNotificationAgenda?() }
             return
         }
-        if action == "snooze", !isPaused {
+        if action == "snooze" {
             let options = AlertController.snoozeOptions(events: current, now: now(), customSeconds: settings.snoozeSeconds)
             if let plan = AlertController.primarySnoozePlan(options: options, defaultSeconds: settings.snoozeSeconds),
                let schedule = AlertController.snoozeSchedule(plan: plan, events: current, now: now()) {
@@ -1186,8 +1218,13 @@ final class AppStore: ObservableObject {
         let candidates = syncNotificationTracker.candidates(failed: syncFailureIDs, now: date)
         persistSyncNotificationTracker()
         guard !candidates.isEmpty else { return }
-        let keys = candidates.map(\.uuidString).sorted()
-        notifications?.offer(ReminderNotification(id: "now.sync." + NotificationLogic.key(keys.joined()), keys: keys, fingerprints: keys.map { String(syncNotificationTracker.firstFailure[UUID(uuidString: $0)!]!.timeIntervalSince1970) },
+        let failures = candidates.sorted { $0.uuidString < $1.uuidString }.compactMap { id -> (String, String)? in
+            guard let first = syncNotificationTracker.firstFailure[id] else { return nil }
+            return (id.uuidString, String(first.timeIntervalSince1970))
+        }
+        let keys = failures.map { $0.0 }
+        guard !keys.isEmpty else { return }
+        notifications?.offer(ReminderNotification(id: "now.sync." + NotificationLogic.key(keys.joined()), keys: keys, fingerprints: failures.map { $0.1 },
             expires: date.addingTimeInterval(86400), catchUp: false, sync: true,
             title: "Calendar sync needs attention", body: "\(keys.count) calendar\(keys.count == 1 ? " has" : "s have") been unavailable for at least 5 minutes. Open now for details.",
             category: SystemNotificationTransport.category(join: false, snooze: false), sound: false), now: date)
@@ -1206,15 +1243,6 @@ final class AppStore: ObservableObject {
         if notifications.permission.authorization == .notRequested { return "Notification permission needed · Settings…" }
         if notifications.permission.authorization == .allowed && !notifications.permission.alerts { return "Notification banners disabled · Settings…" }
         return nil
-    }
-
-    nonisolated static func meetingReminderDecision(due: [MeetingEvent], suppressionEnabled: Bool, activity: MeetingActivity, now: Date) -> MeetingReminderDecision {
-        guard suppressionEnabled, case .meeting = activity else {
-            return MeetingReminderDecision(present: due, dismiss: [])
-        }
-        return MeetingReminderDecision(
-            present: [],
-            dismiss: due.filter { now >= $0.start })
     }
 
     /// Pure, clock-driven reminder-scheduling decision: which events fire a

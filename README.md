@@ -43,7 +43,7 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 
 **Menu bar**
 - Smart live countdown: briefly shows a meeting that just started (`-3m`), then switches to the closer upcoming start; simultaneous meetings keep their calendar colors.
-- Upcoming events grouped by day: click to join, hover for details.
+- Upcoming events grouped by day: click to join, hover for details. Joining within the reminder lead window or during the meeting dismisses its reminder; opening a link earlier keeps the reminder scheduled.
 - Pause reminders, refresh (⌘R), reminder preview.
 
 **Calendars**

@@ -39,19 +39,19 @@ extension SelfTest {
         }
         let catalog = FeatureGuideCatalog.entries
         var guides = FeatureGuideState()
-        c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true) == [FeatureGuideCatalog.notificationsID], "guide: legacy user sees feature on crossing its introduction")
+        c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true) == [FeatureGuideCatalog.notificationsID], "guide: legacy user sees feature on crossing its introduction")
         for _ in 0..<3 {
-            c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true).isEmpty, "guide: subsequent updates never repeat introduction")
+            c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true).isEmpty, "guide: subsequent updates never repeat introduction")
         }
         let futureGuide = FeatureGuideDefinition(id: "future-feature", content: .information(title: "Future", message: "Explanation"))
-        c.expect(guides.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true, hasCalendar: true) == [futureGuide.id], "guide: future update introduces only its new feature")
+        c.expect(guides.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true) == [futureGuide.id], "guide: future update introduces only its new feature")
         var skipped = FeatureGuideState()
-        c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true, hasCalendar: true).count == 2, "guide: skipped releases collect all new features")
-        _ = skipped.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true)
-        c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true, hasCalendar: true).isEmpty, "guide: downgrade preserves feature history")
+        c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true).count == 2, "guide: skipped releases collect all new features")
+        _ = skipped.acknowledge(catalog: catalog, installedUpdate: true)
+        c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true).isEmpty, "guide: downgrade preserves feature history")
         var initial = FeatureGuideState()
-        c.expect(initial.acknowledge(catalog: catalog + [futureGuide], installedUpdate: false, hasCalendar: false).isEmpty && initial.pendingSettings.isEmpty, "guide: first-run assistant replaces inline setup cards")
-        c.expect(initial.acknowledge(catalog: catalog, installedUpdate: true, hasCalendar: true).isEmpty, "guide: later update does not repeat pending initial setup")
+        c.expect(initial.acknowledge(catalog: catalog + [futureGuide], installedUpdate: false).isEmpty, "guide: first-run assistant replaces inline setup cards")
+        c.expect(initial.acknowledge(catalog: catalog, installedUpdate: true).isEmpty, "guide: later update does not repeat pending initial setup")
         let savedGuides = try? JSONEncoder().encode(guides)
         c.expect(savedGuides.flatMap { try? JSONDecoder().decode(FeatureGuideState.self, from: $0) } == guides, "guide: introduction history persists")
         var updateSettings = AppSettings()
@@ -84,6 +84,28 @@ extension SelfTest {
         legacySuppression.inMeetingDelivery = .suppress
         c.expect(!NotificationSetupChoices(settings: legacySuppression, supportsMeetings: true).duringMeetings, "guide: preserve legacy suppression recommendation")
         c.expect(!NotificationSetupChoices(settings: AppSettings(), supportsMeetings: false).duringMeetings, "guide: unsupported meeting detection not recommended")
+        let legacyGuides = Data(#"{"encountered":["notification-setup-v1"],"pendingSettings":["notification-setup-v1"]}"#.utf8)
+        var migratedGuides = try? JSONDecoder().decode(FeatureGuideState.self, from: legacyGuides)
+        c.expect(migratedGuides?.acknowledge(catalog: catalog, installedUpdate: true).isEmpty == true,
+                 "guide: retired pending cards decode without forgetting encountered history")
+        struct LegacyGuideState: Decodable { let encountered: Set<String>; let pendingSettings: Set<String> }
+        let downgradeGuide = savedGuides.flatMap { try? JSONDecoder().decode(LegacyGuideState.self, from: $0) }
+        c.expect(downgradeGuide?.encountered == guides.encountered && downgradeGuide?.pendingSettings.isEmpty == true,
+                 "guide: new encoding preserves history when an older release decodes it")
+        var catchUpOwner = CatchUpRefreshTracker()
+        catchUpOwner.started(1)
+        catchUpOwner.begin()
+        c.expect(!catchUpOwner.finish(1) && catchUpOwner.pending, "catch-up: pre-wake batch cannot finalize new session")
+        catchUpOwner.started(2)
+        catchUpOwner.begin() // Another wake while the replacement batch runs.
+        c.expect(!catchUpOwner.finish(2) && catchUpOwner.pending, "catch-up: repeated wake revokes old owner")
+        catchUpOwner.started(4) // A targeted generation 3 does not own a full batch.
+        c.expect(!catchUpOwner.finish(3) && catchUpOwner.pending, "catch-up: targeted generation cannot clear cutoff")
+        c.expect(catchUpOwner.finish(4) && !catchUpOwner.pending && !catchUpOwner.finish(4), "catch-up: latest full batch completes once")
+        c.expect(AppStore.emptyAgendaText(configuredCount: 1, enabledCount: 1, isRefreshing: true, hasErrors: false,
+                     nativeAccessMissing: false, expiredCache: true) == "Checking calendars…", "expired cache does not obscure active refresh")
+        c.expect(AppStore.emptyAgendaText(configuredCount: 1, enabledCount: 1, isRefreshing: false, hasErrors: false,
+                     nativeAccessMissing: false, expiredCache: true) == "No upcoming meetings. Some saved calendars need refreshing.", "expired cache message qualifies empty agenda")
         let calendar = UUID()
         func event(_ uid: String = "one", start: TimeInterval = 120, end: TimeInterval = 1800, muted: Bool = false) -> MeetingEvent {
             MeetingEvent(uid: uid, title: "Private title", start: now.addingTimeInterval(start), end: now.addingTimeInterval(end),
@@ -92,6 +114,12 @@ extension SelfTest {
         }
         var settings = AppSettings()
         let future = event(), running = event("running", start: -120)
+        for (date, expected) in [(future.start.addingTimeInterval(-61), false),
+                                 (future.start.addingTimeInterval(-60), true), (future.start, true),
+                                 (future.end.addingTimeInterval(-1), true), (future.end, false)] {
+            c.expect(AppStore.joinHandlesReminder(future, leadSeconds: 60, now: date) == expected,
+                     "join: respects exact lead-window and end boundaries")
+        }
         let meeting = MeetingActivity.meeting(.zoom)
         c.expect(NotificationLogic.route(event: future, settings: settings, activity: .unknown, catchUp: false, snoozed: false, now: now) == .fullscreen, "notification: existing default fullscreen")
         settings.reminderDelivery = .notification

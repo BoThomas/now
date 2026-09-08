@@ -69,7 +69,7 @@ final class NotificationPreview: NSObject, NSApplicationDelegate {
                              location: nil, notes: nil, link: nil, calendarID: source.id, calendarName: source.name, colorIndex: index)
             }
             store.commitEvents(events)
-            store.finishRefresh(fetched: [source])
+            store.finishRefresh(fetched: [source], requestID: store.beginFullRefresh(subscriptionIDs: [source.id]))
             timer = AppStore.commonTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.store.tick() }
             }
@@ -116,7 +116,7 @@ final class SetupAppSmoke {
                     require(delegate.setupWindow?.isVisible == false && NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible }, "finish opens source Settings and closes assistant")
                     require(delegate.store.settings.leadSeconds == 45, "real AppDelegate retains setup settings")
                 }
-                func settingsVisible() -> Bool { NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible } }
+                @MainActor func settingsVisible() -> Bool { NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible } }
                 delegate.notificationInteraction()
                 require(settingsVisible(), "notification preserves already-open Settings")
                 NSApp.windows.first { $0.title == "now · Settings" }?.close()

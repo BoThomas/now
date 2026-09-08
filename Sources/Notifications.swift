@@ -47,6 +47,21 @@ enum NotificationLogic {
     }
 }
 
+/// Only a full batch started for the current launch/wake can finish catch-up.
+/// Targeted generations never participate; a repeated wake revokes the old owner.
+struct CatchUpRefreshTracker {
+    private(set) var pending = false
+    private var owner: Int?
+    mutating func begin() { pending = true; owner = nil }
+    mutating func started(_ requestID: Int) { if pending { owner = requestID } }
+    mutating func finish(_ requestID: Int) -> Bool {
+        guard pending, owner == requestID else { return false }
+        pending = false
+        owner = nil
+        return true
+    }
+}
+
 /// No titles, feed URLs, notes, or join links are stored in acknowledgement data.
 /// Keep absent records until expiry (or two successful source omissions), including
 /// while asynchronously restoring another calendar on launch.
@@ -213,7 +228,6 @@ final class ReminderNotificationController: ObservableObject {
     var onSubmitted: ((ReminderNotification) -> Void)?
     var onResponse: ((ReminderNotification, String) -> Void)?
     var onMeetingPreview: (() -> Void)?
-    var onPermissionChange: (() -> Void)?
 
     init(transport: NotificationTransport, defaults: UserDefaults = .standard) {
         self.transport = transport
@@ -236,7 +250,7 @@ final class ReminderNotificationController: ObservableObject {
             refreshing = false
             lastPermissionCheck = now
             guard revision == permissionRevision else { return }
-            if next != permission { permission = next; retryAfter = [:]; onPermissionChange?() }
+            if next != permission { permission = next; retryAfter = [:] }
         }
     }
     func checkPermission() async -> NotificationPermission {
@@ -246,7 +260,6 @@ final class ReminderNotificationController: ObservableObject {
         if revision == permissionRevision {
             permission = value
             retryAfter = [:]
-            onPermissionChange?()
         }
         return value
     }
@@ -268,7 +281,6 @@ final class ReminderNotificationController: ObservableObject {
         }
         permission = await transport.permission()
         retryAfter = [:]
-        onPermissionChange?()
         return permission.canSubmit
     }
     func offer(_ proposed: ReminderNotification, now: Date) {

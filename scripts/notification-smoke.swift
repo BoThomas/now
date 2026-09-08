@@ -23,6 +23,19 @@ final class FakeNotifications: NotificationTransport {
     func release() { let old = waiting; waiting = []; old.forEach { $0.resume() } }
 }
 
+@MainActor
+final class ScriptedMeetingProbe {
+    var result: Result<[MeetingAudioOwner], MeetingActivityProbeError> = .failure(.inputStateUnavailable)
+    var calls = 0
+    var hold = false
+    var waiting: CheckedContinuation<Result<[MeetingAudioOwner], MeetingActivityProbeError>, Never>?
+    func snapshot() async -> Result<[MeetingAudioOwner], MeetingActivityProbeError> {
+        calls += 1
+        if hold { return await withCheckedContinuation { waiting = $0 } }
+        return result
+    }
+}
+
 @main
 struct NotificationSmoke {
     @MainActor static func settle() async {
@@ -190,12 +203,12 @@ struct NotificationSmoke {
         store.settings.notifyOnCatchUp = true
         let runningA = meeting("runningA", start: 300), runningB = meeting("runningB", start: 400)
         store.beginNotificationCatchUp()
-        store.isRefreshing = true
+        let wakeRequest = store.beginFullRefresh(subscriptionIDs: [source.id])
         store.commitEvents([runningA]); store.tick(); await settle()
         let beforeSecondSource = system.submissions.count
         store.commitEvents([runningA, runningB]); store.tick(); await settle()
         require(system.submissions.count == beforeSecondSource, "catch-up waits for asynchronous refresh completion")
-        store.finishRefresh(fetched: [source]); await settle()
+        store.finishRefresh(fetched: [source], requestID: wakeRequest); await settle()
         require(system.submissions.last?.keys.count == 2 && system.submissions.last?.catchUp == true, "wake groups running meetings")
         let before = system.submissions.count
         store.beginNotificationCatchUp(); store.tick(); await settle()
@@ -203,8 +216,9 @@ struct NotificationSmoke {
         clock = base.addingTimeInterval(1900); store.tick(); await settle()
         require(delivery.receipts.isEmpty, "ended meetings removed from Notification Center")
         store.settings.notifySyncErrors = true
-        store.merge(results: [FetchResult(subscription: source, events: [], error: "Synthetic failure")])
-        store.finishRefresh(fetched: [source])
+        let failureRequest = store.beginFullRefresh(subscriptionIDs: [source.id])
+        store.merge(results: [FetchResult(subscription: source, events: [], error: "Synthetic failure", requestID: failureRequest)])
+        store.finishRefresh(fetched: [source], requestID: failureRequest)
         store.pauseIndefinitely()
         let beforeError = system.submissions.count
         clock = clock.addingTimeInterval(299); store.tick(); await settle()
@@ -221,12 +235,13 @@ struct NotificationSmoke {
         errorDelivery.now = { clock }
         errorRestart.connectNotifications(errorDelivery)
         await errorRestart.restoreCachedEvents()
-        errorRestart.merge(results: [FetchResult(subscription: source, events: [], error: "Still failing")])
-        errorRestart.finishRefresh(fetched: [source]); await settle()
+        let restartRequest = errorRestart.beginFullRefresh(subscriptionIDs: [source.id])
+        errorRestart.merge(results: [FetchResult(subscription: source, events: [], error: "Still failing", requestID: restartRequest)])
+        errorRestart.finishRefresh(fetched: [source], requestID: restartRequest); await settle()
         require(errorTransport.submissions.isEmpty, "continuous failure stays quiet across restart")
-        store.merge(results: [FetchResult(subscription: source, events: [], error: nil)])
+        store.merge(results: [FetchResult(subscription: source, events: [], error: nil, requestID: failureRequest)])
         store.tick()
-        store.merge(results: [FetchResult(subscription: source, events: [], error: "New failure")])
+        store.merge(results: [FetchResult(subscription: source, events: [], error: "New failure", requestID: failureRequest)])
         store.tick()
         clock = clock.addingTimeInterval(300); store.tick(); await settle()
         require(system.submissions.count == beforeError + 2, "recovery re-arms a new failure episode")
@@ -263,7 +278,7 @@ struct NotificationSmoke {
             let previewDelivery = ReminderNotificationController(transport: previewTransport, defaults: previewDefaults)
             previewStore.connectNotifications(previewDelivery)
             let updateGuides = FeatureGuideController(defaults: previewDefaults)
-            updateGuides.startupHealthAcknowledged(installedUpdate: true, hasCalendar: true)
+            updateGuides.startupHealthAcknowledged(installedUpdate: true)
             previewStore.featureGuides = updateGuides
             let previewUpdates = UpdateController(store: previewStore)
             previewUpdates.windowContent = .installed(version: "1.11.0")
@@ -287,8 +302,8 @@ struct NotificationSmoke {
         }
         updater.dismissWindow()
         let nextGuides = FeatureGuideController()
-        nextGuides.startupHealthAcknowledged(installedUpdate: true, hasCalendar: true)
-        require(nextGuides.updateIDs.isEmpty && nextGuides.settingsIDs.isEmpty, "closed guide does not reappear after next update")
+        nextGuides.startupHealthAcknowledged(installedUpdate: true)
+        require(nextGuides.updateIDs.isEmpty, "closed guide does not reappear after next update")
         store.settings.notifySyncErrors = false
         store.settings.notifyUpdates = true
         store.settings.automaticUpdateChecks = true
@@ -381,6 +396,178 @@ struct NotificationSmoke {
             delivery.onResponse?(item, UNNotificationDefaultActionIdentifier)
             require(details.map(\.id) == selected.map(\.id) && !agendaOpened, "notification body opens matching meeting details without agenda/settings")
         }
+        // Old batches and repeated wakes must never consume a newer cutoff.
+        store.resume()
+        clock = base
+        store.settings.inMeetingDelivery = .normal
+        for mode in [CatchUpDelivery.notification, .skip] {
+            store.settings.reminderDelivery = .fullscreen
+            store.settings.catchUpDelivery = mode
+            store.commitEvents([])
+            let oldBatch = store.beginFullRefresh(subscriptionIDs: [source.id])
+            store.beginNotificationCatchUp()
+            store.finishRefresh(fetched: [source], requestID: oldBatch)
+            let firstWakeBatch = store.beginFullRefresh(subscriptionIDs: [source.id])
+            store.beginNotificationCatchUp() // A second wake queues another full batch.
+            store.finishRefresh(fetched: [source], requestID: firstWakeBatch)
+            let latestBatch = store.beginFullRefresh(subscriptionIDs: [source.id])
+            let discovered = meeting("review-wake-\(mode)", start: -120)
+            store.commitEvents([discovered])
+            let beforeCatchUp = system.submissions.count
+            store.tick(); await settle()
+            require(!fullscreen.contains(discovered.id) && system.submissions.count == beforeCatchUp,
+                    "new wake discovery never goes fullscreen or notifies before its batch finishes")
+            store.finishRefresh(fetched: [source], requestID: latestBatch); await settle()
+            require(!fullscreen.contains(discovered.id), "old completions preserve notification/skip route")
+            require(system.submissions.count == beforeCatchUp + (mode == .notification ? 1 : 0),
+                    "latest batch releases catch-up notification or retains skip")
+            let upcoming = meeting("review-after-cutoff-\(mode)", start: 30)
+            store.commitEvents([upcoming]); store.tick(); await settle()
+            require(fullscreen.contains(upcoming.id), "post-cutoff meeting retains normal delivery")
+        }
+
+        // Exercise the actual pendingRefresh chain without a network request.
+        let queuedSource = CalendarSubscription(name: "Queued", url: "invalid", colorIndex: 0)
+        var queuedSettings = AppSettings(); queuedSettings.catchUpDelivery = .notification
+        let queued = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("queued")),
+            initialState: Persisted(subscriptions: [queuedSource], settings: queuedSettings))
+        queued.now = { clock }
+        await queued.restoreCachedEvents()
+        let queuedTransport = FakeNotifications()
+        let queuedDelivery = ReminderNotificationController(transport: queuedTransport)
+        queuedDelivery.now = { clock }; queued.connectNotifications(queuedDelivery)
+        var queuedFullscreen = 0; queued.onAlert = { queuedFullscreen += $0.count }
+        let oldQueued = queued.beginFullRefresh(subscriptionIDs: [queuedSource.id])
+        queued.beginNotificationCatchUp(); queued.refresh() // Sets pendingRefresh.
+        queued.finishRefresh(fetched: [queuedSource], requestID: oldQueued) // Starts queued full batch.
+        let queuedEvent = MeetingEvent(uid: "queued", title: "Queued discovery", start: base.addingTimeInterval(-30),
+            end: base.addingTimeInterval(1800), location: nil, notes: nil, link: nil,
+            calendarID: queuedSource.id, calendarName: queuedSource.name, colorIndex: 0)
+        queued.commitEvents([queuedEvent]); queued.tick()
+        await settle()
+        require(queuedFullscreen == 0 && queuedTransport.submissions.count == 1 && queuedTransport.submissions[0].catchUp,
+                "pendingRefresh hands catch-up ownership to the queued full batch")
+        // Restore the first store's synthetic profile for the restart assertions below.
+        store.settings.reminderDelivery = .fullscreen
+
+        // Explicit joins only acknowledge within the lead window; both choices survive reload.
+        store.settings.catchUpDelivery = .normal
+        let early = meeting("review-early", start: 86400, end: 90000)
+        let dueJoin = meeting("review-due-join", start: 86400, end: 90000)
+        store.commitEvents([early, dueJoin]); store.joinedMeeting(early)
+        clock = dueJoin.start.addingTimeInterval(-TimeInterval(store.settings.leadSeconds))
+        store.joinedMeeting(dueJoin)
+        let joinRestart = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("join-restart")))
+        joinRestart.now = { clock }
+        await joinRestart.restoreCachedEvents()
+        joinRestart.commitEvents([early, dueJoin])
+        var joinAlerts: [String] = []
+        joinRestart.onAlert = { joinAlerts += $0.map(\.id) }
+        joinRestart.tick(); await settle()
+        require(joinAlerts == [early.id], "early join preserves reminder; lead-window join remains handled after restart")
+
+        clock = base
+        store.settings.reminderDelivery = .notification
+        store.settings.snoozeSeconds = 60
+        for deferred in [false, true] {
+            let event = meeting("review-paused-snooze-\(deferred)", start: 0)
+            store.commitEvents([event]); store.tick(); await settle()
+            let receipt = delivery.receipts.values.first { $0.keys.contains(NotificationLogic.key(event.id)) }!
+            let request = deferred ? store.beginFullRefresh(subscriptionIDs: [source.id]) : nil
+            if deferred { delivery.receive(id: receipt.id, action: "snooze") }
+            store.pauseIndefinitely()
+            if !deferred { delivery.receive(id: receipt.id, action: "snooze") }
+            if let request { store.finishRefresh(fetched: [source], requestID: request) }
+            let countBefore = system.submissions.count
+            clock = base.addingTimeInterval(61)
+            store.tick(); await settle()
+            require(system.submissions.count == countBefore, "paused explicit snooze remains quiet")
+            store.resume(); store.tick(); await settle()
+            require(system.submissions.count == countBefore + 1, "direct/deferred Snooze re-arms through pause")
+            clock = base
+        }
+        let unsafeSnooze = meeting("review-unsafe-snooze", start: 0, end: 2)
+        store.commitEvents([unsafeSnooze]); store.tick(); await settle()
+        let unsafeReceipt = delivery.receipts.values.first { $0.keys.contains(NotificationLogic.key(unsafeSnooze.id)) }!
+        store.pauseIndefinitely(); details = []
+        delivery.receive(id: unsafeReceipt.id, action: "snooze")
+        require(details.map(\.id) == [unsafeSnooze.id], "paused Snooze with no safe duration opens current details")
+        store.resume()
+        let endedSnooze = meeting("review-ended-snooze", start: 0, end: 90)
+        store.commitEvents([endedSnooze]); store.tick(); await settle()
+        let endedReceipt = delivery.receipts.values.first { $0.keys.contains(NotificationLogic.key(endedSnooze.id)) }!
+        store.pauseIndefinitely(); delivery.receive(id: endedReceipt.id, action: "snooze")
+        clock = base.addingTimeInterval(91)
+        let beforeEnded = system.submissions.count
+        store.resume(); store.tick(); await settle()
+        require(system.submissions.count == beforeEnded, "snooze never re-fires after meeting end")
+        clock = base
+        let pair = [meeting("review-pair-a", start: 0), meeting("review-pair-b", start: 0)]
+        store.commitEvents(pair)
+        let pairBefore = system.submissions.count
+        store.tick(); await settle()
+        require(system.submissions.count == pairBefore + 2 && system.submissions.suffix(2).allSatisfy { $0.keys.count == 1 && !$0.catchUp },
+                "ordinary simultaneous reminders keep independent actions")
+
+        // Startup detection retries with persisted intent, bounded backoff and cancellation.
+        let probe = ScriptedMeetingProbe()
+        let probeSource = MeetingActivitySource(snapshot: { await probe.snapshot() })
+        var probeSettings = AppSettings(); probeSettings.inMeetingDelivery = .notification
+        let probeStore = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("probe")),
+            initialState: Persisted(subscriptions: [], settings: probeSettings), meetingActivitySource: probeSource)
+        probeStore.now = { clock }
+        probeStore.start(); await settle()
+        require(probe.calls == 1 && probeStore.settings.inMeetingDelivery == .notification && probeStore.meetingDetectionError != nil,
+                "startup failure preserves notification preference and exposes error")
+        let savedProbeSettings = UserDefaults.standard.data(forKey: AppStore.storageKey)!
+        require((try? JSONDecoder().decode(Persisted.self, from: savedProbeSettings))?.settings.inMeetingDelivery == .notification,
+                "failed startup retains choice on disk")
+        clock = base.addingTimeInterval(4); probeStore.retryMeetingDetection(); await settle()
+        require(probe.calls == 1, "capability retry respects initial backoff")
+        clock = base.addingTimeInterval(5); probeStore.retryMeetingDetection(); await settle()
+        require(probe.calls == 2, "capability retries automatically at deadline")
+        clock = base.addingTimeInterval(14); probeStore.retryMeetingDetection(); await settle()
+        require(probe.calls == 2, "second failure doubles backoff")
+        probe.result = .success([])
+        probeStore.refreshMeetingActivityAfterWake(); await settle()
+        require(probe.calls == 3 && probeStore.meetingDetectionError == nil && probeStore.settings.inMeetingDelivery == .notification,
+                "wake retries early and successful capability restores detection")
+        probeStore.setInMeetingDelivery(.normal)
+        probe.result = .failure(.inputStateUnavailable)
+        probeStore.setInMeetingDelivery(.suppress); await settle()
+        require(probeStore.settings.inMeetingDelivery == .normal, "failed fresh opt-in leaves delivery unchanged")
+        let freshCalls = probe.calls
+        clock = base.addingTimeInterval(1000); probeStore.retryMeetingDetection(force: true); await settle()
+        require(probe.calls == freshCalls, "failed fresh opt-in does not silently retry enablement")
+        probeStore.settings.inMeetingDelivery = .suppress
+        probeStore.setInMeetingDelivery(.suppress); await settle()
+        for _ in 0..<8 { probeStore.retryMeetingDetection(force: true); await settle() }
+        let cappedCalls = probe.calls
+        clock = clock.addingTimeInterval(299); probeStore.retryMeetingDetection(); await settle()
+        require(probe.calls == cappedCalls, "repeated failures wait for capped backoff")
+        clock = clock.addingTimeInterval(1); probeStore.retryMeetingDetection(); await settle()
+        require(probe.calls == cappedCalls + 1, "retry backoff caps at five minutes")
+        probe.result = .success([])
+        probeStore.appBecameActive(); await settle()
+        require(probe.calls == cappedCalls + 2 && probeStore.meetingDetectionError == nil,
+                "activation recovers saved suppression before retry deadline")
+        probeStore.setInMeetingDelivery(.normal)
+        probe.hold = true
+        probeStore.setInMeetingDelivery(.notification); await settle()
+        probeStore.setInMeetingDelivery(.normal)
+        probe.waiting!.resume(returning: .success([])); probe.waiting = nil
+        await settle()
+        require(probeStore.settings.inMeetingDelivery == .normal && !probeStore.meetingDetectionChecking,
+                "disabled setting rejects late successful capability callback")
+        probe.hold = false
+        probeStore.settings.inMeetingDelivery = .suppress
+        probe.result = .failure(.processListUnavailable)
+        probeStore.setInMeetingDelivery(.suppress); await settle()
+        let unsupportedCalls = probe.calls
+        probeStore.retryMeetingDetection(force: true); await settle()
+        require(probe.calls == unsupportedCalls && probeStore.settings.inMeetingDelivery == .suppress && probeStore.meetingDetectionAvailable == false,
+                "unsupported capability preserves preference without endless retries")
+        probeStore.setInMeetingDelivery(.normal)
         print("NOTIFICATION SMOKE OK — async races, permission recovery, routing, privacy, snooze, restart, wake grouping, cleanup, update notices, feature migration")
     }
 }

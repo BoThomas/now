@@ -78,3 +78,22 @@ Permission gates effective choices without erasing the draft: unavailable notifi
 Previews share a settings-driven sample event: its start is the configured lead time from now, and its duration accommodates the configured snooze. Fullscreen and notification preview snoozes only dismiss the sample; they never schedule another reminder or touch real reminder ledgers or URLs. Setup defaults to 60 seconds before start and just-in-time snooze; existing users’ saved timing is unchanged. The setup preview icon follows its selected style (eye/bell).
 
 Launch/wake catch-up offers Use normal reminder style, Use notification, and Skip reminder. Existing checkbox values migrate unchanged (off → normal, on → notification). Skip marks catch-up occurrences handled, while explicit snoozes and ordinary reminders keep their normal route. During-another-meeting rules retain precedence.
+
+
+## Review hardening after v1.10.0
+
+Catch-up completion belongs to a full refresh started for the latest launch/wake.
+Repeated wakes invalidate the prior owner; targeted resync generations do not
+complete catch-up. Ordinary notifications remain one per occurrence with separate
+actions; only catch-up groups. Explicit Snooze remains valid while paused, but
+redelivery waits until resume and is bounded by the meeting's end.
+
+Agenda/menu Join acknowledges only within the current lead window or while the
+meeting runs; earlier link opening preserves its future reminder. Saved meeting
+behavior survives transient capability failures at startup. Failed restores retry
+after 5 seconds, double to a 300-second cap, and can retry earlier on activation
+or wake. Unknown activity retains normal delivery. A failed fresh opt-in preserves
+the prior settings; unsupported capability is visible and does not loop retries.
+
+Feature guides retain only encountered history in memory; encoding includes an
+empty legacy pendingSettings field so older releases can still decode that history.

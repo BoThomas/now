@@ -19,18 +19,28 @@ enum FeatureGuideCatalog {
 
 struct FeatureGuideState: Codable, Equatable {
     var encountered: Set<String> = []
-    var pendingSettings: Set<String> = []
+
+    private enum CodingKeys: String, CodingKey { case encountered, pendingSettings }
+    init() {}
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        encountered = try values.decodeIfPresent(Set<String>.self, forKey: .encountered) ?? []
+    }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(encountered, forKey: .encountered)
+        // Older releases require this key to decode the encountered history.
+        // Retain an empty wire field for downgrades, without retired UI state.
+        try values.encode(Set<String>(), forKey: .pendingSettings)
+    }
 
     /// Called only after startup health is acknowledged. Union retains history
     /// across downgrades too. Closing/skipping a guide does not nag next release.
-    mutating func acknowledge(catalog: [FeatureGuideDefinition], installedUpdate: Bool, hasCalendar: Bool) -> [String] {
+    mutating func acknowledge(catalog: [FeatureGuideDefinition], installedUpdate: Bool) -> [String] {
         let introduced = catalog.filter { !encountered.contains($0.id) }
         encountered.formUnion(catalog.map(\.id))
-        pendingSettings.removeAll() // Retire the former inline Settings guide.
         if installedUpdate {
-            let ids = introduced.map(\.id)
-            pendingSettings.subtract(ids)
-            return ids
+            return introduced.map(\.id)
         }
         return []
     }
@@ -66,19 +76,14 @@ final class FeatureGuideController: ObservableObject {
         state = defaults.data(forKey: Self.storageKey).flatMap { try? JSONDecoder().decode(FeatureGuideState.self, from: $0) } ?? FeatureGuideState()
     }
 
-    func startupHealthAcknowledged(installedUpdate: Bool, hasCalendar: Bool) {
+    func startupHealthAcknowledged(installedUpdate: Bool) {
         guard !acknowledged else { return }
         acknowledged = true
-        updateIDs = state.acknowledge(catalog: catalog, installedUpdate: installedUpdate, hasCalendar: hasCalendar)
+        updateIDs = state.acknowledge(catalog: catalog, installedUpdate: installedUpdate)
         save()
     }
 
     func definitions(for ids: [String]) -> [FeatureGuideDefinition] { catalog.filter { ids.contains($0.id) } }
-    var settingsIDs: [String] { catalog.filter { state.pendingSettings.contains($0.id) }.map(\.id) }
-    func finish(_ ids: [String]) {
-        state.pendingSettings.subtract(ids)
-        save()
-    }
     private func save() {
         if let data = try? JSONEncoder().encode(state) { defaults.set(data, forKey: Self.storageKey) }
     }
@@ -150,7 +155,6 @@ struct FeatureGuideView: View {
     }
     private func finish() {
         generation = UUID()
-        guides.finish(ids)
         onFinish()
     }
     private func enable() {

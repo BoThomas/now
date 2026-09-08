@@ -1049,7 +1049,7 @@ final class UpdateController: ObservableObject {
     /// where the marker must survive so the failed version isn't re-offered.)
     func startupHealthAcknowledged() {
         let installedUpdate = UpdateLogic.justInstalledVersion(pending: state.pendingInstallVersion, currentVersion: UpdateLogic.currentVersion) != nil
-        store.featureGuides?.startupHealthAcknowledged(installedUpdate: installedUpdate, hasCalendar: !store.subscriptions.isEmpty || !store.nativeCalendars.isEmpty)
+        store.featureGuides?.startupHealthAcknowledged(installedUpdate: installedUpdate)
         pendingInstalledVersion = nil
         guard let installed = UpdateLogic.justInstalledVersion(pending: state.pendingInstallVersion, currentVersion: UpdateLogic.currentVersion) else { return }
         state = UpdateLogic.stateAfterSuccessfulInstall(state)

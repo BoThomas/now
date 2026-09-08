@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
     store = directory / "AppStore.swift"
     text = (ROOT / "Sources/AppStore.swift").read_text()
     text = text.replace('legacyDomain = "local.tboch.now"', 'legacyDomain = "' + identifier + '.legacy"')
-    for method in ["tick", "commitEvents", "finishRefresh", "merge", "appBecameActive"]:
+    for method in ["tick", "commitEvents", "finishRefresh", "merge", "appBecameActive", "beginFullRefresh", "retryMeetingDetection"]:
         text = text.replace("private func " + method + "(", "func " + method + "(")
     text = text.replace("@Published private(set) var isRefreshing", "@Published var isRefreshing")
     # Make native fetch a no-op only in this disposable test compilation.
