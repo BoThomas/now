@@ -21,6 +21,7 @@ enum SelfTest {
         recurrenceTests(&recurrence)
         var zones = Checker()
         zoneTests(&zones)
+        formatterCacheTests(&zones)
         var overrides = Checker()
         overrideTests(&overrides)
         var compliance = Checker()
@@ -51,6 +52,33 @@ enum SelfTest {
             print("SELFTEST FAILED: \(all.joined(separator: "; "))")
             exit(1)
         }
+    }
+
+    static func formatterCacheTests(_ c: inout Checker) {
+        weak var released: ICSDateFormatters?
+        do {
+            let cache = ICSDateFormatters()
+            released = cache
+            c.expect(cache.retainedCount == 0, "formatter cache starts empty")
+            let zones = ["UTC", "Europe/Berlin", "America/New_York", "Asia/Kathmandu", "Australia/Lord_Howe"]
+                + Array(TimeZone.knownTimeZoneIdentifiers.sorted().prefix(32))
+            for zone in zones {
+                for value in ["20260329T023000", "20261025T023000", "20240229T120000", "20260230T120000", "bad", "20260908T120000Z", "20260908"] {
+                    let property = ICSProperty(name: "DTSTART", params: ["TZID": zone], value: value)
+                    let fresh = ICSParser.parseDate(property)
+                    let reused = ICSParser.parseDate(property, dateFormatters: cache)
+                    c.expect(fresh.date == reused.date && fresh.tz == reused.tz && fresh.allDay == reused.allDay,
+                             "cached date matches fresh formatter: \(zone) \(value)")
+                }
+            }
+            c.expect(cache.retainedCount == 16, "formatter cache stays bounded with excess zones")
+            let floating = ICSProperty(name: "DTSTART", params: [:], value: "20260908T120000")
+            for zone in [TimeZone(identifier: "Europe/Berlin")!, TimeZone(identifier: "America/New_York")!] {
+                c.expect(ICSParser.parseDate(floating, fallbackTimeZone: zone, dateFormatters: cache).date
+                         == ICSParser.parseDate(floating, fallbackTimeZone: zone).date, "cache honors changed fallback zone")
+            }
+        }
+        c.expect(released == nil, "formatter cache released when feed scope ends")
     }
 
     // MARK: - Parser / ICS builder
@@ -263,6 +291,58 @@ enum SelfTest {
                     "P1W1D", "P1WT1H", "P1D1D", "PT1H1H", "PT1S1M", "PT1M1H"] {
             c.expect(ICSParser.parseDuration(bad) == nil, "invalid duration \(bad.isEmpty ? "(empty)" : bad) rejected")
         }
+        for bad in ["PT999999999999999999999999999S", "P999999999999999999999W",
+                    "PT" + String(repeating: "9", count: 400) + "S"] {
+            c.expect(ICSParser.parseDuration(bad) == nil, "oversized duration rejected")
+            let parsed = ICSParser.parse(wrap("""
+            BEGIN:VEVENT
+            UID:overflow@test
+            DTSTART:20260826T100000Z
+            DTEND:20260826T120000Z
+            DURATION:\(bad)
+            END:VEVENT
+            """))
+            c.expect(parsed.events.first?.durationSeconds == 7200 && !parsed.warnings.isEmpty,
+                     "oversized duration warns and falls back to valid DTEND")
+        }
+        c.expect(ICSParser.parseDuration("P36500D") == 3_153_600_000, "normal long durations remain supported")
+        for invalid: Double in [.infinity, -.infinity, .nan, 1e27, -1e27, Double(Int.max), Double(Int.min)] {
+            c.expect(Fmt.duration(invalid) == "—", "duration formatter rejects unsafe interval")
+            c.expect(Fmt.mmss(invalid) == "—", "clock formatter rejects unsafe interval")
+            c.expect(Fmt.barCountdown(to: Date(timeIntervalSinceReferenceDate: invalid),
+                                     relativeTo: Date(timeIntervalSinceReferenceDate: 0)) == "—",
+                     "countdown formatter rejects unsafe interval")
+        }
+        c.expect(Fmt.duration(93_600) == "26h 0m" && Fmt.mmss(93_600) == "26h 00m", "long event formatting preserved")
+        for action in ["DISPLAY", "AUDIO", "EMAIL"] {
+            let parsed = ICSParser.parse(wrap("""
+            BEGIN:VEVENT
+            UID:alarm@test
+            DTSTART:20260826T100000Z
+            DTEND:20260826T110000Z
+            SUMMARY:Parent meeting
+            DESCRIPTION:Join https://meet.google.com/abc-defg-hij
+            BEGIN:VALARM
+            ACTION:\(action)
+            TRIGGER:-PT5M
+            DESCRIPTION:Reminder
+            SUMMARY:Alarm title
+            ATTACH:https://example.com/alarm.mp3
+            DURATION:PT5M
+            REPEAT:2
+            END:VALARM
+            LOCATION:Parent room
+            END:VEVENT
+            """))
+            c.expect(parsed.events.count == 1 && parsed.warnings.isEmpty, "\(action) alarm parses cleanly")
+            if let event = parsed.events.first {
+                c.expect(event.title == "Parent meeting" && event.location == "Parent room", "alarm leaves parent properties intact")
+                c.expect(event.description == "Join https://meet.google.com/abc-defg-hij" && event.attach == nil,
+                         "alarm notes and attachment stay isolated")
+                c.expect(event.durationSeconds == 3600, "alarm repeat duration does not shorten meeting")
+                c.expect(LinkExtractor.link(from: event)?.host == "meet.google.com", "alarm preserves parent Join link")
+            }
+        }
         let utc = TimeZone(identifier: "UTC")!
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = utc
@@ -309,8 +389,7 @@ enum SelfTest {
         DTEND:20260826T143000Z
         SUMMARY:End before start
         END:VEVENT
-        END:VCALENDAR
-        """.replacingOccurrences(of: "END:VCALENDAR\n        BEGIN", with: "BEGIN")) // placeholder, replaced below
+        """)
         c.expect(timed.first { $0.uid == "pt30m@test" }.map { $0.end.timeIntervalSince($0.start) } == 1800, "PT30M event duration")
         c.expect(timed.first { $0.uid == "p1dt2h@test" }.map { $0.end.timeIntervalSince($0.start) } == 93_600, "P1DT2H event duration")
         c.expect(timed.first { $0.uid == "negdur@test" }.map { $0.end.timeIntervalSince($0.start) } == 3600, "negative duration falls back to default hour")
@@ -341,7 +420,7 @@ enum SelfTest {
         let now = cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 8, day: 25, hour: 12))!
         let windowStart = now.addingTimeInterval(-6 * 3600)
         let windowEnd = now.addingTimeInterval(14 * 86400)
-        func build(_ events: String, now: Date = now) -> (events: [MeetingEvent], warnings: [String]) {
+        func build(_ events: String, now: Date = now) -> ICSBuildResult {
             ICSBuilder.meetings(fromICS: wrap(events), subscription: subscription, now: now)
         }
         func dates(_ events: [MeetingEvent], uid: String) -> [Date] {
@@ -358,8 +437,7 @@ enum SelfTest {
         SUMMARY:Hourly
         RRULE:FREQ=HOURLY
         END:VEVENT
-        END:VCALENDAR
-        """.replacingOccurrences(of: "\n        END:VCALENDAR", with: ""))
+        """)
         c.expect(dates(hourly.events, uid: "hourly@test").count == 1, "HOURLY never expands (got \(dates(hourly.events, uid: "hourly@test").count))")
         c.expect(hourly.warnings.contains { $0.contains("Unsupported RRULE") }, "HOURLY produces a warning")
 
@@ -609,19 +687,18 @@ enum SelfTest {
         let oldDates = dates(old.events, uid: "oldweekly@test")
         c.expect(!oldDates.isEmpty, "1995-anchored weekly still expands into the window")
 
-        // Partial output must still warn when a COUNT rule exhausts its own
-        // iteration budget before reaching the end of the fetch window.
-        let limitedAnchor = now.addingTimeInterval(-19_995 * 86400)
+        // Incomplete expansion is a feed failure, never an authoritative partial snapshot.
+        let limitedAnchor = now.addingTimeInterval(-Double(RRULEExpander.maxIterationsPerEvent - 5) * 86400)
         let partiallyLimited = build("""
         BEGIN:VEVENT
         UID:partialbudget@test
         DTSTART:\(Self.icsStamp(limitedAnchor, tz: utc))
         SUMMARY:Partially expanded
-        RRULE:FREQ=DAILY;COUNT=30000
+        RRULE:FREQ=DAILY;COUNT=200000
         END:VEVENT
         """)
-        c.expect(!dates(partiallyLimited.events, uid: "partialbudget@test").isEmpty, "budget-limited recurrence can produce partial output")
-        c.expect(partiallyLimited.warnings.contains { $0.contains("recurrence workload limit") }, "partial recurrence budget exhaustion warns")
+        c.expect(partiallyLimited.events.isEmpty && partiallyLimited.error != nil, "resource-limited recurrence rejects partial feed")
+        c.expect(partiallyLimited.error?.contains("100000 calculation steps") == true && partiallyLimited.error?.contains("checking dates before") == true, "recurrence failure explains measured work and history")
 
         // The feed cap is enforced while emitting one large UID group, not
         // only between groups. Generate compact RDATE lines to avoid a fixture.
@@ -644,12 +721,34 @@ enum SelfTest {
         if !stamps.isEmpty { cappedBody += "RDATE:" + stamps.joined(separator: ",") + "\n" }
         cappedBody += "END:VEVENT"
         let capped = build(cappedBody)
-        c.expect(dates(capped.events, uid: "capped@test").count == ICSBuilder.maxEventsPerFeed, "single UID group capped at \(ICSBuilder.maxEventsPerFeed)")
-        c.expect(capped.warnings.contains { $0.contains("more than \(ICSBuilder.maxEventsPerFeed) events") }, "single UID cap warns")
+        c.expect(capped.events.isEmpty && capped.error?.contains("meeting safety limit") == true, "relevant-date flood rejects whole feed instead of returning arbitrary meetings")
+
+        // An exact budget fit is complete; only an attempted additional step fails.
+        for (rule, end, exact) in [("FREQ=DAILY", "20260827T000000Z", 2), ("FREQ=MONTHLY", "20260926T000000Z", 4), ("FREQ=DAILY;COUNT=1", "20260926T000000Z", 1)] {
+            let fixture = ICSParser.parse(Self.wrap("BEGIN:VEVENT\nUID:boundary\nDTSTART:20260826T000000Z\nRRULE:\(rule)\nEND:VEVENT"))
+            if let event = fixture.events.first, let start = event.dtStart,
+               let until = ICSParser.parseDate(ICSProperty(name: "DTSTART", params: [:], value: end)).date {
+                var budget = exact
+                let complete = RRULEExpander.expand(event, windowStart: start, windowEnd: until, budget: &budget)
+                c.expect(complete.completed && budget == 0, "exact recurrence budget completes: \(rule)")
+                budget = exact - 1
+                let incomplete = RRULEExpander.expand(event, windowStart: start, windowEnd: until, budget: &budget)
+                c.expect(!incomplete.completed, "one step too few reports incomplete: \(rule)")
+            } else { c.expect(false, "budget boundary fixture parses") }
+        }
+
+        // Historical/duplicate dates must not crowd out the sole useful RDATE.
+        let oldDatesLine = "RDATE:" + Array(repeating: "20000102T120000Z", count: 100).joined(separator: ",")
+        let oldDateBody = "BEGIN:VEVENT\nUID:old-rdates\nDTSTART:20000101T120000Z\n" + Array(repeating: oldDatesLine, count: 101).joined(separator: "\n") + "\nRDATE:20260826T100000Z\nEND:VEVENT"
+        let historyResult = build(oldDateBody)
+        c.expect(historyResult.error == nil && historyResult.events.count == 1, "old and duplicate RDATEs do not consume relevant-date capacity")
+        let oldCount = build("BEGIN:VEVENT\nUID:old-count\nDTSTART:19000101T100000Z\nRRULE:FREQ=DAILY;COUNT=100000\nEND:VEVENT")
+        c.expect(oldCount.error == nil && !oldCount.events.isEmpty, "larger per-series allowance handles century-old COUNT series")
+
 
         // DST: a daily 02:30 Berlin meeting across the 2026-03-29 spring-forward
         // gap and the 2026-10-25 fall-back overlap yields exactly one occurrence
-        // on each of those days (never zero, never two).
+        // on the overlap day, and none at the nonexistent gap-day time.
         var berlinCal = Calendar(identifier: .gregorian)
         berlinCal.timeZone = berlin
         let dstNow = berlinCal.date(from: DateComponents(timeZone: berlin, year: 2026, month: 3, day: 27, hour: 12))!
@@ -663,7 +762,22 @@ enum SelfTest {
         """, now: dstNow)
         let dstDates = dates(dst.events, uid: "dstdaily@test")
         let gapDay = dstDates.filter { berlinCal.isDate($0, inSameDayAs: berlinCal.date(from: DateComponents(timeZone: berlin, year: 2026, month: 3, day: 29))!) }
-        c.expect(gapDay.count == 1, "DST gap day has exactly one occurrence (got \(gapDay.count))")
+        c.expect(gapDay.isEmpty, "F07: nonexistent DST recurrence is skipped (got \(gapDay.count))")
+        for rule in ["FREQ=DAILY;COUNT=5", "FREQ=WEEKLY;BYDAY=TH,FR,SA,SU,MO,TU;COUNT=5",
+                     "FREQ=MONTHLY;BYMONTHDAY=26,27,28,29,30,31;COUNT=5",
+                     "FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=26,27,28,29,30,31;COUNT=5"] {
+            let countedGap = build("""
+            BEGIN:VEVENT
+            UID:gapcount@test
+            DTSTART;TZID=Europe/Berlin:20260326T023000
+            RRULE:\(rule)
+            END:VEVENT
+            """, now: berlinCal.date(from: DateComponents(year: 2026, month: 3, day: 26))!)
+            let days = countedGap.events.map { berlinCal.component(.day, from: $0.start) }
+            c.expect(days == [26, 27, 28, 30, 31], "F07: gap consumes no COUNT for \(rule) (got \(days))")
+            c.expect(countedGap.events.allSatisfy { berlinCal.component(.hour, from: $0.start) == 2 && berlinCal.component(.minute, from: $0.start) == 30 },
+                     "F07: generated occurrences preserve exact local time")
+        }
         let overlapNow = berlinCal.date(from: DateComponents(timeZone: berlin, year: 2026, month: 10, day: 23, hour: 12))!
         let overlap = build("""
         BEGIN:VEVENT
@@ -695,7 +809,7 @@ enum SelfTest {
         cal.timeZone = utc
         let subscription = CalendarSubscription(name: "Z", url: "https://z.example.com/cal.ics", colorIndex: 0)
         let now = cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 8, day: 25, hour: 12))!
-        func build(_ events: String, now: Date = now) -> (events: [MeetingEvent], warnings: [String]) {
+        func build(_ events: String, now: Date = now) -> ICSBuildResult {
             ICSBuilder.meetings(fromICS: wrap(events), subscription: subscription, now: now)
         }
         // Windows/Outlook TZID maps to IANA.
@@ -786,7 +900,7 @@ enum SelfTest {
         cal.timeZone = utc
         let subscription = CalendarSubscription(name: "O", url: "https://o.example.com/cal.ics", colorIndex: 0)
         let now = cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 8, day: 25, hour: 12))!
-        func build(_ events: String) -> (events: [MeetingEvent], warnings: [String]) {
+        func build(_ events: String) -> ICSBuildResult {
             ICSBuilder.meetings(fromICS: wrap(events), subscription: subscription, now: now)
         }
 
@@ -935,6 +1049,47 @@ enum SelfTest {
         c.expect(!revisions.events.contains { $0.title == "Stale override" }, "stale override revision dropped")
         c.expect(revisions.events.contains { $0.title == "Current override" }, "highest SEQUENCE override wins")
 
+        // F05: EXDATE applies to DTSTART with or without a recurrence rule.
+        for extra in ["", "RDATE:20260827T100000Z"] {
+            let excluded = build("""
+            BEGIN:VEVENT
+            UID:excluded-first@test
+            DTSTART:20260826T100000Z
+            EXDATE:20260826T100000Z
+            \(extra)
+            END:VEVENT
+            """)
+            c.expect(excluded.events.count == (extra.isEmpty ? 0 : 1)
+                     && !excluded.events.contains { cal.component(.day, from: $0.start) == 26 },
+                     "F05: EXDATE excludes standalone DTSTART and preserves other RDATEs")
+        }
+        let excludedLocal = build("""
+        BEGIN:VEVENT
+        UID:excluded-local@test
+        DTSTART;TZID=Europe/Berlin:20260826T100000
+        EXDATE:20260826T100000
+        RDATE:20260827T100000
+        END:VEVENT
+        """)
+        c.expect(excludedLocal.events.count == 1 && excludedLocal.events.first?.start == ISO8601DateFormatter().date(from: "2026-08-27T08:00:00Z"),
+                 "F05: no-rule exclusions and additions inherit the master zone")
+
+        // F06: unsupported periods must warn while supported dates still work.
+        for period in ["20260827T100000Z/20260827T120000Z", "20260827T100000Z/PT2H"] {
+            let unsupportedPeriod = build("""
+            BEGIN:VEVENT
+            UID:period@test
+            DTSTART:20260826T100000Z
+            RDATE;VALUE=PERIOD:\(period)
+            RDATE:20260828T100000Z
+            END:VEVENT
+            """)
+            c.expect(unsupportedPeriod.events.count == 2 && unsupportedPeriod.error == nil,
+                     "F06: unsupported period keeps the master and supported RDATE")
+            c.expect(unsupportedPeriod.warnings.contains { $0.contains("RDATE") && $0.contains("not supported") },
+                     "F06: RDATE period is explicitly reported")
+        }
+
         // RDATE adds occurrences; one duplicating the generated occurrence
         // must not create a second card.
         let rdate = build("""
@@ -993,6 +1148,29 @@ enum SelfTest {
     // MARK: - Parser compliance
 
     static func parserComplianceTests(_ c: inout Checker) {
+        feedStructureTests(&c)
+        // Resource limits must reject the input, not continue with truncated properties.
+        for description in ["DESCRIPTION:" + String(repeating: "x", count: 20_000),
+                            "DESCRIPTION:" + String(repeating: "x", count: 9_000) + "\n " + String(repeating: "y", count: 9_000)] {
+            let parsed = ICSParser.parse(wrap("""
+            BEGIN:VEVENT
+            UID:line-limit@test
+            DTSTART:20260826T100000Z
+            \(description)
+            END:VEVENT
+            """))
+            c.expect(parsed.events.isEmpty, "overlong logical line rejects feed before event parsing")
+            c.expect(parsed.error?.contains("feed rejected") == true, "overlong line returns a structured feed failure")
+        }
+        let exactLine = "DESCRIPTION:" + String(repeating: "x", count: ICSParser.maxLineLength - 12)
+        c.expect((try? ICSParser.unfolded(exactLine)) == [exactLine], "line exactly at limit accepted")
+        c.expect((try? ICSParser.unfolded("DESCRIPTION:abc\r\n def\r\n\tghi")) == ["DESCRIPTION:abcdefghi"], "CRLF and tab folding preserved")
+        c.expect((try? ICSParser.unfolded("DESCRIPTION:" + String(repeating: "x", count: 4_988) + "\n " + String(repeating: "x", count: 5_000)))?.first == exactLine,
+                 "folded line exactly at limit accepted")
+        c.expect((try? ICSParser.unfolded(String(repeating: "\n", count: ICSParser.maxLines))) != nil, "physical line boundary accepted")
+        c.expect((try? ICSParser.unfolded(String(repeating: "\n", count: ICSParser.maxLines + 1))) == nil, "physical line limit enforced")
+        c.expect((try? ICSParser.unfolded("DESCRIPTION:\n" + String(repeating: " \n", count: ICSParser.maxLines))) == nil,
+                 "empty continuation lines consume physical line budget")
         let utc = TimeZone(identifier: "UTC")!
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = utc
@@ -1078,9 +1256,102 @@ enum SelfTest {
         c.expect(multiConf?.attach == "https://meetings.ringcentral.com/j/9", "first VALID attach wins over garbage")
     }
 
+    static func feedStructureTests(_ c: inout Checker) {
+        let event = "BEGIN:VEVENT\nUID:structure@test\nDTSTART:20260826T100000Z\nSUMMARY:Kept\nEND:VEVENT"
+        let complete = wrap(event)
+        let invalid: [(String, String)] = [
+            ("missing calendar close", "BEGIN:VCALENDAR\nVERSION:2.0"),
+            ("unfinished event", "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:partial\nDTSTART:20260826T100000Z"),
+            ("complete event in incomplete calendar", "BEGIN:VCALENDAR\n" + event),
+            ("complete event followed by partial event", "BEGIN:VCALENDAR\n" + event + "\nBEGIN:VEVENT\nUID:partial"),
+            ("mismatched nested close", "BEGIN:VCALENDAR\nBEGIN:VEVENT\nBEGIN:VALARM\nEND:VEVENT\nEND:VCALENDAR"),
+            ("unclosed timezone", "BEGIN:VCALENDAR\nBEGIN:VTIMEZONE\nBEGIN:STANDARD\nEND:VTIMEZONE\nEND:VCALENDAR"),
+            ("extra closing component", complete + "\nEND:VCALENDAR"),
+            ("event outside calendar", event),
+            ("nested calendar", wrap(wrap(event))),
+            ("nested event", wrap("BEGIN:VEVENT\n" + event + "\nEND:VEVENT")),
+            ("calendar marker in unrelated text", "<html>BEGIN:VCALENDAR</html>"),
+            ("trailing server error", complete + "\nExport failed"),
+            ("empty body", ""),
+        ]
+        let sub = CalendarSubscription(name: "Structure", url: "https://example.com/cal.ics", colorIndex: 0)
+        let now = ISO8601DateFormatter().date(from: "2026-08-25T12:00:00Z")!
+        let cached = MeetingEvent(uid: "cached", title: "Cached meeting", start: now.addingTimeInterval(60),
+                                  end: now.addingTimeInterval(3660), location: nil, notes: nil, link: nil,
+                                  calendarID: sub.id, calendarName: sub.name, colorIndex: 0)
+        for (label, text) in invalid {
+            let parsed = ICSParser.parse(text)
+            c.expect(parsed.error != nil && parsed.events.isEmpty, "\(label): parser rejects whole feed")
+            let fetched = AppStore.decodeFeed(Data(text.utf8), request: FetchRequest(subscription: sub, requestID: 19), now: now)
+            let merged = AppStore.mergeICS(current: [cached], results: [fetched], live: [sub], previousErrors: [:], latestRequestIDs: [sub.id: 19])
+            c.expect(fetched.error != nil && fetched.requestID == 19 && merged.events.map(\.id) == [cached.id]
+                     && merged.errors[sub.id] != nil && !merged.allSucceeded,
+                     "\(label): failed fetch preserves cache and last synced")
+        }
+        for empty in [wrap(""), "\u{FEFF}" + wrap("").replacingOccurrences(of: "\n", with: "\r\n")] {
+            let fetched = AppStore.decodeFeed(Data(empty.utf8), request: FetchRequest(subscription: sub, requestID: 20), now: now)
+            let merged = AppStore.mergeICS(current: [cached], results: [fetched], live: [sub], previousErrors: [sub.id: "previous failure"], latestRequestIDs: [sub.id: 20])
+            c.expect(fetched.error == nil && merged.events.isEmpty && merged.errors.isEmpty && merged.allSucceeded,
+                     "well-formed empty calendar intentionally clears cache and sync error")
+        }
+        let withOtherComponents = wrap("""
+        BEGIN:VTIMEZONE
+        TZID:Europe/Berlin
+        BEGIN:STANDARD
+        DTSTART:20251026T030000
+        TZOFFSETFROM:+0200
+        TZOFFSETTO:+0100
+        END:STANDARD
+        END:VTIMEZONE
+        BEGIN:VTODO
+        SUMMARY:Task
+        END:VTODO
+        \(event)
+        """)
+        for valid in [complete, withOtherComponents, complete.replacingOccurrences(of: "BEGIN:", with: "begin:").replacingOccurrences(of: "END:", with: "end:"), "\u{FEFF}" + complete,
+                      complete.replacingOccurrences(of: "\n", with: "\r\n")] {
+            let parsed = ICSParser.parse(valid)
+            c.expect(parsed.error == nil && parsed.events.count == 1, "balanced feed with supported envelope variants remains accepted")
+        }
+        let multiple = ICSParser.parse(complete + "\n" + wrap(""))
+        c.expect(multiple.error == nil && multiple.events.count == 1, "complete sibling calendar objects accepted")
+    }
+
     // MARK: - Link ranking
 
     static func linkRankingTests(_ c: inout Checker) {
+        for (encoded, expected) in [("&amp;lt;", "&lt;"), ("&amp;gt;", "&gt;"),
+                                    ("&amp;quot;", "&quot;"), ("&amp;#10;", "&#10;"),
+                                    ("&amp;#13;", "&#13;"), ("&amp;amp;", "&amp;")] {
+            c.expect(LinkExtractor.decodeHTMLEntities(encoded) == expected, "B7a: decode one layer of \(encoded)")
+        }
+        c.expect(LinkExtractor.decodeHTMLEntities("&lt;&gt;&quot;&#13;&#10;&amp;") == "<>\"\n&", "B7a: supported entities still decode normally")
+        c.expect(LinkExtractor.decodeHTMLEntities("plain &unknown; &") == "plain &unknown; &", "B7a: plain text and unsupported entities stay intact")
+        let htmlLink = ICSParser.parse(wrap("""
+        BEGIN:VEVENT
+        UID:html-entities@test
+        DTSTART:20260826T100000Z
+        X-ALT-DESC;FMTTYPE=text/html:<a href="https://zoom.us/j/123?pwd=abc&amp;lang=en">Join</a>
+        END:VEVENT
+        """))
+        c.expect(htmlLink.events.first.flatMap(LinkExtractor.link)?.absoluteString == "https://zoom.us/j/123?pwd=abc&lang=en", "B7a: HTML Join extraction decodes query separators")
+        // F08: scheduled Webex links use a site path plus MTID, not /meet/.
+        let webex = "https://example.webex.com/example/j.php?MTID=m123456"
+        c.expect(LinkExtractor.isMeetingLink(URL(string: webex)!), "F08: Webex scheduled meeting recognized")
+        c.expect(LinkExtractor.isMeetingLink(URL(string: "https://EXAMPLE.webex.com/example/j.php?mtid=870f_I_167&pwd=abc")!), "F08: Webex query casing and opaque IDs accepted")
+        for bad in ["https://example.webex.com", "https://example.webex.com/help", "https://example.webex.com/recording/123",
+                    "https://example.webex.com/example/j.php", "https://example.webex.com/example/j.php?MTID=%20",
+                    "https://example.webex.com/example/j.php?OTHER=123", "https://webex.com.evil.example/example/j.php?MTID=m123",
+                    "https://fakewebex.com/example/j.php?MTID=m123", "https://example.com/example/j.php?MTID=m123"] {
+            c.expect(!LinkExtractor.isMeetingLink(URL(string: bad)!), "F08: nonmeeting Webex lookalike rejected: \(bad)")
+        }
+        for field in ["URL", "LOCATION", "DESCRIPTION"] {
+            let parsed = ICSParser.parse(wrap("BEGIN:VEVENT\nUID:webex@test\nDTSTART:20260826T100000Z\n\(field):\(webex)\nEND:VEVENT"))
+            c.expect(parsed.events.first.flatMap(LinkExtractor.link)?.absoluteString == webex, "F08: Webex Join extracted from \(field)")
+        }
+        let nativeWebex = NativeCalendarSource.parsedEvent(uid: "webex-native", title: "Webex", location: nil, notes: webex, url: nil,
+                                                         start: Date(timeIntervalSince1970: 1_800_000_000), end: Date(timeIntervalSince1970: 1_800_003_600))
+        c.expect(LinkExtractor.link(from: nativeWebex)?.absoluteString == webex, "F08: native Calendar mapping retains Webex Join")
         let utc = TimeZone(identifier: "UTC")!
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = utc
@@ -1236,6 +1507,7 @@ enum SelfTest {
     // MARK: - Reminder scheduling & alert behavior
 
     static func reminderTests(_ c: inout Checker) {
+        previewTransitionTests(&c)
         let cal = UUID()
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         func event(_ uid: String, startIn: TimeInterval, duration: TimeInterval) -> MeetingEvent {
@@ -1482,6 +1754,33 @@ enum SelfTest {
     // MARK: - Settings & login item
 
     static func settingsTests(_ c: inout Checker) {
+        c.expect(AppSettings().menuMeetingLimit == 5, "menu defaults to five meetings")
+        let legacyMenu = try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        c.expect(legacyMenu?.menuMeetingLimit == 5, "existing settings retain five-meeting default")
+        for limit in AppSettings.allowedMenuMeetingLimits {
+            var settings = AppSettings()
+            settings.menuMeetingLimit = limit
+            let encoded = try? JSONEncoder().encode(settings)
+            let decoded = encoded.flatMap { try? JSONDecoder().decode(AppSettings.self, from: $0) }
+            c.expect(decoded?.menuMeetingLimit == limit, "menu limit round trips: \(limit)")
+        }
+        for limit in [-1, 0, 4, 16, Int.max] {
+            let decoded = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"menuMeetingLimit\":\(limit)}".utf8))
+            c.expect(decoded?.menuMeetingLimit == 5, "unsupported menu limit falls back to five")
+        }
+        let emptyCases: [(Int, Int, Bool, Bool, Bool, String)] = [
+            (0, 0, false, false, false, "No calendars added"),
+            (2, 0, false, false, false, "No calendars enabled"),
+            (2, 2, true, true, false, "Checking calendars…"),
+            (2, 2, false, true, false, "No upcoming meetings. Some calendars failed to sync."),
+            (1, 1, false, false, true, "No upcoming meetings. Calendar access needed."),
+            (2, 2, false, false, false, "No upcoming meetings")
+        ]
+        for (configured, enabled, refreshing, errors, access, expected) in emptyCases {
+            c.expect(AppStore.emptyAgendaText(configuredCount: configured, enabledCount: enabled,
+                isRefreshing: refreshing, hasErrors: errors, nativeAccessMissing: access) == expected,
+                "precise empty agenda: \(expected)")
+        }
         c.expect(AppSettings().snoozeSeconds == 0, "new installs default to just-in-time snooze")
         c.expect(Persisted().settings.snoozeSeconds == 0, "new persisted state uses just-in-time snooze")
         let legacySnooze = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\":30,\"soundEnabled\":false}".utf8))
@@ -1624,6 +1923,13 @@ enum SelfTest {
         c.expect(CalendarURL.normalize("https://a.com/x?token=ABC") != CalendarURL.normalize("https://a.com/x?token=abc"), "token stays case-sensitive (different feeds)")
         c.expect(CalendarURL.normalize("webcal://EXAMPLE.com:8443/a%2Fb?q=x%2Fy&x=1&x=2") == "https://example.com:8443/a%2Fb?q=x%2Fy&x=1&x=2", "webcal normalization preserves port and encoded/repeated query values")
         c.expect(CalendarURL.normalize("https://example.com/a%2Fb") != CalendarURL.normalize("https://example.com/a/b"), "encoded slash stays distinct from path separator")
+        c.expect(CalendarURL.normalize("webcal://EXAMPLE.com/a%2Fb?token=A%23B#Section%2FOne") == "https://example.com/a%2Fb?token=A%23B#Section%2FOne", "B6: encoded fragment, path and query survive storage normalization")
+        c.expect(CalendarURL.normalize("https://example.com/cal#") == "https://example.com/cal#", "B6: empty fragment is preserved")
+        c.expect(CalendarURL.duplicateKey("https://example.com/cal#one") == CalendarURL.duplicateKey("https://example.com/cal#two"), "B6: fragment-only differences remain duplicate feeds")
+        c.expect(CalendarURL.duplicateKey("https://example.com/cal#one") == CalendarURL.duplicateKey("https://example.com/cal"), "B6: fragment and no-fragment URLs remain duplicate feeds")
+        c.expect(CalendarURL.duplicateKey("https://example.com/cal?token=A%23B#one") == "https://example.com/cal?token=A%23B", "B6: removing fragment preserves encoded hash in token")
+        c.expect(CalendarURL.duplicateKey("https://example.com/cal?token=A#one") != CalendarURL.duplicateKey("https://example.com/cal?token=B#one"), "B6: different query tokens remain different feeds")
+        c.expect(CalendarURL.duplicateKey("not a url") == nil, "B6: duplicate keys reject invalid URLs")
         c.expect(CalendarURL.normalize("not a url") == nil, "garbage rejected")
         c.expect(CalendarURL.normalize("ftp://example.com/cal.ics") == nil, "non-http scheme rejected")
 
@@ -1696,6 +2002,21 @@ enum SelfTest {
         let cachedB = event("b1", cal: subB.id, minutesFromNow: 20)
         let current = [cachedA, cachedB]
 
+        let oversizedLine = wrap("""
+        BEGIN:VEVENT
+        UID:resource-limit@test
+        DTSTART:20260826T100000Z
+        DESCRIPTION:\(String(repeating: "x", count: ICSParser.maxLineLength))
+        END:VEVENT
+        """)
+        let rejected = AppStore.decodeFeed(Data(oversizedLine.utf8), request: FetchRequest(subscription: subA, requestID: 7), now: Date(timeIntervalSince1970: 1_787_659_200))
+        let resourceMerge = AppStore.mergeICS(current: current, results: [rejected], live: [subA, subB], previousErrors: [:], latestRequestIDs: [subA.id: 7])
+        c.expect(rejected.error != nil && rejected.events.isEmpty && rejected.requestID == 7, "resource limit becomes a generation-owned fetch error")
+        c.expect(resourceMerge.events.map(\.id).sorted() == current.map(\.id).sorted() && resourceMerge.errors[subA.id] != nil && !resourceMerge.allSucceeded,
+                 "resource rejection keeps cached events and cannot advance last synced")
+        let oversizedBody = AppStore.decodeFeed(Data(repeating: 120, count: AppStore.maxFeedBytes + 1), request: FetchRequest(subscription: subA, requestID: 8), now: Date())
+        c.expect(oversizedBody.error?.contains("5 MB") == true, "direct ingestion also enforces byte cap")
+
         // Failed full refresh: errors recorded, cached events preserved for both.
         let failed = AppStore.mergeICS(current: current, results: [
             FetchResult(subscription: subA, events: [], error: "Server returned 503"),
@@ -1704,6 +2025,7 @@ enum SelfTest {
         c.expect(failed.events.map(\.id).sorted() == [cachedA.id, cachedB.id].sorted(), "failed full refresh preserves cached events")
         c.expect(failed.errors[subA.id] == "Server returned 503" && failed.errors[subB.id] == "offline", "failed full refresh records errors")
         c.expect(!failed.allSucceeded, "failed full refresh not allSucceeded")
+        c.expect(failed.observedCalendarIDs.isEmpty, "F09: failed responses do not count as fresh snapshots")
 
         // Failed targeted refresh (A only): A keeps cache + error, B untouched —
         // B's own error from its last fetch survives.
@@ -1723,6 +2045,7 @@ enum SelfTest {
         c.expect(replaced.events.contains { $0.id == cachedB.id }, "other subscription untouched")
         c.expect(replaced.errors[subA.id] == nil, "successful refresh clears error")
         c.expect(replaced.allSucceeded, "successful refresh allSucceeded")
+        c.expect(replaced.observedCalendarIDs == [subA.id], "F09: only the successfully refreshed source advances")
 
         // Removal mid-flight: result for a deleted subscription is dropped, and its
         // cached events go away too (no resurrection).
@@ -1740,13 +2063,59 @@ enum SelfTest {
         c.expect(disabled.events.map(\.id) == [cachedA.id], "disabled subscription's late result dropped with its events")
         c.expect(disabled.errors[subB.id] == nil && disabled.warnings[subB.id] == nil, "disabled subscription diagnostics are pruned")
 
-        // URL edited mid-flight: old-URL result is stale and dropped; cached events kept.
+        // A URL edit immediately retires the old source, before any fetch response.
+        let oldA = subA
+        var editTracker = FetchTracker()
+        let oldRequest = editTracker.begin(subscriptionID: subA.id)
         subA.url = "https://a.example.com/edited.ics"
-        let edited = AppStore.mergeICS(current: current, results: [
-            FetchResult(subscription: CalendarSubscription(name: "A", url: "https://a.example.com/cal.ics", colorIndex: 0), events: [event("a4", cal: subA.id, minutesFromNow: 1)], error: nil),
+        let invalidated = AppStore.changedSubscriptionURLs(previous: [oldA, subB], current: [subA, subB])
+        c.expect(invalidated == [subA.id], "only changed URLs invalidate sources")
+        var renamed = oldA
+        renamed.name = "Renamed"
+        renamed.colorHex = "#abcdef"
+        c.expect(AppStore.changedSubscriptionURLs(previous: [oldA], current: [renamed, subB]).isEmpty,
+                 "name/color edits and newly added sources do not invalidate cache")
+        for id in invalidated { _ = editTracker.begin(subscriptionID: id) }
+        let cleared = AppStore.mergeICS(current: current, results: [], live: [subA, subB],
+            previousErrors: [subA.id: "old A error", subB.id: "B error"],
+            previousWarnings: [subA.id: "old A warning", subB.id: "B warning"],
+            invalidatedCalendarIDs: invalidated)
+        c.expect(cleared.events.map(\.id) == [cachedB.id], "URL edit immediately clears only old source meetings")
+        c.expect(cleared.errors[subA.id] == nil && cleared.warnings[subA.id] == nil
+                 && cleared.errors[subB.id] == "B error" && cleared.warnings[subB.id] == "B warning",
+                 "URL edit clears only old source diagnostics")
+        let edited = AppStore.mergeICS(current: cleared.events, results: [
+            FetchResult(subscription: oldA, events: [cachedA], error: nil, requestID: oldRequest),
+        ], live: [subA, subB], previousErrors: [:], latestRequestIDs: editTracker.latestPerSubscription)
+        c.expect(edited.events.map(\.id) == [cachedB.id], "old URL result cannot resurrect cleared meetings")
+        let replacementFailure = AppStore.mergeICS(current: cleared.events, results: [
+            FetchResult(subscription: subA, events: [], error: "replacement failed"),
         ], live: [subA, subB], previousErrors: [:])
-        c.expect(edited.events.contains { $0.id == cachedA.id }, "stale URL result keeps cached events")
-        c.expect(!edited.events.contains { $0.uid == "a4" }, "stale URL result not applied")
+        c.expect(replacementFailure.events.map(\.id) == [cachedB.id]
+                 && replacementFailure.errors[subA.id] == "replacement failed",
+                 "broken replacement reports error without old meetings")
+        _ = editTracker.begin(subscriptionID: subA.id)
+        let reverted = AppStore.mergeICS(current: cleared.events, results: [
+            FetchResult(subscription: oldA, events: [cachedA], error: nil, requestID: oldRequest),
+        ], live: [oldA, subB], previousErrors: [:], latestRequestIDs: editTracker.latestPerSubscription)
+        c.expect(reverted.events.map(\.id) == [cachedB.id], "A to B to A edit rejects original in-flight request")
+        let recovered = AppStore.mergeICS(current: replacementFailure.events, results: [
+            FetchResult(subscription: subA, events: [freshA], error: nil),
+        ], live: [subA, subB], previousErrors: replacementFailure.errors)
+        c.expect(recovered.events.contains { $0.id == freshA.id } && recovered.errors[subA.id] == nil,
+                 "successful replacement loads new meetings and clears failure")
+
+        var snapshots = ReminderSnapshotTracker()
+        _ = snapshots.retainedIDs(current: current, observedCalendarIDs: [oldA.id, subB.id], enabledCalendarIDs: [oldA.id, subB.id])
+        _ = snapshots.retainedIDs(current: [cachedB], observedCalendarIDs: [oldA.id], enabledCalendarIDs: [oldA.id, subB.id])
+        snapshots.invalidate(calendarIDs: invalidated)
+        let retained = snapshots.retainedIDs(current: cleared.events, observedCalendarIDs: [], enabledCalendarIDs: [subA.id, subB.id])
+        let bookkeeping = AppStore.prunedBookkeeping(alerted: [cachedA.id, cachedB.id],
+            snoozed: [cachedA.id: cachedA.start, cachedB.id: cachedB.start], retainedIDs: retained)
+        c.expect(bookkeeping.alerted == [cachedB.id] && bookkeeping.snoozed[cachedA.id] == nil
+                 && bookkeeping.snoozed[cachedB.id] != nil,
+                 "replacement clears old reminder history including previously missing meetings")
+
 
         // Empty success (no enabled subscriptions fetched) is vacuous success.
         let empty = AppStore.mergeICS(current: [], results: [], live: [subA, subB], previousErrors: [:])
@@ -1778,7 +2147,8 @@ enum SelfTest {
         ], live: [subC, subD], previousErrors: [subC.id: "new targeted failure"], previousWarnings: [subC.id: "new targeted warning"], latestRequestIDs: tracker.latestPerSubscription)
         c.expect(supersededFull.events.map(\.id) == [cachedC.id], "full refresh result superseded by newer targeted resync")
         c.expect(supersededFull.errors[subC.id] == "new targeted failure" && supersededFull.warnings[subC.id] == "new targeted warning", "superseded full refresh preserves newer targeted diagnostics")
-        c.expect(!supersededFull.allSucceeded, "superseded full refresh cannot advance last successful sync")
+        c.expect(!supersededFull.allSucceeded, "superseded full refresh is not an all-successful result")
+        c.expect(supersededFull.observedCalendarIDs.isEmpty, "F09: superseded results cannot consume snapshot grace")
         let currentResync = AppStore.mergeICS(current: [cachedC], results: [
             FetchResult(subscription: subC, events: [event("c5", cal: subC.id, minutesFromNow: 5)], error: nil, requestID: resyncID),
         ], live: [subC, subD], previousErrors: [:], latestRequestIDs: tracker.latestPerSubscription)
@@ -1795,21 +2165,43 @@ enum SelfTest {
         }
         let cal = UUID()
         let e1 = event("1", cal: cal, minutesFromNow: 10)
-        let e2 = event("2", cal: cal, minutesFromNow: 20)
+        let nativeCal = UUID()
+        let e2 = event("2", cal: nativeCal, minutesFromNow: 20)
         let alerted: Set<String> = [e1.id, e2.id]
         let snoozed = [e2.id: Date().addingTimeInterval(60)]
 
-        // First miss (id gone from active but present in previous commit): bookkeeping kept.
-        let firstMiss = AppStore.prunedBookkeeping(alerted: alerted, snoozed: snoozed, activeIDs: [e1.id], previousIDs: [e1.id, e2.id])
-        c.expect(firstMiss.alerted == alerted && firstMiss.snoozed == snoozed, "single miss keeps bookkeeping")
-
-        // Second identical missing snapshot: pruned.
-        let secondMiss = AppStore.prunedBookkeeping(alerted: firstMiss.alerted, snoozed: firstMiss.snoozed, activeIDs: [e1.id], previousIDs: [e1.id])
-        c.expect(secondMiss.alerted == [e1.id] && secondMiss.snoozed.isEmpty, "two consecutive misses prune bookkeeping")
-
-        // Never prunes ids that are still active.
-        let stable = AppStore.prunedBookkeeping(alerted: alerted, snoozed: snoozed, activeIDs: [e1.id, e2.id], previousIDs: [e1.id, e2.id])
+        let enabled: Set<UUID> = [cal, nativeCal]
+        var snapshots = ReminderSnapshotTracker()
+        var retained = snapshots.retainedIDs(current: [e1, e2], observedCalendarIDs: enabled, enabledCalendarIDs: enabled)
+        let stable = AppStore.prunedBookkeeping(alerted: alerted, snoozed: snoozed, retainedIDs: retained)
         c.expect(stable.alerted == alerted && stable.snoozed == snoozed, "active ids keep bookkeeping")
+        retained = snapshots.retainedIDs(current: [e1], observedCalendarIDs: [nativeCal], enabledCalendarIDs: enabled)
+        let firstMiss = AppStore.prunedBookkeeping(alerted: alerted, snoozed: snoozed, retainedIDs: retained)
+        c.expect(firstMiss.alerted == alerted && firstMiss.snoozed == snoozed, "F09: one native snapshot omission keeps bookkeeping")
+        for observation: Set<UUID> in [[cal], [], [cal], []] {
+            retained = snapshots.retainedIDs(current: [e1], observedCalendarIDs: observation, enabledCalendarIDs: enabled)
+            let unrelated = AppStore.prunedBookkeeping(alerted: firstMiss.alerted, snoozed: firstMiss.snoozed, retainedIDs: retained)
+            c.expect(unrelated.alerted == alerted && unrelated.snoozed == snoozed,
+                     "F09: ICS merges and presentation edits cannot consume native snapshot grace")
+        }
+        let retainedMuted = AppStore.retainedMutedStates(previous: [e2.id: true], current: [e1], retainedIDs: retained)
+        c.expect(retainedMuted[e2.id] == true, "F09: muted-state grace uses the same source lifetime")
+        retained = snapshots.retainedIDs(current: [e1, e2], observedCalendarIDs: [nativeCal], enabledCalendarIDs: enabled)
+        let restored = AppStore.prunedBookkeeping(alerted: firstMiss.alerted, snoozed: firstMiss.snoozed, retainedIDs: retained)
+        c.expect(restored.alerted == alerted && restored.snoozed == snoozed, "F09: reappearing native event preserves alert and snooze state")
+        retained = snapshots.retainedIDs(current: [e1], observedCalendarIDs: [nativeCal], enabledCalendarIDs: enabled)
+        c.expect(retained.contains(e2.id), "F09: reappearance resets the consecutive-miss counter")
+        retained = snapshots.retainedIDs(current: [e1], observedCalendarIDs: [nativeCal], enabledCalendarIDs: enabled)
+        let secondMiss = AppStore.prunedBookkeeping(alerted: restored.alerted, snoozed: restored.snoozed, retainedIDs: retained)
+        c.expect(secondMiss.alerted == [e1.id] && secondMiss.snoozed.isEmpty, "F09: two independent native misses retire bookkeeping")
+
+        // The reciprocal case: native snapshots do not age missing ICS events.
+        _ = snapshots.retainedIDs(current: [e1, e2], observedCalendarIDs: enabled, enabledCalendarIDs: enabled)
+        retained = snapshots.retainedIDs(current: [e2], observedCalendarIDs: [cal], enabledCalendarIDs: enabled)
+        retained = snapshots.retainedIDs(current: [e2], observedCalendarIDs: [nativeCal], enabledCalendarIDs: enabled)
+        c.expect(retained.contains(e1.id), "F09: native refresh cannot consume ICS snapshot grace")
+        retained = snapshots.retainedIDs(current: [e2], observedCalendarIDs: [], enabledCalendarIDs: [nativeCal])
+        c.expect(!retained.contains(e1.id), "F09: disabling/removing a calendar clears its retained bookkeeping")
 
         // Normalization: dedupe by id, stable ordering for equal starts.
         let tie1 = event("tie-b", cal: cal, minutesFromNow: 10)
@@ -1817,6 +2209,38 @@ enum SelfTest {
         let normalized = AppStore.normalizedEvents([tie1, e2, tie1, tie2])
         c.expect(normalized.count == 3, "duplicate ids deduped")
         c.expect(normalized.first?.id == tie2.id, "equal starts ordered by title tie-breaker")
+    }
+
+    static func previewTransitionTests(_ c: inout Checker) {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func event(_ uid: String) -> MeetingEvent {
+            MeetingEvent(uid: uid, title: uid, start: now, end: now.addingTimeInterval(1800), location: nil, notes: nil,
+                         link: URL(string: "https://zoom.us/j/\(uid)"), calendarID: UUID(), calendarName: "Test", colorIndex: 0)
+        }
+        let preview = event("preview")
+        let real = event("real")
+        let other = event("other")
+        let initial = AlertController.nextPresentation(existing: [], existingIsPreview: false, incoming: [preview], incomingIsPreview: true)
+        c.expect(initial.acceptsDelivery && initial.isPreview, "F10: preview opens as preview")
+        let delivered = AlertController.nextPresentation(existing: initial.events, existingIsPreview: initial.isPreview, incoming: [real], incomingIsPreview: false)
+        c.expect(delivered.acceptsDelivery && !delivered.isPreview && delivered.events.map(\.id) == [real.id], "F10: real delivery replaces preview and restores reconciliation")
+        let merged = AlertController.nextPresentation(existing: delivered.events, existingIsPreview: delivered.isPreview, incoming: [real, other], incomingIsPreview: false)
+        c.expect(Set(merged.events.map(\.id)) == [real.id, other.id] && !merged.isPreview, "F10: later real deliveries still merge and deduplicate")
+        let ignored = AlertController.nextPresentation(existing: merged.events, existingIsPreview: merged.isPreview, incoming: [preview], incomingIsPreview: true)
+        c.expect(!ignored.acceptsDelivery && !ignored.isPreview && ignored.events.map(\.id) == merged.events.map(\.id), "F10: Preview cannot replace or mark real reminders as synthetic")
+        let repeated = AlertController.nextPresentation(existing: [preview], existingIsPreview: true, incoming: [other], incomingIsPreview: true)
+        c.expect(repeated.events.map(\.id) == [other.id] && repeated.isPreview, "F10: repeated preview replaces prior fabricated cards")
+        c.expect(AlertController.reconciledShownEvents(shown: delivered.events, current: []).isEmpty, "F10: cancelled real reminder drops after preview replacement")
+        var muted = real
+        muted.isMuted = true
+        c.expect(AlertController.reconciledShownEvents(shown: delivered.events, current: [muted]).isEmpty, "F10: muted real reminder drops after preview replacement")
+        let moved = MeetingEvent(uid: real.uid, title: real.title, start: now.addingTimeInterval(300), end: real.end,
+                                 location: real.location, notes: real.notes, link: real.link, calendarID: real.calendarID,
+                                 calendarName: real.calendarName, colorIndex: real.colorIndex)
+        c.expect(AlertController.reconciledShownEvents(shown: delivered.events, current: [moved]).isEmpty, "F10: rescheduled real reminder drops its old card")
+        c.expect(AlertController.joinAction(for: preview.link!, shown: initial.events, isPreview: initial.isPreview) == .dismissPreview, "F10: preview Join dismisses without opening a fake meeting")
+        c.expect(AlertController.joinAction(for: preview.link!, shown: delivered.events, isPreview: delivered.isPreview) == .ignore, "F10: stale preview click cannot open a fake meeting or dismiss real cards")
+        c.expect(AlertController.joinAction(for: real.link!, shown: delivered.events, isPreview: delivered.isPreview) == .open(real.link!), "F10: real Join remains available")
     }
 
     // MARK: - Title filters (muted meetings)
@@ -1972,11 +2396,11 @@ enum SelfTest {
         c.expect(stableOutcome.alerted == [unmutedRunning.id] && stableOutcome.snoozed.isEmpty, "repeated commits leave the ratchet stable")
 
         var retainedMuted: [String: Bool] = [:]
-        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [mutedRunning], previousIDs: [])
-        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], previousIDs: [mutedRunning.id])
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [mutedRunning], retainedIDs: [mutedRunning.id])
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], retainedIDs: [mutedRunning.id])
         let afterOneMiss = AppStore.ratchetSilence(previous: [], fallbackMutedByID: retainedMuted, current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
         c.expect(afterOneMiss.alerted == [unmutedRunning.id], "one transient omission preserves muted state for the unmute ratchet")
-        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], previousIDs: [])
+        retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], retainedIDs: [])
         let afterTwoMisses = AppStore.ratchetSilence(previous: [], fallbackMutedByID: retainedMuted, current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
         c.expect(afterTwoMisses.alerted.isEmpty, "two consecutive omissions expire retained muted state")
 

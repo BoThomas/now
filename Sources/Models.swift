@@ -46,6 +46,7 @@ struct AppSettings: Codable, Equatable {
     var soundEnabled = true
     var soundName = "Hero"
     var showMenuBarCountdown = true
+    var menuMeetingLimit = 5
     var launchAtLogin = false
     /// Maximum time after a meeting starts during which its elapsed-start
     /// countdown may own the menu bar. `-1` disables it, `0` means until end.
@@ -64,6 +65,12 @@ struct AppSettings: Codable, Equatable {
 
     /// The values the UI offers — persisted junk is snapped back into range on
     /// decode instead of crashing pickers or producing absurd behavior.
+    static let allowedMenuMeetingLimits = [3, 5, 10, 15]
+
+    static func normalizedMenuMeetingLimit(_ value: Int) -> Int {
+        allowedMenuMeetingLimits.contains(value) ? value : 5
+    }
+
     static let allowedRefreshMinutes = [5, 15, 30, 60]
     static let leadSecondsRange = 0...7200
     static let allowedElapsedStartMinutes = [-1, 0, 5, 10, 15, 30, 60]
@@ -76,7 +83,7 @@ struct AppSettings: Codable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
+        case menuMeetingLimit, leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
     }
 
     init() {}
@@ -98,6 +105,7 @@ struct AppSettings: Codable, Equatable {
         let sound = try c.decodeIfPresent(String.self, forKey: .soundName) ?? "Hero"
         soundName = AppStore.soundNames.contains(sound) ? sound : "Hero"
         showMenuBarCountdown = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarCountdown) ?? true
+        menuMeetingLimit = Self.normalizedMenuMeetingLimit(try c.decodeIfPresent(Int.self, forKey: .menuMeetingLimit) ?? 5)
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
         // `lateMinutes` belonged to the former "Show started meetings"
         // visibility setting. Its semantics changed enough that carrying the

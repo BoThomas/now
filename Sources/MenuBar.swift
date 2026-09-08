@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
@@ -10,6 +11,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let openSettingsHandler: () -> Void
     private let quitHandler: () -> Void
     private var buttonTimer: Timer?
+    private var lastSyncItem: NSMenuItem?
+    private var displayClockObserver: AnyCancellable?
     /// While the dropdown is tracking, updater state changes (a check
     /// finishing, an update appearing) rebuild the OPEN menu in place —
     /// `menuNeedsUpdate` alone only fires on the next open.
@@ -52,16 +55,23 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         buttonTimer = AppStore.commonTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateButton() }
         }
+        displayClockObserver = store.$displayTime.sink { [weak self] date in
+            MainActor.assumeIsolated {
+                guard let self, let last = self.store.lastChecked else { return }
+                self.updateLastSyncItem(last: last, at: date)
+            }
+        }
         updateButton()
     }
 
     deinit {
+        buttonTimer?.invalidate()
         for observer in trackingObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
     private func updateButton() {
         guard let button = statusItem.button else { return }
-        let now = Date()
+        let now = store.now()
         refreshOpenMenu(now: now)
         if store.isPaused {
             button.attributedTitle = NSAttributedString(string: "")
@@ -151,6 +161,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
 
+        if let last = store.lastChecked { updateLastSyncItem(last: last, at: store.displayTime) }
+
         let eventItems = menu.items.compactMap { item -> (NSMenuItem, MeetingEvent)? in
             guard let event = item.representedObject as? MeetingEvent else { return nil }
             return (item, event)
@@ -177,7 +189,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
         clearEventTooltips(in: menu)
         guard let item, let event = item.representedObject as? MeetingEvent else { return }
-        item.toolTip = Self.tooltipText(for: event, now: Date())
+        item.toolTip = Self.tooltipText(for: event, now: store.now())
     }
 
     private func clearEventTooltips(in menu: NSMenu) {
@@ -213,28 +225,32 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             ]
             return fields.map { "\($0.utf8.count):\($0)" }.joined()
         }.joined(separator: "|")
-        return "\(store.isPaused)|\(day)|\(eventStates)"
+        let checked = store.lastChecked?.timeIntervalSinceReferenceDate ?? 0
+        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let now = Date()
+        let now = store.now()
         lastUpdateSignature = currentUpdateSignature
         lastMenuStructureSignature = menuStructureSignature(at: now)
+        lastSyncItem = nil
         menu.removeAllItems()
         let visible = store.events.filter { AppStore.isVisible($0, at: now) }
         if store.isPaused {
-            let until = store.pausedUntil == Date.distantFuture ? "indefinitely" : "until \(Fmt.time.string(from: store.pausedUntil ?? Date()))"
+            let until = store.pausedUntil == Date.distantFuture ? "indefinitely" : "until \(Fmt.time.string(from: store.pausedUntil ?? now))"
             menu.addItem(withTitle: "Reminders paused \(until)", action: nil, keyEquivalent: "")
             menu.addItem(withTitle: "Resume Now", action: #selector(resumeAction), keyEquivalent: "").target = self
-        } else if visible.isEmpty {
-            menu.addItem(withTitle: store.events.isEmpty ? "No calendars loaded" : "No upcoming events", action: nil, keyEquivalent: "")
+            menu.addItem(.separator())
+        }
+        if visible.isEmpty {
+            menu.addItem(withTitle: store.emptyAgendaText, action: nil, keyEquivalent: "")
         } else {
             let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
             let measure: [NSAttributedString.Key: Any] = [.font: timeFont]
             let timeWidth = visible.map { (Fmt.time.string(from: $0.start) as NSString).size(withAttributes: measure).width }.max() ?? 0
             let running = visible.filter { $0.start <= now && now < $0.end }
             let future = visible.filter { $0.start > now }
-            var remainingSlots = 5
+            var remainingSlots = AppSettings.normalizedMenuMeetingLimit(store.settings.menuMeetingLimit)
 
             func addSection(_ title: String, events: [MeetingEvent]) {
                 let shown = Array(events.prefix(remainingSlots))
@@ -284,8 +300,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refreshItem.keyEquivalentModifierMask = .command
         // No queuing a second full refresh behind the running one.
         refreshItem.isEnabled = !store.isRefreshing
-        if let last = store.lastRefresh {
-            menu.addItem(withTitle: "Last synced \(Fmt.ago(last))", action: nil, keyEquivalent: "")
+        if let last = store.lastChecked {
+            lastSyncItem = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
+            updateLastSyncItem(last: last, at: store.displayTime)
+        }
+        if !store.errors.isEmpty {
+            let count = store.errors.count
+            let title = "\(count) calendar\(count == 1 ? "" : "s") failed to sync · Details…"
+            let item = menu.addItem(withTitle: title, action: #selector(settingsAction), keyEquivalent: "")
+            item.target = self
+            item.attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: NSColor.systemRed])
         }
         menu.addItem(withTitle: "Preview Reminder", action: #selector(previewAction), keyEquivalent: "").target = self
         menu.addItem(.separator())
@@ -309,6 +333,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         loginItem.state = store.loginItemState == .enabled ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit now", action: #selector(quitAction), keyEquivalent: "q").target = self
+        // AppKit validates on opening, but a rebuild during tracking inserts
+        // default-enabled items. Keep informational rows disabled immediately.
+        for item in menu.items where item.action == nil && item.submenu == nil {
+            item.isEnabled = false
+        }
+    }
+
+    private func updateLastSyncItem(last: Date, at now: Date) {
+        let title = Fmt.syncStatus(last, relativeTo: now)
+        lastSyncItem?.title = title
+        lastSyncItem?.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        ])
     }
 
     private func sectionHeaderItem(_ title: String) -> NSMenuItem {

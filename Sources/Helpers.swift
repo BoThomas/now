@@ -177,16 +177,24 @@ enum Fmt {
         return formatter
     }()
 
+    // Strict bounds also exclude Int.min, whose absolute value overflows.
+    private static func wholeSeconds(_ interval: TimeInterval) -> Int? {
+        guard interval.isFinite, interval > Double(Int.min), interval < Double(Int.max) else { return nil }
+        return Int(interval)
+    }
+
     static func mmss(_ interval: TimeInterval) -> String {
-        let s = max(0, Int(interval))
+        guard let seconds = wholeSeconds(interval) else { return "—" }
+        let s = max(0, seconds)
         if s < 3600 { return String(format: "%d:%02d", s / 60, s % 60) }
-        return String(format: "%dh %02dm", s / 3600, (s % 3600) / 60)
+        return "\(s / 3600)h " + String(format: "%02dm", (s % 3600) / 60)
     }
 
     static func duration(_ interval: TimeInterval) -> String {
-        let m = Int(interval) / 60
+        guard let seconds = wholeSeconds(interval) else { return "—" }
+        let m = seconds / 60
         if m < 60 { return "\(m) min" }
-        return String(format: "%dh %dm", m / 60, m % 60)
+        return "\(m / 60)h \(m % 60)m"
     }
 
     static func leadTime(_ seconds: Int) -> String {
@@ -199,7 +207,7 @@ enum Fmt {
     }
 
     static func barCountdown(to date: Date, relativeTo now: Date = Date()) -> String {
-        let s = Int(date.timeIntervalSince(now))
+        guard let s = wholeSeconds(date.timeIntervalSince(now)) else { return "—" }
         let sign = s < 0 ? "-" : ""
         let t = abs(s)
         if t == 0 { return "now" }
@@ -215,8 +223,12 @@ enum Fmt {
         return h > 0 ? "\(sign)\(d)d \(h)h" : "\(sign)\(d)d"
     }
 
-    static func ago(_ date: Date) -> String {
-        relativeFormatter.localizedString(for: date, relativeTo: Date())
+    static func ago(_ date: Date, relativeTo now: Date = Date()) -> String {
+        relativeFormatter.localizedString(for: date, relativeTo: now)
+    }
+
+    static func syncStatus(_ date: Date, relativeTo now: Date) -> String {
+        "Last synced \(ago(date, relativeTo: now))"
     }
 
     /// Uppercase day-section header ("TODAY", "TOMORROW", "FRI, AUG 28") shared by
