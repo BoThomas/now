@@ -237,9 +237,14 @@ enum ICSParser {
         var warnings: [String] = []
         var current: [ICSProperty] = []
         var inEvent = false
+        var nestedComponents: [String] = []
         for line in unfolded(text, warnings: &warnings) {
             let token = line.trimmingCharacters(in: .whitespaces).uppercased()
-            if token == "BEGIN:VEVENT" {
+            if inEvent, token.hasPrefix("BEGIN:") {
+                nestedComponents.append(String(token.dropFirst(6)))
+            } else if inEvent, !nestedComponents.isEmpty {
+                if token == "END:\(nestedComponents.last!)" { nestedComponents.removeLast() }
+            } else if token == "BEGIN:VEVENT" {
                 inEvent = true
                 current = []
             } else if token == "END:VEVENT" {

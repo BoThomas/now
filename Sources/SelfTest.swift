@@ -286,6 +286,35 @@ enum SelfTest {
                      "countdown formatter rejects unsafe interval")
         }
         c.expect(Fmt.duration(93_600) == "26h 0m" && Fmt.mmss(93_600) == "26h 00m", "long event formatting preserved")
+        for action in ["DISPLAY", "AUDIO", "EMAIL"] {
+            let parsed = ICSParser.parse(wrap("""
+            BEGIN:VEVENT
+            UID:alarm@test
+            DTSTART:20260826T100000Z
+            DTEND:20260826T110000Z
+            SUMMARY:Parent meeting
+            DESCRIPTION:Join https://meet.google.com/abc-defg-hij
+            BEGIN:VALARM
+            ACTION:\(action)
+            TRIGGER:-PT5M
+            DESCRIPTION:Reminder
+            SUMMARY:Alarm title
+            ATTACH:https://example.com/alarm.mp3
+            DURATION:PT5M
+            REPEAT:2
+            END:VALARM
+            LOCATION:Parent room
+            END:VEVENT
+            """))
+            c.expect(parsed.events.count == 1 && parsed.warnings.isEmpty, "\(action) alarm parses cleanly")
+            if let event = parsed.events.first {
+                c.expect(event.title == "Parent meeting" && event.location == "Parent room", "alarm leaves parent properties intact")
+                c.expect(event.description == "Join https://meet.google.com/abc-defg-hij" && event.attach == nil,
+                         "alarm notes and attachment stay isolated")
+                c.expect(event.durationSeconds == 3600, "alarm repeat duration does not shorten meeting")
+                c.expect(LinkExtractor.link(from: event)?.host == "meet.google.com", "alarm preserves parent Join link")
+            }
+        }
         let utc = TimeZone(identifier: "UTC")!
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = utc
