@@ -393,7 +393,7 @@ enum SelfTest {
         let now = cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 8, day: 25, hour: 12))!
         let windowStart = now.addingTimeInterval(-6 * 3600)
         let windowEnd = now.addingTimeInterval(14 * 86400)
-        func build(_ events: String, now: Date = now) -> (events: [MeetingEvent], warnings: [String]) {
+        func build(_ events: String, now: Date = now) -> ICSBuildResult {
             ICSBuilder.meetings(fromICS: wrap(events), subscription: subscription, now: now)
         }
         func dates(_ events: [MeetingEvent], uid: String) -> [Date] {
@@ -747,7 +747,7 @@ enum SelfTest {
         cal.timeZone = utc
         let subscription = CalendarSubscription(name: "Z", url: "https://z.example.com/cal.ics", colorIndex: 0)
         let now = cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 8, day: 25, hour: 12))!
-        func build(_ events: String, now: Date = now) -> (events: [MeetingEvent], warnings: [String]) {
+        func build(_ events: String, now: Date = now) -> ICSBuildResult {
             ICSBuilder.meetings(fromICS: wrap(events), subscription: subscription, now: now)
         }
         // Windows/Outlook TZID maps to IANA.
@@ -838,7 +838,7 @@ enum SelfTest {
         cal.timeZone = utc
         let subscription = CalendarSubscription(name: "O", url: "https://o.example.com/cal.ics", colorIndex: 0)
         let now = cal.date(from: DateComponents(timeZone: utc, year: 2026, month: 8, day: 25, hour: 12))!
-        func build(_ events: String) -> (events: [MeetingEvent], warnings: [String]) {
+        func build(_ events: String) -> ICSBuildResult {
             ICSBuilder.meetings(fromICS: wrap(events), subscription: subscription, now: now)
         }
 
@@ -1045,6 +1045,28 @@ enum SelfTest {
     // MARK: - Parser compliance
 
     static func parserComplianceTests(_ c: inout Checker) {
+        // Resource limits must reject the input, not continue with truncated properties.
+        for description in ["DESCRIPTION:" + String(repeating: "x", count: 20_000),
+                            "DESCRIPTION:" + String(repeating: "x", count: 9_000) + "\n " + String(repeating: "y", count: 9_000)] {
+            let parsed = ICSParser.parse(wrap("""
+            BEGIN:VEVENT
+            UID:line-limit@test
+            DTSTART:20260826T100000Z
+            \(description)
+            END:VEVENT
+            """))
+            c.expect(parsed.events.isEmpty, "overlong logical line rejects feed before event parsing")
+            c.expect(parsed.error?.contains("feed rejected") == true, "overlong line returns a structured feed failure")
+        }
+        let exactLine = "DESCRIPTION:" + String(repeating: "x", count: ICSParser.maxLineLength - 12)
+        c.expect((try? ICSParser.unfolded(exactLine)) == [exactLine], "line exactly at limit accepted")
+        c.expect((try? ICSParser.unfolded("DESCRIPTION:abc\r\n def\r\n\tghi")) == ["DESCRIPTION:abcdefghi"], "CRLF and tab folding preserved")
+        c.expect((try? ICSParser.unfolded("DESCRIPTION:" + String(repeating: "x", count: 4_988) + "\n " + String(repeating: "x", count: 5_000)))?.first == exactLine,
+                 "folded line exactly at limit accepted")
+        c.expect((try? ICSParser.unfolded(String(repeating: "\n", count: ICSParser.maxLines))) != nil, "physical line boundary accepted")
+        c.expect((try? ICSParser.unfolded(String(repeating: "\n", count: ICSParser.maxLines + 1))) == nil, "physical line limit enforced")
+        c.expect((try? ICSParser.unfolded("DESCRIPTION:\n" + String(repeating: " \n", count: ICSParser.maxLines))) == nil,
+                 "empty continuation lines consume physical line budget")
         let utc = TimeZone(identifier: "UTC")!
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = utc
@@ -1747,6 +1769,21 @@ enum SelfTest {
         let cachedA = event("a1", cal: subA.id, minutesFromNow: 10)
         let cachedB = event("b1", cal: subB.id, minutesFromNow: 20)
         let current = [cachedA, cachedB]
+
+        let oversizedLine = wrap("""
+        BEGIN:VEVENT
+        UID:resource-limit@test
+        DTSTART:20260826T100000Z
+        DESCRIPTION:\(String(repeating: "x", count: ICSParser.maxLineLength))
+        END:VEVENT
+        """)
+        let rejected = AppStore.decodeFeed(Data(oversizedLine.utf8), request: FetchRequest(subscription: subA, requestID: 7), now: Date(timeIntervalSince1970: 1_787_659_200))
+        let resourceMerge = AppStore.mergeICS(current: current, results: [rejected], live: [subA, subB], previousErrors: [:], latestRequestIDs: [subA.id: 7])
+        c.expect(rejected.error != nil && rejected.events.isEmpty && rejected.requestID == 7, "resource limit becomes a generation-owned fetch error")
+        c.expect(resourceMerge.events.map(\.id).sorted() == current.map(\.id).sorted() && resourceMerge.errors[subA.id] != nil && !resourceMerge.allSucceeded,
+                 "resource rejection keeps cached events and cannot advance last synced")
+        let oversizedBody = AppStore.decodeFeed(Data(repeating: 120, count: AppStore.maxFeedBytes + 1), request: FetchRequest(subscription: subA, requestID: 8), now: Date())
+        c.expect(oversizedBody.error?.contains("5 MB") == true, "direct ingestion also enforces byte cap")
 
         // Failed full refresh: errors recorded, cached events preserved for both.
         let failed = AppStore.mergeICS(current: current, results: [

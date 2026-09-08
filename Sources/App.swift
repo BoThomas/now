@@ -792,19 +792,16 @@ enum NowApp {
     static func parseCLI(_ target: String) {
         var text = ""
         if target.hasPrefix("http://") || target.hasPrefix("https://") {
-            guard let url = URL(string: target) else {
-                print("Invalid URL")
-                return
-            }
             let semaphore = DispatchSemaphore(value: 0)
             var fetchError: String?
-            AppStore.session.dataTask(with: url) { data, _, error in
+            Task.detached {
+                let (data, error) = await AppStore.fetchData(target)
                 if let data {
                     text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
                 }
-                fetchError = error?.localizedDescription
+                fetchError = error
                 semaphore.signal()
-            }.resume()
+            }
             semaphore.wait()
             if let fetchError = fetchError {
                 print("FETCH FAILED: \(fetchError)")
@@ -822,7 +819,9 @@ enum NowApp {
             return
         }
         let subscription = CalendarSubscription(name: "cli", url: target, colorIndex: 0)
-        let (rawEvents, parseWarnings) = ICSParser.parse(text)
+        let parsed = ICSParser.parse(text)
+        if let error = parsed.error { print("PARSE FAILED: \(error)"); return }
+        let (rawEvents, parseWarnings) = (parsed.events, parsed.warnings)
         for warning in parseWarnings.prefix(10) {
             print("WARNING: \(warning)")
         }
@@ -834,7 +833,9 @@ enum NowApp {
         for event in withStart {
             print("  \(event.uid.prefix(12)) start=\(event.dtStart.map(formatter.string(from:)) ?? "nil") allDay=\(event.isAllDay) rrule=\(event.rrule != nil) status=\(event.status)")
         }
-        let (events, buildWarnings) = ICSBuilder.meetings(fromICS: text, subscription: subscription, now: Date())
+        let built = ICSBuilder.meetings(fromICS: text, subscription: subscription, now: Date())
+        if let error = built.error { print("PARSE FAILED: \(error)"); return }
+        let (events, buildWarnings) = (built.events, built.warnings)
         for warning in buildWarnings.prefix(10) {
             print("WARNING: \(warning)")
         }

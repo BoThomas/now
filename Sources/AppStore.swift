@@ -115,6 +115,7 @@ final class AppStore: ObservableObject {
     nonisolated static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 25
+        config.timeoutIntervalForResource = 60
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: config, delegate: transportDelegate, delegateQueue: nil)
     }()
@@ -593,7 +594,9 @@ final class AppStore: ObservableObject {
         isRefreshing = true
         let requestID = fetchTracker.beginFull(subscriptionIDs: enabled.map(\.id))
         Task { [weak self] in
-            let results = await Self.performFetch(requests: enabled.map { FetchRequest(subscription: $0, requestID: requestID) })
+            let results = await Self.performFetch(requests: enabled.map { FetchRequest(subscription: $0, requestID: requestID) }) { [weak self] result in
+                await self?.merge(results: [result])
+            }
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.apply(results: results, fetched: enabled)
@@ -601,56 +604,74 @@ final class AppStore: ObservableObject {
         }
     }
 
-    nonisolated static func performFetch(requests: [FetchRequest]) async -> [FetchResult] {
+    /// A rolling group bounds parsing work; the shared download gate also
+    /// bounds overlap between full refreshes and targeted resyncs.
+    nonisolated static func performFetch(requests: [FetchRequest], onResult: @escaping @Sendable (FetchResult) async -> Void = { _ in }) async -> [FetchResult] {
         await withTaskGroup(of: FetchResult.self) { group in
-            for request in requests {
-                group.addTask {
-                    let sub = request.subscription
-                    let (data, fetchError) = await fetchData(sub.url)
-                    if let fetchError { return FetchResult(subscription: sub, events: [], error: fetchError, requestID: request.requestID) }
-                    guard let data else { return FetchResult(subscription: sub, events: [], error: "Empty response", requestID: request.requestID) }
-                    if data.count > Self.maxFeedBytes {
-                        return FetchResult(subscription: sub, events: [], error: "Feed larger than \(Self.maxFeedBytes / 1_000_000) MB", requestID: request.requestID)
-                    }
-                    let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
-                    if !text.uppercased().contains("BEGIN:VCALENDAR") { return FetchResult(subscription: sub, events: [], error: "Not an iCal feed", requestID: request.requestID) }
-                    let (events, warnings) = ICSBuilder.meetings(fromICS: text, subscription: sub, now: Date())
-                    let warning = warnings.isEmpty ? nil : warnings.prefix(5).joined(separator: " · ")
-                    return FetchResult(subscription: sub, events: events, error: nil, warning: warning, requestID: request.requestID)
+            var remaining = requests.makeIterator()
+            for _ in 0..<maxConcurrentFeeds {
+                if let request = remaining.next() {
+                    group.addTask { await fetch(request) }
                 }
             }
             var results: [FetchResult] = []
-            for await result in group { results.append(result) }
+            for await result in group {
+                results.append(result)
+                await onResult(result)
+                if let request = remaining.next() {
+                    group.addTask { await fetch(request) }
+                }
+            }
             return results
         }
     }
 
+    nonisolated private static func fetch(_ request: FetchRequest) async -> FetchResult {
+        let (data, error) = await fetchData(request.subscription.url)
+        if let error { return FetchResult(subscription: request.subscription, events: [], error: error, requestID: request.requestID) }
+        guard let data else { return FetchResult(subscription: request.subscription, events: [], error: "Empty response", requestID: request.requestID) }
+        return decodeFeed(data, request: request, now: Date())
+    }
 
-    /// Hard cap on downloaded feed size — a hostile feed must not be able to
-    /// balloon memory or parser workload. (The body is still downloaded before
-    /// the check; the 25 s request timeout bounds the transient spike.)
+    /// Shared by network ingestion and the pure fetch-to-merge regression tests.
+    nonisolated static func decodeFeed(_ data: Data, request: FetchRequest, now: Date) -> FetchResult {
+        let sub = request.subscription
+        guard data.count <= maxFeedBytes else {
+            return FetchResult(subscription: sub, events: [], error: "Feed larger than \(maxFeedBytes / 1_000_000) MB", requestID: request.requestID)
+        }
+        let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
+        guard text.uppercased().contains("BEGIN:VCALENDAR") else {
+            return FetchResult(subscription: sub, events: [], error: "Not an iCal feed", requestID: request.requestID)
+        }
+        let parsed = ICSBuilder.meetings(fromICS: text, subscription: sub, now: now)
+        let warning = parsed.warnings.isEmpty ? nil : parsed.warnings.prefix(5).joined(separator: " · ")
+        return FetchResult(subscription: sub, events: parsed.events, error: parsed.error, warning: warning, requestID: request.requestID)
+    }
+
+    /// Count decoded bytes while streaming; never retain an oversized body.
     nonisolated static let maxFeedBytes = 5 * 1_000_000
+    nonisolated static let maxConcurrentFeeds = 4
+    nonisolated private static let downloadSlots = CalendarDownloadSlots(limit: maxConcurrentFeeds)
 
     nonisolated static func fetchData(_ urlString: String) async -> (Data?, String?) {
         guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             return (nil, "Invalid URL")
         }
-        do {
-            let (data, response) = try await session.data(from: url)
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                return (nil, "Server returned \(http.statusCode)")
-            }
-            return (data, nil)
-        } catch {
-            return (nil, error.localizedDescription)
-        }
+        await downloadSlots.acquire()
+        let result = await downloadFeed(url)
+        await downloadSlots.release()
+        return result
+    }
+
+    nonisolated private static func downloadFeed(_ url: URL) async -> (Data?, String?) {
+        guard !Task.isCancelled else { return (nil, "Calendar fetch cancelled") }
+        return await transportDelegate.download(from: url, session: session)
     }
 
     private func apply(results: [FetchResult], fetched: [CalendarSubscription]) {
         let merged = Self.mergeICS(current: currentICSEvents, results: results, live: subscriptions, previousErrors: errors, previousWarnings: warnings, latestRequestIDs: fetchTracker.latestPerSubscription)
-        commitEvents(merged.events + coloredNativeSnapshot())
-        errors = merged.errors
-        warnings = merged.warnings
+        // Each result was already merged on arrival. Recheck generations for
+        // the batch timestamp without committing the snapshots a second time.
         if merged.allSucceeded { lastRefresh = Date() }
         isRefreshing = false
         if pendingRefresh || fetched.map(\.id) != subscriptions.filter(\.isEnabled).map(\.id) || fetched.map(\.url) != subscriptions.filter(\.isEnabled).map(\.url) {
@@ -970,7 +991,57 @@ final class AppStore: ObservableObject {
 /// Calendar subscriptions may start on HTTP only after explicit user consent.
 /// Once a request starts securely, redirects must not silently downgrade it to
 /// cleartext and expose the private token commonly embedded in an ICS URL.
-final class CalendarTransportDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+final class CalendarTransportDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var downloads: [Int: CalendarDownload] = [:]
+
+    func download(from url: URL, session: URLSession) async -> (Data?, String?) {
+        let download = CalendarDownload()
+        let task = session.dataTask(with: url)
+        register(download, for: task)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                download.install(continuation)
+                task.resume()
+            }
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func register(_ download: CalendarDownload, for task: URLSessionTask) {
+        lock.lock(); defer { lock.unlock() }
+        downloads[task.taskIdentifier] = download
+    }
+
+    private func download(for task: URLSessionTask, removing: Bool = false) -> CalendarDownload? {
+        lock.lock(); defer { lock.unlock() }
+        return removing ? downloads.removeValue(forKey: task.taskIdentifier) : downloads[task.taskIdentifier]
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let download = download(for: dataTask) else { completionHandler(.allow); return }
+        let error: String?
+        if let http = response as? HTTPURLResponse {
+            if !(200...299).contains(http.statusCode) { error = "Server returned \(http.statusCode)" }
+            else if response.expectedContentLength > AppStore.maxFeedBytes { error = CalendarDownload.sizeError }
+            else { error = nil }
+        } else { error = "Non-HTTP response" }
+        if let error {
+            download.complete(error: error)
+            completionHandler(.cancel)
+        } else { completionHandler(.allow) }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard let download = download(for: dataTask) else { return }
+        if !download.append(data) { dataTask.cancel() }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        download(for: task, removing: true)?.complete(error: error?.localizedDescription)
+    }
+
     nonisolated static func allowsRedirect(from source: URL?, to destination: URL?) -> Bool {
         guard let destination,
               let destinationScheme = destination.scheme?.lowercased(),
@@ -982,6 +1053,53 @@ final class CalendarTransportDelegate: NSObject, URLSessionTaskDelegate, @unchec
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         let source = response.url ?? task.currentRequest?.url
         completionHandler(Self.allowsRedirect(from: source, to: request.url) ? request : nil)
+    }
+}
+
+/// A single bounded response. URLSession delivers decoded chunks; no completion-
+/// handler data task buffers the whole body first. The lock covers cancellation
+/// completing before the async continuation has been installed.
+private final class CalendarDownload: @unchecked Sendable {
+    static let sizeError = "Feed larger than \(AppStore.maxFeedBytes / 1_000_000) MB"
+    private let lock = NSLock()
+    private var data = Data()
+    private var outcome: (Data?, String?)?
+    private var continuation: CheckedContinuation<(Data?, String?), Never>?
+
+    func install(_ continuation: CheckedContinuation<(Data?, String?), Never>) {
+        lock.lock()
+        if let outcome {
+            lock.unlock()
+            continuation.resume(returning: outcome)
+        } else {
+            self.continuation = continuation
+            lock.unlock()
+        }
+    }
+
+    func append(_ chunk: Data) -> Bool {
+        lock.lock()
+        guard outcome == nil else { lock.unlock(); return false }
+        guard chunk.count <= AppStore.maxFeedBytes - data.count else {
+            lock.unlock()
+            complete(error: Self.sizeError)
+            return false
+        }
+        data.append(chunk)
+        lock.unlock()
+        return true
+    }
+
+    func complete(error: String?) {
+        lock.lock()
+        guard outcome == nil else { lock.unlock(); return }
+        let result: (Data?, String?) = error == nil ? (data, nil) : (nil, error)
+        outcome = result
+        data = Data()
+        let callback = continuation
+        continuation = nil
+        lock.unlock()
+        callback?.resume(returning: result)
     }
 }
 
@@ -1049,5 +1167,28 @@ struct FetchResult {
         self.error = error
         self.warning = warning
         self.requestID = requestID
+    }
+}
+
+/// Global across full and targeted refreshes, even when their hosts differ.
+/// Waiters do not start URLSession tasks or retain response bodies.
+private actor CalendarDownloadSlots {
+    private let limit: Int
+    private var active = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) { self.limit = limit }
+
+    func acquire() async {
+        if active < limit {
+            active += 1
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func release() {
+        if waiting.isEmpty { active -= 1 }
+        else { waiting.removeFirst().resume() }
     }
 }

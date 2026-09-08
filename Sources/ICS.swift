@@ -224,6 +224,20 @@ struct ParsedEvent {
 
 // MARK: - Parser
 
+struct ICSParseResult {
+    var events: [ParsedEvent] = []
+    var warnings: [String] = []
+    var error: String?
+}
+
+enum ICSInputError: Error {
+    case limit(String)
+
+    var message: String {
+        switch self { case .limit(let message): return message }
+    }
+}
+
 enum ICSParser {
     // Full span of RFC four-digit calendar years; larger durations cannot
     // describe a supported event and must never reach date/Int arithmetic.
@@ -232,13 +246,17 @@ enum ICSParser {
     static let maxLineLength = 10_000
     private static let consumedDateProperties: Set<String> = ["DTSTART", "DTEND", "DTSTAMP", "EXDATE", "RDATE", "RECURRENCE-ID"]
 
-    static func parse(_ text: String) -> (events: [ParsedEvent], warnings: [String]) {
+    static func parse(_ text: String) -> ICSParseResult {
         var events: [ParsedEvent] = []
         var warnings: [String] = []
         var current: [ICSProperty] = []
         var inEvent = false
         var nestedComponents: [String] = []
-        for line in unfolded(text, warnings: &warnings) {
+        let lines: [String]
+        do { lines = try unfolded(text) }
+        catch let error as ICSInputError { return ICSParseResult(error: error.message) }
+        catch { return ICSParseResult(error: "Could not read feed") }
+        for line in lines {
             let token = line.trimmingCharacters(in: .whitespaces).uppercased()
             if inEvent, token.hasPrefix("BEGIN:") {
                 nestedComponents.append(String(token.dropFirst(6)))
@@ -255,38 +273,45 @@ enum ICSParser {
                 current.append(property)
             }
         }
-        return (events, warnings)
+        return ICSParseResult(events: events, warnings: warnings)
     }
 
     /// Normalizes CRLF/CR → LF (CR+LF is one grapheme cluster in Swift, so a
     /// naive `split(separator: "\n")` sees one giant line), unfolds RFC 5545
     /// continuation lines, and caps parser workload (line count + length).
-    static func unfolded(_ text: String, warnings: inout [String]) -> [String] {
+    static func unfolded(_ text: String) throws -> [String] {
         let normalized = text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
         var lines: [String] = []
-        var truncated = false
-        for raw in normalized.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(raw)
-            if line.hasPrefix(" ") || line.hasPrefix("\t") {
-                if !lines.isEmpty {
-                    lines[lines.count - 1].append(contentsOf: line.dropFirst())
-                    if lines[lines.count - 1].count > maxLineLength, !truncated {
-                        truncated = true
-                        warnings.append("Feed line longer than \(maxLineLength) characters — feed truncated")
-                    }
-                    continue
-                }
+        var physicalLines = 0
+        var lastLength = 0
+        var cursor = normalized.startIndex
+        // Walk lines incrementally: split() would first allocate an array for
+        // every physical line, including those beyond the workload limit.
+        while cursor < normalized.endIndex {
+            guard physicalLines < maxLines else {
+                throw ICSInputError.limit("Feed exceeds \(maxLines) physical lines — feed rejected")
             }
-            if lines.count >= maxLines {
-                if !truncated {
-                    truncated = true
-                    warnings.append("Feed longer than \(maxLines) lines — feed truncated")
-                }
-                break
+            physicalLines += 1
+            let end = normalized[cursor...].firstIndex(of: "\n") ?? normalized.endIndex
+            let raw = normalized[cursor..<end]
+            let continuation = (raw.hasPrefix(" ") || raw.hasPrefix("\t")) && !lines.isEmpty
+            let part = continuation ? raw.dropFirst() : raw
+            let available = maxLineLength - (continuation ? lastLength : 0)
+            // Inspect at most the remaining allowance plus one before copying.
+            let length = part.prefix(available + 1).count
+            guard length <= available else {
+                throw ICSInputError.limit("Feed line exceeds \(maxLineLength) characters — feed rejected")
             }
-            lines.append(line)
+            if continuation {
+                lines[lines.count - 1].append(contentsOf: part)
+                lastLength += length
+            } else {
+                lines.append(String(part))
+                lastLength = length
+            }
+            cursor = end == normalized.endIndex ? end : normalized.index(after: end)
         }
         return lines
     }
@@ -1160,15 +1185,22 @@ enum LinkExtractor {
 
 // MARK: - Feed → meetings
 
+struct ICSBuildResult {
+    var events: [MeetingEvent] = []
+    var warnings: [String] = []
+    var error: String?
+}
+
 enum ICSBuilder {
     static let maxEventsPerFeed = 10_000
     static let maxFeedRecurrenceBudget = 200_000
 
-    static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date) -> (events: [MeetingEvent], warnings: [String]) {
+    static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date) -> ICSBuildResult {
         let resolvedHex = subscription.colorHex.isEmpty ? Palette.hex(for: subscription.colorIndex) : subscription.colorHex
         let windowStart = now.addingTimeInterval(-6 * 3600)
         let windowEnd = now.addingTimeInterval(14 * 86400)
         let parsed = ICSParser.parse(text)
+        if let error = parsed.error { return ICSBuildResult(error: error) }
         var warnings = parsed.warnings
         var result: [MeetingEvent] = []
         var feedBudget = maxFeedRecurrenceBudget
@@ -1274,7 +1306,7 @@ enum ICSBuilder {
         let events = result
             .filter { $0.end > windowStart }
             .sorted { ($0.start, $0.title, $0.uid) < ($1.start, $1.title, $1.uid) }
-        return (events, warnings)
+        return ICSBuildResult(events: events, warnings: warnings)
     }
 
     /// Highest SEQUENCE / latest DTSTAMP wins — a stale VEVENT revision must not
