@@ -205,6 +205,24 @@ final class AppStore: ObservableObject {
         now < event.start || now < event.end
     }
 
+    var emptyAgendaText: String {
+        Self.emptyAgendaText(
+            configuredCount: subscriptions.count + nativeCalendars.count,
+            enabledCount: subscriptions.filter(\.isEnabled).count + nativeCalendars.filter(\.isEnabled).count,
+            isRefreshing: isRefreshing,
+            hasErrors: !errors.isEmpty,
+            nativeAccessMissing: nativeCalendars.contains(where: \.isEnabled) && !nativeSource.isAuthorized)
+    }
+
+    nonisolated static func emptyAgendaText(configuredCount: Int, enabledCount: Int, isRefreshing: Bool, hasErrors: Bool, nativeAccessMissing: Bool) -> String {
+        if configuredCount == 0 { return "No calendars added" }
+        if enabledCount == 0 { return "No calendars enabled" }
+        if isRefreshing { return "Checking calendars…" }
+        if hasErrors { return "No upcoming meetings. Some calendars failed to sync." }
+        if nativeAccessMissing { return "No upcoming meetings. Calendar access needed." }
+        return "No upcoming meetings"
+    }
+
     var upcoming: [MeetingEvent] {
         let now = self.now()
         return events.filter { isVisible($0, at: now) }

@@ -226,7 +226,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return fields.map { "\($0.utf8.count):\($0)" }.joined()
         }.joined(separator: "|")
         let checked = store.lastChecked?.timeIntervalSinceReferenceDate ?? 0
-        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.settings.menuMeetingLimit)"
+        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -243,7 +243,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             menu.addItem(.separator())
         }
         if visible.isEmpty {
-            menu.addItem(withTitle: store.events.isEmpty ? "No calendars loaded" : "No upcoming events", action: nil, keyEquivalent: "")
+            menu.addItem(withTitle: store.emptyAgendaText, action: nil, keyEquivalent: "")
         } else {
             let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
             let measure: [NSAttributedString.Key: Any] = [.font: timeFont]

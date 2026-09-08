@@ -175,6 +175,43 @@ struct ReminderStateSmoke {
         try require(abs(widths[0] - widths[1]) < 0.1 && abs(widths[2] - widths[3]) < 0.1 && widths[2] > widths[0],
                     "sync digits stay steady within each digit count without reserved padding")
 
+        // The preceding targeted recovery deliberately left the other source's
+        // failure intact. Recover it before testing a successful empty agenda.
+        store.refresh()
+        try await waitFor("all sources recover before agenda checks") { !store.isRefreshing && store.errors.isEmpty }
+        let fixtureTime = Date(timeIntervalSince1970: 1_800_000_000)
+        clock = fixtureTime
+        let many = (0..<20).map { index in
+            MeetingEvent(uid: "limit-\(index)", title: "Meeting \(index)", start: fixtureTime.addingTimeInterval(Double(index) * 60),
+                end: fixtureTime.addingTimeInterval(3600 + Double(index) * 60), location: nil, notes: nil, link: nil,
+                calendarID: a.id, calendarName: "Synthetic A", colorIndex: 0)
+        }
+        store.commitEvents(many)
+        for limit in AppSettings.allowedMenuMeetingLimits {
+            store.settings.menuMeetingLimit = limit
+            controller.menuNeedsUpdate(menu)
+            let shown = menu.items.compactMap { $0.representedObject as? MeetingEvent }
+            try require(shown.map(\.id) == Array(many.prefix(limit)).map(\.id), "native menu shows exactly \(limit) ordered meetings")
+            try require(store.upcoming.count == 20, "menu limit leaves the full Settings agenda available")
+        }
+        controller.menuNeedsUpdate(trackedMenu)
+        controller.smokeBeginTracking()
+        store.settings.menuMeetingLimit = 3
+        controller.smokeRefreshMenu(at: clock)
+        controller.smokeEndTracking()
+        try require(trackedMenu.items.filter { $0.representedObject is MeetingEvent }.count == 3,
+                    "changing the limit rebuilds a tracked menu")
+        try require(store.menuBarFocus?.date == fixtureTime, "focus uses the injected clock")
+        clock = many.last!.end
+        try require(store.upcoming.isEmpty && store.menuBarFocus == nil, "visibility and focus expire at the injected end boundary")
+        controller.menuNeedsUpdate(menu)
+        try require(menu.items.contains { $0.title == "No upcoming meetings" }, "native menu shows successful empty agenda wording")
+        store.pause(for: 60)
+        try require(store.isPaused, "pause begins using injected time")
+        clock = clock.addingTimeInterval(60)
+        try require(!store.isPaused, "pause expires exactly at injected boundary")
+        store.resume()
+
         // Retain the actual scheduled timer independently, then release its
         // owner. Reflection keeps this lifecycle check out of the production API.
         var disposable: MenuBarController? = MenuBarController(store: store, alerts: alerts, updates: updates, openSettings: {}, quit: {})

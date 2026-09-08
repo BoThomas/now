@@ -1768,6 +1768,19 @@ enum SelfTest {
             let decoded = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"menuMeetingLimit\":\(limit)}".utf8))
             c.expect(decoded?.menuMeetingLimit == 5, "unsupported menu limit falls back to five")
         }
+        let emptyCases: [(Int, Int, Bool, Bool, Bool, String)] = [
+            (0, 0, false, false, false, "No calendars added"),
+            (2, 0, false, false, false, "No calendars enabled"),
+            (2, 2, true, true, false, "Checking calendars…"),
+            (2, 2, false, true, false, "No upcoming meetings. Some calendars failed to sync."),
+            (1, 1, false, false, true, "No upcoming meetings. Calendar access needed."),
+            (2, 2, false, false, false, "No upcoming meetings")
+        ]
+        for (configured, enabled, refreshing, errors, access, expected) in emptyCases {
+            c.expect(AppStore.emptyAgendaText(configuredCount: configured, enabledCount: enabled,
+                isRefreshing: refreshing, hasErrors: errors, nativeAccessMissing: access) == expected,
+                "precise empty agenda: \(expected)")
+        }
         c.expect(AppSettings().snoozeSeconds == 0, "new installs default to just-in-time snooze")
         c.expect(Persisted().settings.snoozeSeconds == 0, "new persisted state uses just-in-time snooze")
         let legacySnooze = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\":30,\"soundEnabled\":false}".utf8))
