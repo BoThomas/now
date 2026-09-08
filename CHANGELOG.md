@@ -1,4 +1,22 @@
 # Changelog
+## [1.10.0] - 2026-09-08
+
+### Added
+- Keep the agenda available while reminders are paused and isolate previews from real reminders.
+- Choose how many meetings appear in the menu: 3, 5, 10, or 15. The default remains 5.
+### Improved
+- Faster calendar parsing through formatter reuse during each refresh.
+- Clearer sync errors and empty-calendar messages, with sync failure details accessible from the menu.
+- Consistent live sync counters and native reminder timing pickers in Settings.
+### Fixed
+- Reject incomplete or oversized calendar feeds without discarding previously loaded meetings.
+- Handle recurrence limits deterministically and explain when a calendar cannot be fully processed.
+- Correct calendar duration, nested alarm, exclusion, daylight-saving, and meeting-link parsing edge cases.
+- Preserve snoozes and reminder history when meetings briefly disappear during a refresh.
+- Clear old meetings and reminder state when a calendar URL changes.
+- Avoid duplicate calendar requests when adding a subscription.
+- Confirm quitting from the update window and improve consistency of timing calculations.
+
 ## [1.9.0] - 2026-09-07
 
 ### Added
@@ -133,3 +151,4 @@
 [1.7.0]: https://github.com/BoThomas/now/compare/v1.6.1...v1.7.0
 [1.8.0]: https://github.com/BoThomas/now/compare/v1.7.0...v1.8.0
 [1.9.0]: https://github.com/BoThomas/now/compare/v1.8.0...v1.9.0
+[1.10.0]: https://github.com/BoThomas/now/compare/v1.9.0...v1.10.0
