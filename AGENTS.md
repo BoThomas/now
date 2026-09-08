@@ -40,6 +40,8 @@ python3 scripts/calendar-fetch-smoke.py --structure-only  # HTTP envelope valida
 
 Always run the build + selftest after changes. A GUI smoke test (launch, check it's alive after ~4s, kill) is good for changes touching app startup.
 
+On this development machine, run `./build-app.sh --require-identity` outside the agent sandbox (`exec_command` with `sandbox_permissions: "require_escalated"`) so signing can access the login keychain. Verified locally: a sandboxed build reported the configured identity missing, while the unsandboxed build signed successfully with it. Use this for routine agent builds, then run the selftest normally. Do not treat a sandbox-only identity lookup failure as proof the certificate is absent, or silently accept ad-hoc signing here. If the unsandboxed build still cannot use the identity, report the failure; do not export private keys or change keychain trust/access settings to work around it.
+
 ## Releasing
 
 `./release.sh` is the agent-friendly release pipeline: version bump (patch/minor/major or explicit `X.Y.Z`), prepends a CHANGELOG.md entry, sets Info.plist version/build, builds + selftests, commits, tags `vX.Y.Z`, pushes, and creates a GitHub release with `now-vX.Y.Z.zip` attached.
