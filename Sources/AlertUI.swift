@@ -11,6 +11,7 @@ final class AlertController: ObservableObject {
     @Published var snoozeMenuOpen = false
     @Published var highlightedSnooze: SnoozePlan?
     private var panel: AlertPanel?
+    private var displayObservers: [NSObjectProtocol] = []
     private var monitor: Any?
     /// Preview alerts (Settings → Preview Reminder) show fabricated events that
     /// are not in the store — reconciliation must not close them.
@@ -68,6 +69,7 @@ final class AlertController: ObservableObject {
             panel.setFrame(screen.frame, display: true)
         }
         self.panel = panel
+        observeDisplayChanges(for: panel)
         // Arm BEFORE the panel can become key — a keystroke landing in the
         // same instant the panel appears is by definition not aimed at it.
         beginKeystrokeGuard()
@@ -199,7 +201,36 @@ final class AlertController: ObservableObject {
         }
     }
 
+    private func observeDisplayChanges(for panel: AlertPanel) {
+        let center = NotificationCenter.default
+        for (name, object) in [
+            (NSWindow.didChangeScreenNotification, panel as AnyObject?),
+            (NSApplication.didChangeScreenParametersNotification, nil)
+        ] {
+            displayObservers.append(center.addObserver(forName: name, object: object, queue: .main) { [weak self, weak panel] _ in
+                // Let AppKit finish moving the window before reading its destination.
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self, let panel, self.panel === panel else { return }
+                        let screens = NSScreen.screens
+                        let destination = panel.screen.flatMap { current in
+                            screens.first { $0 == current }
+                        } ?? NSScreen.main ?? screens.first
+                        guard let destination else { return }
+                        if panel.frame != destination.frame {
+                            panel.setFrame(destination.frame, display: true)
+                        }
+                        panel.contentView?.needsLayout = true
+                        panel.contentView?.layoutSubtreeIfNeeded()
+                    }
+                }
+            })
+        }
+    }
+
     private func closePanel() {
+        displayObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        displayObservers.removeAll()
         snoozeMenuOpen = false
         panel?.orderOut(nil)
         panel = nil
