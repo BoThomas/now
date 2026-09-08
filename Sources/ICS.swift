@@ -479,7 +479,11 @@ enum ICSParser {
             case "EXDATE":
                 exdateProperties.append(property)
             case "RDATE":
-                rdateProperties.append(property)
+                if property.params["VALUE"]?.uppercased() == "PERIOD" {
+                    warnings.append("RDATE periods are not supported — additional occurrences may be missing")
+                } else {
+                    rdateProperties.append(property)
+                }
             case "RECURRENCE-ID":
                 recurrenceIDProperty = property
                 recurrenceRange = property.params["RANGE"]

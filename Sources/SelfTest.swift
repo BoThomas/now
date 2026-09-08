@@ -1010,6 +1010,22 @@ enum SelfTest {
         c.expect(excludedLocal.events.count == 1 && excludedLocal.events.first?.start == ISO8601DateFormatter().date(from: "2026-08-27T08:00:00Z"),
                  "F05: no-rule exclusions and additions inherit the master zone")
 
+        // F06: unsupported periods must warn while supported dates still work.
+        for period in ["20260827T100000Z/20260827T120000Z", "20260827T100000Z/PT2H"] {
+            let unsupportedPeriod = build("""
+            BEGIN:VEVENT
+            UID:period@test
+            DTSTART:20260826T100000Z
+            RDATE;VALUE=PERIOD:\(period)
+            RDATE:20260828T100000Z
+            END:VEVENT
+            """)
+            c.expect(unsupportedPeriod.events.count == 2 && unsupportedPeriod.error == nil,
+                     "F06: unsupported period keeps the master and supported RDATE")
+            c.expect(unsupportedPeriod.warnings.contains { $0.contains("RDATE") && $0.contains("not supported") },
+                     "F06: RDATE period is explicitly reported")
+        }
+
         // RDATE adds occurrences; one duplicating the generated occurrence
         // must not create a second card.
         let rdate = build("""
