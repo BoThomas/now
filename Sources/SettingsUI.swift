@@ -1142,8 +1142,8 @@ struct TitleFilterEditorSheet: View {
 }
 
 /// URL intake shared by Add/Edit: webcal→https, validation, normalization for
-/// duplicate detection (scheme/host lowercased, trailing slash dropped; path
-/// and query stay verbatim — they carry the secret token).
+/// storage (scheme/host lowercased, trailing slash dropped; encoded path,
+/// query and fragment are preserved). Duplicate identity excludes fragments.
 enum CalendarURL {
     static func normalize(_ raw: String) -> String? {
         var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1163,7 +1163,17 @@ enum CalendarURL {
         if let query = components.percentEncodedQuery {
             normalized += "?" + query
         }
+        if let fragment = components.percentEncodedFragment {
+            normalized += "#" + fragment
+        }
         return normalized
+    }
+
+    /// Fragments are local identifiers, not part of the fetched resource.
+    static func duplicateKey(_ raw: String) -> String? {
+        guard let normalized = normalize(raw), var components = URLComponents(string: normalized) else { return nil }
+        components.fragment = nil
+        return components.string
     }
 
     /// Explicit consent before sending a private calendar token over plaintext.
@@ -1232,8 +1242,9 @@ struct EditCalendarView: View {
             return
         }
         if didChangeURL,
-           let own = CalendarURL.normalize(subscription.url), own != normalized,
-           existingURLs.compactMap(CalendarURL.normalize).contains(normalized) {
+           let key = CalendarURL.duplicateKey(normalized),
+           let own = CalendarURL.duplicateKey(subscription.url), own != key,
+           existingURLs.compactMap(CalendarURL.duplicateKey).contains(key) {
             errorText = "That calendar link is already added."
             return
         }
@@ -1296,7 +1307,7 @@ struct AddCalendarView: View {
             errorText = "That doesn't look like a valid calendar URL."
             return
         }
-        if existingURLs.compactMap(CalendarURL.normalize).contains(normalized) {
+        if let key = CalendarURL.duplicateKey(normalized), existingURLs.compactMap(CalendarURL.duplicateKey).contains(key) {
             errorText = "That calendar link is already added."
             return
         }

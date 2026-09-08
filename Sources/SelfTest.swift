@@ -1832,6 +1832,13 @@ enum SelfTest {
         c.expect(CalendarURL.normalize("https://a.com/x?token=ABC") != CalendarURL.normalize("https://a.com/x?token=abc"), "token stays case-sensitive (different feeds)")
         c.expect(CalendarURL.normalize("webcal://EXAMPLE.com:8443/a%2Fb?q=x%2Fy&x=1&x=2") == "https://example.com:8443/a%2Fb?q=x%2Fy&x=1&x=2", "webcal normalization preserves port and encoded/repeated query values")
         c.expect(CalendarURL.normalize("https://example.com/a%2Fb") != CalendarURL.normalize("https://example.com/a/b"), "encoded slash stays distinct from path separator")
+        c.expect(CalendarURL.normalize("webcal://EXAMPLE.com/a%2Fb?token=A%23B#Section%2FOne") == "https://example.com/a%2Fb?token=A%23B#Section%2FOne", "B6: encoded fragment, path and query survive storage normalization")
+        c.expect(CalendarURL.normalize("https://example.com/cal#") == "https://example.com/cal#", "B6: empty fragment is preserved")
+        c.expect(CalendarURL.duplicateKey("https://example.com/cal#one") == CalendarURL.duplicateKey("https://example.com/cal#two"), "B6: fragment-only differences remain duplicate feeds")
+        c.expect(CalendarURL.duplicateKey("https://example.com/cal#one") == CalendarURL.duplicateKey("https://example.com/cal"), "B6: fragment and no-fragment URLs remain duplicate feeds")
+        c.expect(CalendarURL.duplicateKey("https://example.com/cal?token=A%23B#one") == "https://example.com/cal?token=A%23B", "B6: removing fragment preserves encoded hash in token")
+        c.expect(CalendarURL.duplicateKey("https://example.com/cal?token=A#one") != CalendarURL.duplicateKey("https://example.com/cal?token=B#one"), "B6: different query tokens remain different feeds")
+        c.expect(CalendarURL.duplicateKey("not a url") == nil, "B6: duplicate keys reject invalid URLs")
         c.expect(CalendarURL.normalize("not a url") == nil, "garbage rejected")
         c.expect(CalendarURL.normalize("ftp://example.com/cal.ics") == nil, "non-http scheme rejected")
 
