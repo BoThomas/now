@@ -1,0 +1,72 @@
+import SwiftUI
+
+struct NotificationSettingsView: View {
+    @ObservedObject var store: AppStore
+    @ObservedObject var notifications: ReminderNotificationController
+    @State private var showHelp = false
+
+    private func feature(_ key: WritableKeyPath<AppSettings, Bool>) -> Binding<Bool> {
+        Binding(get: { store.settings[keyPath: key] }, set: { value in
+            store.settings[keyPath: key] = value
+            if value { notifications.requestPermission() }
+        })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle("Use notifications for meetings already in progress at launch or wake", isOn: feature(\.notifyOnCatchUp))
+            Toggle("Notify about new updates", isOn: feature(\.notifyUpdates))
+                .disabled(!store.settings.automaticUpdateChecks)
+            Toggle("Notify about calendar sync problems", isOn: feature(\.notifySyncErrors))
+            if store.settings.usesNotifications {
+                Toggle("Hide meeting details in notifications", isOn: $store.settings.hideNotificationDetails)
+                if notifications.permission.authorization == .denied || notifications.permission.authorization == .notRequested {
+                    Text(notifications.permission.message)
+                        .font(.callout).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            HStack {
+                if notifications.permission.authorization == .notRequested {
+                    Button("Enable Notifications…") { notifications.requestPermission() }
+                        .disabled(notifications.requesting)
+                } else if notifications.permission.canSubmit {
+                    Button("Send Test Notification") { notifications.test(sound: store.settings.soundEnabled) }
+                }
+                Button("Notification Settings…") { notifications.openSettings() }
+                Button { showHelp.toggle() } label: {
+                    Image(systemName: "questionmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Notification not received?")
+                .help("Notification not received?")
+                .popover(isPresented: $showHelp, arrowEdge: .trailing) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Notification not received?").font(.headline)
+                        Text("In System Settings → Notifications → now, allow notifications and select an onscreen style. Persistent alerts (called Alerts on older macOS versions) stay visible until you act; temporary banners disappear automatically.\n\nCheck notification sound settings, and System Settings → Focus to allow now in the Focus you use. macOS can also hide notifications while the screen is locked, mirrored, or shared.\n\nPermission allows now to submit notifications; it cannot guarantee that macOS displays a banner. Test notifications never change real reminders.")
+                            .font(.callout)
+                    }
+                    .padding(14)
+                    .frame(width: 340, alignment: .leading)
+                }
+                if notifications.requesting { ProgressView().controlSize(.small) }
+            }
+            if let problem = notifications.problem { Text(problem).font(.caption).foregroundStyle(.red) }
+        }
+        .onAppear { notifications.refreshPermission(force: true) }
+
+    }
+}
+
+struct NotificationPreviewButton: View {
+    @ObservedObject var store: AppStore
+    @ObservedObject var notifications: ReminderNotificationController
+
+    var body: some View {
+        Button { notifications.previewMeeting(settings: store.settings) } label: {
+            Label("Preview Notification Reminder", systemImage: "bell")
+        }
+        .disabled(!notifications.permission.canSubmit)
+        .help(notifications.permission.canSubmit ? "Preview a sample meeting using your notification privacy setting" : "Enable notifications above to preview a meeting reminder")
+    }
+}

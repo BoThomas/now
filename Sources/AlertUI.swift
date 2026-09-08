@@ -87,9 +87,8 @@ final class AlertController: ObservableObject {
         }
     }
 
-    func presentPreview() {
-        let now = Date()
-        let event = MeetingEvent(
+    nonisolated static func previewEvent(at now: Date) -> MeetingEvent {
+        MeetingEvent(
             uid: "preview",
             title: "Team Sync — Preview",
             start: now.addingTimeInterval(120),
@@ -101,7 +100,10 @@ final class AlertController: ObservableObject {
             calendarName: "Preview",
             colorIndex: 0
         )
-        present([event], preview: true)
+    }
+
+    func presentPreview() {
+        present([Self.previewEvent(at: Date())], preview: true)
     }
 
     func close() {

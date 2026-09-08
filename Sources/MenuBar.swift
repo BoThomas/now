@@ -226,7 +226,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return fields.map { "\($0.utf8.count):\($0)" }.joined()
         }.joined(separator: "|")
         let checked = store.lastChecked?.timeIntervalSinceReferenceDate ?? 0
-        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.calendarSyncProblemTitle ?? "")|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)"
+        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.calendarSyncProblemTitle ?? "")|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)|\(store.notificationProblemTitle ?? "")"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -240,6 +240,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let until = store.pausedUntil == Date.distantFuture ? "indefinitely" : "until \(Fmt.time.string(from: store.pausedUntil ?? now))"
             menu.addItem(withTitle: "Reminders paused \(until)", action: nil, keyEquivalent: "")
             menu.addItem(withTitle: "Resume Now", action: #selector(resumeAction), keyEquivalent: "").target = self
+            menu.addItem(.separator())
+        }
+        if let problem = store.notificationProblemTitle {
+            let item = NSMenuItem(title: problem, action: #selector(settingsAction), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
             menu.addItem(.separator())
         }
         if visible.isEmpty {
@@ -489,8 +495,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         item.attributedTitle = text
     }
 
+    func openAgenda() { statusItem.button?.performClick(nil) }
+
     @objc private func joinAction(_ sender: NSMenuItem) {
         if let event = sender.representedObject as? MeetingEvent, let url = event.link {
+            store.joinedMeeting(event)
             NSWorkspace.shared.open(url)
         }
     }

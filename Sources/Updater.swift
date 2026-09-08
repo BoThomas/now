@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 import AppKit
 import Security
 import Darwin
@@ -33,6 +34,8 @@ struct UpdateState: Codable, Equatable {
     /// Set when the update window is SHOWN for a version — never when a check
     /// merely discovers it (a deferred window must not suppress itself).
     var lastNotifiedVersion: String?
+    /// Accepted macOS update notification, independent of the update window marker.
+    var lastNotificationVersion: String?
     var firstSeenUpdateVersion: String?
     var firstSeenUpdateDate: Date?
     /// Version whose install helper we spawned — on a failed-update relaunch
@@ -44,6 +47,15 @@ struct UpdateState: Codable, Equatable {
 
 enum UpdateLogic {
     static let updateBundleIdentifier = "com.thomasboch.now"
+
+    static func shouldNotifyUpdate(manifest: UpdateManifest, state: UpdateState, settings: AppSettings, currentVersion: String, now: Date) -> Bool {
+        settings.automaticUpdateChecks && settings.notifyUpdates
+            && isVersion(manifest.version, newerThan: currentVersion)
+            && settings.skippedUpdateVersion != manifest.version
+            && now.timeIntervalSince(manifest.publishedAt) >= UpdateController.ageGate
+            && state.lastNotifiedVersion != manifest.version
+            && (state.lastNotificationVersion.map { isVersion(manifest.version, newerThan: $0) } ?? true)
+    }
 
     /// Certificate SHA-1 fingerprints accepted for staged updates — the same
     /// anchors that keep Calendar (TCC) grants stable across releases (see
@@ -977,6 +989,7 @@ final class UpdateController: ObservableObject {
     private var stagingTask: Task<Void, Never>?
     private var stagingTracker = StagingTracker()
     private var started = false
+    private var availabilityChecked = false
 
     init(store: AppStore) {
         self.store = store
@@ -985,6 +998,20 @@ final class UpdateController: ObservableObject {
             state = decoded
         }
         lastSuccessfulCheck = state.lastSuccessCheckDate
+        store.validateUpdateNotification = { [weak self] in self?.validUpdateNotification($0) ?? false }
+        store.updateNotificationSubmitted = { [weak self] item in
+            guard let self, let version = item.updateVersion else { return }
+            self.state.lastNotificationVersion = version
+            self.saveState()
+        }
+        store.updateNotificationResponse = { [weak self] item, action in
+            guard let self, action != UNNotificationDismissActionIdentifier,
+                  let version = item.updateVersion,
+                  UpdateLogic.isVersion(version, newerThan: UpdateLogic.currentVersion) else { return }
+            if self.available?.version == version { self.presentAvailableFromMenu() }
+            else { self.check(userInitiated: true) }
+        }
+        store.updateNotificationTick = { [weak self] in self?.offerUpdateNotification() }
     }
 
     deinit {
@@ -1021,6 +1048,8 @@ final class UpdateController: ObservableObject {
     /// before this, the helper may still roll back and relaunch the OLD app,
     /// where the marker must survive so the failed version isn't re-offered.)
     func startupHealthAcknowledged() {
+        let installedUpdate = UpdateLogic.justInstalledVersion(pending: state.pendingInstallVersion, currentVersion: UpdateLogic.currentVersion) != nil
+        store.featureGuides?.startupHealthAcknowledged(installedUpdate: installedUpdate, hasCalendar: !store.subscriptions.isEmpty || !store.nativeCalendars.isEmpty)
         pendingInstalledVersion = nil
         guard let installed = UpdateLogic.justInstalledVersion(pending: state.pendingInstallVersion, currentVersion: UpdateLogic.currentVersion) else { return }
         state = UpdateLogic.stateAfterSuccessfulInstall(state)
@@ -1103,6 +1132,7 @@ final class UpdateController: ObservableObject {
     private func applyDecision(_ decision: UpdateDecision, userInitiated: Bool) {
         switch decision {
         case .available(let manifest):
+            availabilityChecked = true
             available = manifest
             noteFirstSeen(manifest)
             // First discovery stages eagerly. Once a shown update loses its
@@ -1114,14 +1144,21 @@ final class UpdateController: ObservableObject {
             }
             if userInitiated {
                 presentAvailable(manifest)
-            } else if stagedVersion == manifest.version,
+            } else if !store.settings.notifyUpdates, stagedVersion == manifest.version,
                       UpdateLogic.shouldEscalate(availableVersion: manifest.version, state: state, now: Date()) {
                 presentAvailable(manifest)
             }
+            if !userInitiated { offerUpdateNotification() }
+            store.notifications?.reconcile()
         case .skippedVersion:
-            break // v2 UI; silently equals up-to-date for now
-        case .upToDate:
+            availabilityChecked = true
             available = nil
+            clearStaging()
+            store.notifications?.reconcile()
+        case .upToDate:
+            availabilityChecked = true
+            available = nil
+            store.notifications?.reconcile()
             clearStaging()
             state.firstSeenUpdateVersion = nil
             state.firstSeenUpdateDate = nil
@@ -1133,6 +1170,27 @@ final class UpdateController: ObservableObject {
                 windowContent = .problem(title: "Couldn't check for updates", message: reason, retry: .check)
             }
         }
+    }
+
+    private func validUpdateNotification(_ item: ReminderNotification) -> Bool {
+        guard let version = item.updateVersion, store.settings.notifyUpdates,
+              store.settings.automaticUpdateChecks, store.settings.skippedUpdateVersion != version,
+              UpdateLogic.isVersion(version, newerThan: UpdateLogic.currentVersion) else { return false }
+        // Retain cold receipts until an authoritative check can prove withdrawal.
+        return !availabilityChecked || available?.version == version
+    }
+
+    private func offerUpdateNotification() {
+        guard let manifest = available,
+              UpdateLogic.shouldNotifyUpdate(manifest: manifest, state: state, settings: store.settings,
+                                             currentVersion: UpdateLogic.currentVersion, now: Date()) else { return }
+        store.notifications?.offer(ReminderNotification(
+            id: "now.update." + NotificationLogic.key(manifest.version),
+            keys: ["update:" + manifest.version], fingerprints: [],
+            expires: Date().addingTimeInterval(30 * 86400), catchUp: false,
+            updateVersion: manifest.version,
+            title: "now \(manifest.version) is available", body: "Open to review the update and install it.",
+            category: "", sound: false), now: Date())
     }
 
     private func noteFirstSeen(_ manifest: UpdateManifest) {
@@ -1222,7 +1280,7 @@ final class UpdateController: ObservableObject {
                     self.stagedRoot = staged.stagingRoot
                     self.stagedVersion = staged.manifest.version
                     // Escalation is evaluated once staging is ready.
-                    if self.available?.version == staged.manifest.version,
+                    if !self.store.settings.notifyUpdates, self.available?.version == staged.manifest.version,
                        UpdateLogic.shouldEscalate(availableVersion: staged.manifest.version, state: self.state, now: Date()) {
                         self.presentAvailable(staged.manifest)
                     }

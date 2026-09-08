@@ -33,7 +33,7 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 ## Features
 
 **Reminders**
-- Fullscreen reminder just before a meeting starts.
+- Fullscreen or macOS notification reminders just before a meeting starts.
 - One-click **Join** (Zoom, Meet, Teams, Webex, any meeting link).
 - Keyboard shortcuts: `esc` close, `return` join, `s` snooze, `1`-`9` join a specific meeting.
 - Snooze until the meeting starts or for `x` minutes (choose a default in Settings).
@@ -68,7 +68,7 @@ After a successful ICS sync, `now` saves the fetched meeting occurrences locally
 
 Saved data covers the original fetch window (up to 14 days ahead); it cannot know about later edits or cancellations, or generate meetings beyond that window. The menu reports offline/sync problems in its existing red status row. Settings shows the last successful sync, whether saved data is in use, and when its coverage has expired. “Last synced” still means the last completed full refresh attempt.
 
-Copies live in `~/Library/Application Support/com.thomasboch.now/CalendarCache-v1/`, with owner-only file permissions. They contain meeting details and Join links; feed URLs are represented by a fingerprint. Disabling, removing, or changing a calendar URL clears its saved copy. Storage is bounded to 16 MB per calendar and 64 MB total; storage failures are surfaced without discarding the live agenda. Snoozes and dismissed-reminder history still reset on restart.
+Copies live in `~/Library/Application Support/com.thomasboch.now/CalendarCache-v1/`, with owner-only file permissions. They contain meeting details and Join links; feed URLs are represented by a fingerprint. Disabling, removing, or changing a calendar URL clears its saved copy. Storage is bounded to 16 MB per calendar and 64 MB total; storage failures are surfaced without discarding the live agenda. Handled reminders and exact snooze deadlines survive restart; ended meetings never re-alert.
 
 ## Building from source
 
@@ -96,3 +96,19 @@ See [AGENTS.md](AGENTS.md) for development notes and the release workflow.
 ## Author & License
 
 [Thomas Boch](https://thomasboch.com) · [GitHub](https://github.com/BoThomas) · [MIT license](LICENSE)
+
+## Notification reminders
+
+In Settings → Reminder, choose **Fullscreen** (the default) or **macOS notification**. You can also use notifications only during another detected meeting, or for meetings already running when now launches or your Mac wakes. Existing reminder and suppression choices are preserved until you change them.
+
+Enabling a notification feature asks macOS for permission. If you decline, open **Notification Settings…**, then System Settings → Notifications → now and enable notifications. Settings shows current permission, offers a generic **Send Test Notification**, and includes guidance for Focus, sound, persistent alerts, and screen-sharing restrictions. macOS decides whether a banner appears; now never silently replaces a blocked notification with fullscreen.
+
+Notifications offer **Join** when a single meeting has a link and **Snooze** when a safe duration remains. Snooze uses your existing default and safe fallback; clicking the notification opens the menu-bar agenda. **Hide meeting details** uses generic wording. Notifications use the macOS notification sound; the custom sound picker controls fullscreen reminders. Notifications during another meeting are silent.
+
+**Notify about new updates** sends one silent notification per new version while automatic update checks are enabled. Clicking opens the update window; manual checks still open it directly. This replaces automatic update-window popups when enabled.
+
+The setup guide offers recommended notification choices after your first calendar is connected, or in Update Complete when upgrading across a feature’s introduction. Later updates do not repeat old guides. Declining setup permission leaves your settings unchanged.
+
+**Notify about calendar sync problems** is separately optional: one silent notification after five minutes of continuous failure, with details in Settings. Unchanged failures do not repeat, and Pause Reminders does not disable sync diagnostics.
+
+now must be running to deliver reminders, including snoozes. After a restart, unhandled ongoing meetings remain eligible; handled reminders and snoozes are remembered. Obsolete Notification Center entries are removed while now runs and on its next launch.

@@ -22,6 +22,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
+        let transport = SystemNotificationTransport()
+        let notifications = ReminderNotificationController(transport: transport)
+        transport.response = { [weak notifications] id, action in notifications?.receive(id: id, action: action) }
+        store.connectNotifications(notifications)
+        store.featureGuides = FeatureGuideController()
+        store.openNotificationAgenda = { [weak self] in self?.menuBarController?.openAgenda() }
+        store.openNotificationSyncSettings = { [weak self] in self?.openSettings() }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.type == .keyDown,
                event.modifierFlags.contains(.command),

@@ -30,6 +30,7 @@ enum SelfTest {
         linkRankingTests(&links)
         var reminders = Checker()
         reminderTests(&reminders)
+        notificationTests(&reminders)
         var settings = Checker()
         settingsTests(&settings)
         var fetch = Checker()

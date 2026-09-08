@@ -1,0 +1,207 @@
+import Foundation
+import SwiftUI
+
+/// Stable feature IDs, not release numbers: an upgrade can cross several introductions.
+/// Append entries when adding features; never rename an ID or remove it from history.
+struct FeatureGuideDefinition: Identifiable, Equatable {
+    enum Content: Equatable {
+        case notifications
+        case information(title: String, message: String)
+    }
+    let id: String
+    let includeInInitialSetup: Bool
+    let content: Content
+}
+
+enum FeatureGuideCatalog {
+    static let notificationsID = "notification-setup-v1"
+    static let entries = [FeatureGuideDefinition(id: notificationsID, includeInInitialSetup: true, content: .notifications)]
+}
+
+struct FeatureGuideState: Codable, Equatable {
+    var encountered: Set<String> = []
+    var pendingSettings: Set<String> = []
+
+    /// Called only after startup health is acknowledged. Union retains history
+    /// across downgrades too. Closing/skipping a guide does not nag next release.
+    mutating func acknowledge(catalog: [FeatureGuideDefinition], installedUpdate: Bool, hasCalendar: Bool) -> [String] {
+        let introduced = catalog.filter { !encountered.contains($0.id) }
+        encountered.formUnion(catalog.map(\.id))
+        if installedUpdate {
+            let ids = introduced.map(\.id)
+            pendingSettings.subtract(ids)
+            return ids
+        }
+        pendingSettings.formUnion(introduced.filter { hasCalendar || $0.includeInInitialSetup }.map(\.id))
+        return []
+    }
+}
+
+struct NotificationSetupChoices: Equatable {
+    var duringMeetings: Bool
+    var catchUp: Bool
+    var updates: Bool
+    var needsPermission: Bool { duringMeetings || catchUp || updates }
+
+    init(settings: AppSettings, supportsMeetings: Bool = MeetingActivityProbe.platformPotentiallySupported) {
+        // Existing notification and suppression choices survive. Only unconfigured
+        // users receive the new recommendations; update notifications are new.
+        duringMeetings = supportsMeetings && (settings.usesNotifications ? settings.notifyDuringMeetings : settings.inMeetingDelivery != .suppress)
+        catchUp = settings.usesNotifications ? settings.notifyOnCatchUp : true
+        updates = settings.automaticUpdateChecks
+    }
+}
+
+@MainActor
+final class FeatureGuideController: ObservableObject {
+    static let storageKey = "local.tboch.now.feature-guides.v1"
+    @Published private(set) var state: FeatureGuideState
+    @Published private(set) var updateIDs: [String] = []
+    let catalog: [FeatureGuideDefinition]
+    private let defaults: UserDefaults
+    private var acknowledged = false
+
+    init(defaults: UserDefaults = .standard, catalog: [FeatureGuideDefinition] = FeatureGuideCatalog.entries) {
+        self.defaults = defaults
+        self.catalog = catalog
+        state = defaults.data(forKey: Self.storageKey).flatMap { try? JSONDecoder().decode(FeatureGuideState.self, from: $0) } ?? FeatureGuideState()
+    }
+
+    func startupHealthAcknowledged(installedUpdate: Bool, hasCalendar: Bool) {
+        guard !acknowledged else { return }
+        acknowledged = true
+        updateIDs = state.acknowledge(catalog: catalog, installedUpdate: installedUpdate, hasCalendar: hasCalendar)
+        save()
+    }
+
+    func definitions(for ids: [String]) -> [FeatureGuideDefinition] { catalog.filter { ids.contains($0.id) } }
+    var settingsIDs: [String] { catalog.filter { state.pendingSettings.contains($0.id) }.map(\.id) }
+    func finish(_ ids: [String]) {
+        state.pendingSettings.subtract(ids)
+        save()
+    }
+    private func save() {
+        if let data = try? JSONEncoder().encode(state) { defaults.set(data, forKey: Self.storageKey) }
+    }
+}
+
+/// Shared by initial setup and update success. Future informational
+/// cards require only a catalog entry; interactive features add a content case.
+struct FeatureGuideView: View {
+    @ObservedObject var store: AppStore
+    @ObservedObject var guides: FeatureGuideController
+    let ids: [String]
+    var onFinish: () -> Void = {}
+    var usesKeyboardShortcuts: Bool
+    @State private var choices: NotificationSetupChoices
+    @State private var busy = false
+    @State private var problem: String?
+    @State private var permissionBlocked = false
+    @State private var generation = UUID()
+
+    init(store: AppStore, guides: FeatureGuideController, ids: [String], usesKeyboardShortcuts: Bool = false, onFinish: @escaping () -> Void = {}) {
+        self.store = store
+        self.guides = guides
+        self.ids = ids
+        self.onFinish = onFinish
+        self.usesKeyboardShortcuts = usesKeyboardShortcuts
+        _choices = State(initialValue: NotificationSetupChoices(settings: store.settings))
+    }
+    private var hasNotifications: Bool { guides.definitions(for: ids).contains { $0.content == .notifications } }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(guides.definitions(for: ids)) { guide in
+                switch guide.content {
+                case .notifications:
+                    Text("Set up notifications").font(.headline)
+                    Text("Choose when now should notify you. Your regular reminder style stays as it is.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Toggle("During another meeting", isOn: $choices.duringMeetings)
+                        .disabled(!MeetingActivityProbe.platformPotentiallySupported || busy)
+                    Toggle("Meetings in progress after launch or wake", isOn: $choices.catchUp).disabled(busy)
+                    Toggle("New updates available", isOn: $choices.updates).disabled(busy || !store.settings.automaticUpdateChecks)
+                    if !store.settings.automaticUpdateChecks {
+                        Text("Update notifications require automatic update checks, which are currently off.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !MeetingActivityProbe.platformPotentiallySupported {
+                        Text("Meeting detection requires macOS 14 or later.").font(.caption).foregroundStyle(.secondary)
+                    }
+                case .information(let title, let message):
+                    Text(title).font(.headline)
+                    Text(message).font(.callout).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let problem {
+                Text(problem).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+            if permissionBlocked {
+                Button("Open Notification Settings…") { store.notifications?.openSettings() }
+            }
+            HStack {
+                if busy { ProgressView().controlSize(.small) }
+                Spacer(minLength: 0)
+                Button(hasNotifications ? "Keep Current Settings" : "Close") { finish() }
+                    .keyboardShortcut(usesKeyboardShortcuts ? .cancelAction : nil)
+                Button(hasNotifications && choices.needsPermission ? (permissionBlocked ? "Check Permission & Enable" : "Enable Notifications…") : "Continue") { enable() }
+                    .keyboardShortcut(usesKeyboardShortcuts ? .defaultAction : nil)
+                    .disabled(busy)
+            }
+        }
+        .onDisappear { generation = UUID() }
+    }
+    private func finish() {
+        generation = UUID()
+        guides.finish(ids)
+        onFinish()
+    }
+    private func enable() {
+        guard !busy else { return }
+        guard hasNotifications else { finish(); return }
+        let token = generation
+        let original = store.settings
+        let selected = choices
+        busy = true
+        problem = nil
+        Task { @MainActor in
+            defer { busy = false }
+            if selected.needsPermission {
+                guard let notifications = store.notifications, await notifications.authorizeForSetup() else {
+                    guard generation == token else { return }
+                    permissionBlocked = true
+                    problem = "Your settings are unchanged. Allow now in System Settings → Notifications, then check permission here to finish setup."
+                    return
+                }
+            }
+            guard generation == token else { return }
+            var owners: [MeetingAudioOwner]?
+            if selected.duringMeetings {
+                let result = await Task.detached(priority: .utility) { MeetingActivityProbe.snapshot() }.value
+                guard generation == token else { return }
+                switch result {
+                case .success(let snapshot): owners = snapshot
+                case .failure(let error):
+                    problem = "Your settings are unchanged. \(error.message) You can try again or turn off ‘During another meeting’."
+                    return
+                }
+            }
+            guard generation == token, store.settings == original else {
+                problem = "Settings changed while setup was open. Review your choices and try again."
+                return
+            }
+            store.applyNotificationSetup(selected, owners: owners)
+            finish()
+        }
+    }
+}
+
+struct InitialFeatureGuideView: View {
+    @ObservedObject var store: AppStore
+    @ObservedObject var guides: FeatureGuideController
+    var body: some View {
+        if (!store.subscriptions.isEmpty || !store.nativeCalendars.isEmpty) && !guides.settingsIDs.isEmpty {
+            FeatureGuideView(store: store, guides: guides, ids: guides.settingsIDs)
+                .padding(16)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.08)))
+        }
+    }
+}
