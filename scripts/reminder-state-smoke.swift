@@ -154,7 +154,7 @@ struct ReminderStateSmoke {
         controller.menuNeedsUpdate(trackedMenu)
         let originalRows = trackedMenu.items
         controller.smokeBeginTracking()
-        controller.smokeRefreshMenu(at: Date().addingTimeInterval(2))
+        controller.smokeRefreshMenu(at: clock.addingTimeInterval(2))
         controller.smokeEndTracking()
         try require(trackedMenu.items.count == originalRows.count && zip(trackedMenu.items, originalRows).allSatisfy { $0 === $1 },
                     "elapsed sync label does not replace menu rows on timer ticks")

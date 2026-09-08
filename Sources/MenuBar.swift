@@ -71,7 +71,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func updateButton() {
         guard let button = statusItem.button else { return }
-        let now = Date()
+        let now = store.now()
         refreshOpenMenu(now: now)
         if store.isPaused {
             button.attributedTitle = NSAttributedString(string: "")
@@ -189,7 +189,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
         clearEventTooltips(in: menu)
         guard let item, let event = item.representedObject as? MeetingEvent else { return }
-        item.toolTip = Self.tooltipText(for: event, now: Date())
+        item.toolTip = Self.tooltipText(for: event, now: store.now())
     }
 
     private func clearEventTooltips(in menu: NSMenu) {
@@ -230,14 +230,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let now = Date()
+        let now = store.now()
         lastUpdateSignature = currentUpdateSignature
         lastMenuStructureSignature = menuStructureSignature(at: now)
         lastSyncItem = nil
         menu.removeAllItems()
         let visible = store.events.filter { AppStore.isVisible($0, at: now) }
         if store.isPaused {
-            let until = store.pausedUntil == Date.distantFuture ? "indefinitely" : "until \(Fmt.time.string(from: store.pausedUntil ?? Date()))"
+            let until = store.pausedUntil == Date.distantFuture ? "indefinitely" : "until \(Fmt.time.string(from: store.pausedUntil ?? now))"
             menu.addItem(withTitle: "Reminders paused \(until)", action: nil, keyEquivalent: "")
             menu.addItem(withTitle: "Resume Now", action: #selector(resumeAction), keyEquivalent: "").target = self
             menu.addItem(.separator())

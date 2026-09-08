@@ -190,7 +190,7 @@ final class AppStore: ObservableObject {
     }
 
     var isPaused: Bool {
-        if let until = pausedUntil { return Date() < until }
+        if let until = pausedUntil { return now() < until }
         return false
     }
 
@@ -206,12 +206,12 @@ final class AppStore: ObservableObject {
     }
 
     var upcoming: [MeetingEvent] {
-        let now = Date()
+        let now = self.now()
         return events.filter { isVisible($0, at: now) }
     }
 
     var menuBarFocus: MenuBarFocus? {
-        Self.menuBarFocus(events: events, elapsedStartMinutes: settings.elapsedStartMinutes, now: Date())
+        Self.menuBarFocus(events: events, elapsedStartMinutes: settings.elapsedStartMinutes, now: now())
     }
 
     /// Whether a running event may still show its elapsed-start countdown.
@@ -513,11 +513,11 @@ final class AppStore: ObservableObject {
     }
 
     func pause(for seconds: TimeInterval) {
-        pausedUntil = Date().addingTimeInterval(seconds)
+        pausedUntil = now().addingTimeInterval(seconds)
     }
 
     func pauseUntilMorning() {
-        pausedUntil = Self.nextMorning(after: Date())
+        pausedUntil = Self.nextMorning(after: now())
     }
 
     /// Tomorrow at 09:00 via calendar arithmetic (start-of-day + set hour) — a
