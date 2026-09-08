@@ -709,7 +709,8 @@ struct SubscriptionRow: View {
             Text(Self.displayURL(subscription.url)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 .help("Full URL is visible in the edit sheet")
             if let error = error {
-                Text(error).font(.system(size: 11)).foregroundStyle(.red).lineLimit(2)
+                Text(error).font(.system(size: 11)).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             } else if let warning = warning {
                 Text(warning).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2)
             }

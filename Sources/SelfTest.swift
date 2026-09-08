@@ -659,19 +659,18 @@ enum SelfTest {
         let oldDates = dates(old.events, uid: "oldweekly@test")
         c.expect(!oldDates.isEmpty, "1995-anchored weekly still expands into the window")
 
-        // Partial output must still warn when a COUNT rule exhausts its own
-        // iteration budget before reaching the end of the fetch window.
-        let limitedAnchor = now.addingTimeInterval(-19_995 * 86400)
+        // Incomplete expansion is a feed failure, never an authoritative partial snapshot.
+        let limitedAnchor = now.addingTimeInterval(-Double(RRULEExpander.maxIterationsPerEvent - 5) * 86400)
         let partiallyLimited = build("""
         BEGIN:VEVENT
         UID:partialbudget@test
         DTSTART:\(Self.icsStamp(limitedAnchor, tz: utc))
         SUMMARY:Partially expanded
-        RRULE:FREQ=DAILY;COUNT=30000
+        RRULE:FREQ=DAILY;COUNT=200000
         END:VEVENT
         """)
-        c.expect(!dates(partiallyLimited.events, uid: "partialbudget@test").isEmpty, "budget-limited recurrence can produce partial output")
-        c.expect(partiallyLimited.warnings.contains { $0.contains("recurrence workload limit") }, "partial recurrence budget exhaustion warns")
+        c.expect(partiallyLimited.events.isEmpty && partiallyLimited.error != nil, "resource-limited recurrence rejects partial feed")
+        c.expect(partiallyLimited.error?.contains("100000 calculation steps") == true && partiallyLimited.error?.contains("checking dates before") == true, "recurrence failure explains measured work and history")
 
         // The feed cap is enforced while emitting one large UID group, not
         // only between groups. Generate compact RDATE lines to avoid a fixture.
@@ -694,8 +693,30 @@ enum SelfTest {
         if !stamps.isEmpty { cappedBody += "RDATE:" + stamps.joined(separator: ",") + "\n" }
         cappedBody += "END:VEVENT"
         let capped = build(cappedBody)
-        c.expect(dates(capped.events, uid: "capped@test").count == ICSBuilder.maxEventsPerFeed, "single UID group capped at \(ICSBuilder.maxEventsPerFeed)")
-        c.expect(capped.warnings.contains { $0.contains("more than \(ICSBuilder.maxEventsPerFeed) events") }, "single UID cap warns")
+        c.expect(capped.events.isEmpty && capped.error?.contains("meeting safety limit") == true, "relevant-date flood rejects whole feed instead of returning arbitrary meetings")
+
+        // An exact budget fit is complete; only an attempted additional step fails.
+        for (rule, end, exact) in [("FREQ=DAILY", "20260827T000000Z", 2), ("FREQ=MONTHLY", "20260926T000000Z", 4), ("FREQ=DAILY;COUNT=1", "20260926T000000Z", 1)] {
+            let fixture = ICSParser.parse(Self.wrap("BEGIN:VEVENT\nUID:boundary\nDTSTART:20260826T000000Z\nRRULE:\(rule)\nEND:VEVENT"))
+            if let event = fixture.events.first, let start = event.dtStart,
+               let until = ICSParser.parseDate(ICSProperty(name: "DTSTART", params: [:], value: end)).date {
+                var budget = exact
+                let complete = RRULEExpander.expand(event, windowStart: start, windowEnd: until, budget: &budget)
+                c.expect(complete.completed && budget == 0, "exact recurrence budget completes: \(rule)")
+                budget = exact - 1
+                let incomplete = RRULEExpander.expand(event, windowStart: start, windowEnd: until, budget: &budget)
+                c.expect(!incomplete.completed, "one step too few reports incomplete: \(rule)")
+            } else { c.expect(false, "budget boundary fixture parses") }
+        }
+
+        // Historical/duplicate dates must not crowd out the sole useful RDATE.
+        let oldDatesLine = "RDATE:" + Array(repeating: "20000102T120000Z", count: 100).joined(separator: ",")
+        let oldDateBody = "BEGIN:VEVENT\nUID:old-rdates\nDTSTART:20000101T120000Z\n" + Array(repeating: oldDatesLine, count: 101).joined(separator: "\n") + "\nRDATE:20260826T100000Z\nEND:VEVENT"
+        let historyResult = build(oldDateBody)
+        c.expect(historyResult.error == nil && historyResult.events.count == 1, "old and duplicate RDATEs do not consume relevant-date capacity")
+        let oldCount = build("BEGIN:VEVENT\nUID:old-count\nDTSTART:19000101T100000Z\nRRULE:FREQ=DAILY;COUNT=100000\nEND:VEVENT")
+        c.expect(oldCount.error == nil && !oldCount.events.isEmpty, "larger per-series allowance handles century-old COUNT series")
+
 
         // DST: a daily 02:30 Berlin meeting across the 2026-03-29 spring-forward
         // gap and the 2026-10-25 fall-back overlap yields exactly one occurrence

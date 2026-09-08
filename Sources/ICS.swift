@@ -816,9 +816,8 @@ extension ParsedEvent {
 // MARK: - Recurrence expansion
 
 enum RRULEExpander {
-    /// Hard per-event cap on calendar-day/month operations (a COUNT rule
-    /// anchored decades ago is the only way to hit it).
-    static let maxIterationsPerEvent = 20_000
+    /// Deterministic per-series work allowance; no wall-clock deadline.
+    static let maxIterationsPerEvent = 100_000
 
     static func occurrences(of event: ParsedEvent, windowStart: Date, windowEnd: Date) -> [Date] {
         var budget = maxIterationsPerEvent
@@ -829,9 +828,19 @@ enum RRULEExpander {
     /// enforced exactly). `budget` bounds the work spent per event and is
     /// decremented by the iterations consumed — the caller pools it across the
     /// whole feed.
+    struct Expansion {
+        var dates: [Date]
+        var completed: Bool
+        var historicalSteps: Int
+    }
+
     static func occurrences(of event: ParsedEvent, windowStart: Date, windowEnd: Date, budget: inout Int) -> [Date] {
-        guard let dtStart = event.dtStart else { return [] }
-        guard let rule = event.rrule else { return [dtStart] }
+        expand(event, windowStart: windowStart, windowEnd: windowEnd, budget: &budget).dates
+    }
+
+    static func expand(_ event: ParsedEvent, windowStart: Date, windowEnd: Date, budget: inout Int) -> Expansion {
+        guard let dtStart = event.dtStart else { return Expansion(dates: [], completed: true, historicalSteps: 0) }
+        guard let rule = event.rrule else { return Expansion(dates: [dtStart], completed: true, historicalSteps: 0) }
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = event.tz ?? .current
         cal.firstWeekday = rule.wkst
@@ -847,10 +856,14 @@ enum RRULEExpander {
         var result: [Date] = []
         var produced = 0
         var exhausted = false
+        var limited = false
+        var historicalSteps = 0
+        let windowDay = cal.startOfDay(for: windowStart)
 
         @discardableResult func consider(_ day: Date, isAnchor: Bool = false) -> Bool {
-            guard budget > 0 else { exhausted = true; return false }
+            guard budget > 0 else { limited = true; exhausted = true; return false }
             budget -= 1
+            if day < windowDay { historicalSteps += 1 }
             let occ: Date
             if isAnchor {
                 // DTSTART is explicit input, not a generated local time.
@@ -890,10 +903,12 @@ enum RRULEExpander {
                     }
                 } else if budget > 0 {
                     budget -= 1
+                    if day < windowDay { historicalSteps += 1 }
                 } else {
+                    limited = true
                     exhausted = true
                 }
-                guard budget > 0, let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+                guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
                 day = next
             }
         case .monthly, .yearly:
@@ -901,8 +916,9 @@ enum RRULEExpander {
             var month = startOfMonth(firstDay, cal: cal)
             let lastMonth = startOfMonth(lastDay, cal: cal)
             while month <= lastMonth, !exhausted {
-                guard budget > 0 else { break }
+                guard budget > 0 else { limited = true; break }
                 budget -= 1
+                if month < startOfMonth(windowDay, cal: cal) { historicalSteps += 1 }
                 if monthsAlign(month, cal: cal, rule: rule, anchorComps: anchorComps, interval: interval) {
                     for day in matchingDays(ofMonth: month, cal: cal, rule: rule, anchorComps: anchorComps) {
                         guard day >= firstDay, day <= lastDay else { continue }
@@ -916,7 +932,7 @@ enum RRULEExpander {
                 month = next
             }
         }
-        return result
+        return Expansion(dates: result, completed: !limited, historicalSteps: historicalSteps)
     }
 
     private static func matchesDaily(_ day: Date, cal: Calendar, rule: RRULE, anchor: Date, interval: Int) -> Bool {
@@ -1257,7 +1273,7 @@ struct ICSBuildResult {
 
 enum ICSBuilder {
     static let maxEventsPerFeed = 10_000
-    static let maxFeedRecurrenceBudget = 200_000
+    static let maxFeedRecurrenceBudget = 500_000
 
     static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date) -> ICSBuildResult {
         let resolvedHex = subscription.colorHex.isEmpty ? Palette.hex(for: subscription.colorIndex) : subscription.colorHex
@@ -1268,18 +1284,13 @@ enum ICSBuilder {
         var warnings = parsed.warnings
         var result: [MeetingEvent] = []
         var feedBudget = maxFeedRecurrenceBudget
-        var budgetWarned = false
-        var eventCapWarned = false
+        var historicalSteps = 0
         var seenEventKeys = Set<String>()
         let groups = Dictionary(grouping: parsed.events, by: { $0.uid })
-        for (_, events) in groups {
-            guard result.count < maxEventsPerFeed else {
-                if !eventCapWarned {
-                    eventCapWarned = true
-                    warnings.append("Feed has more than \(maxEventsPerFeed) events — truncated")
-                }
-                break
-            }
+        let recurringSeries = groups.values.filter { $0.contains { $0.rrule != nil } }.count
+        // Stable allocation of the deterministic work budget, independent of hashing.
+        for uid in groups.keys.sorted() {
+            let events = groups[uid]!
             let master = latestRevision(of: events.filter { $0.recurrenceIDProperty == nil && $0.dtStart != nil })
             var occurrences: [(start: Date, event: ParsedEvent)] = []
             if let originalMaster = master {
@@ -1292,38 +1303,42 @@ enum ICSBuilder {
                 if m.rrule != nil, !m.isAllDay {
                     let initialBudget = min(feedBudget, RRULEExpander.maxIterationsPerEvent)
                     var eventBudget = initialBudget
-                    let dates = RRULEExpander.occurrences(of: m, windowStart: windowStart, windowEnd: windowEnd, budget: &eventBudget)
+                    let expansion = RRULEExpander.expand(m, windowStart: windowStart, windowEnd: windowEnd, budget: &eventBudget)
                     feedBudget -= initialBudget - eventBudget
-                    if feedBudget <= 0, !budgetWarned {
-                        budgetWarned = true
-                        warnings.append("Recurrence workload limit reached — some events may be missing")
+                    historicalSteps += expansion.historicalSteps
+                    if !expansion.completed {
+                        let used = maxFeedRecurrenceBudget - feedBudget
+                        let scope = feedBudget == 0 ? "calendar" : "series"
+                        let limit = scope == "calendar" ? maxFeedRecurrenceBudget : RRULEExpander.maxIterationsPerEvent
+                        let title = String(m.title.prefix(100))
+                        let message = "Calendar not updated: recurrence processing reached the \(scope) limit of \(limit) calculation steps while checking “\(title)”. This feed contains \(parsed.events.count) event records and \(recurringSeries) recurring series. We used \(used) steps, including \(historicalSteps) checking dates before the current window. COUNT rules require counting from their original start on each refresh. Reduce old recurring history or use a smaller calendar export. Previously loaded meetings are kept if available; new changes could not be checked."
+                        return ICSBuildResult(error: message)
                     }
-                    if eventBudget <= 0 {
-                        warnings.append("“\(m.title)” reached its recurrence workload limit — some occurrences may be missing")
-                    }
-                    for date in dates { occurrences.append((date, m)) }
+                    for date in expansion.dates { occurrences.append((date, m)) }
                 } else if !m.isAllDay, let start = m.dtStart, start >= windowStart, start <= windowEnd, !m.exdates.contains(start) {
                     occurrences.append((start, m))
                 }
                 // RDATE: extra occurrence dates beyond the rule.
                 if !m.isAllDay {
-                    let resolvedRDates = Self.resolvedDates(m.rdateProperties, masterTz: m.tz, limit: maxEventsPerFeed + 1)
-                    if resolvedRDates.count > maxEventsPerFeed, !eventCapWarned {
-                        eventCapWarned = true
-                        warnings.append("Feed has more than \(maxEventsPerFeed) events — recurrence dates truncated")
+                    let excluded = Set(m.exdates)
+                    let resolvedRDates = Self.resolvedDates(m.rdateProperties, masterTz: m.tz,
+                        limit: maxEventsPerFeed + 1, window: windowStart...windowEnd,
+                        minimum: m.dtStart, excluding: excluded)
+                    if resolvedRDates.count > maxEventsPerFeed {
+                        return ICSBuildResult(error: occurrenceLimitError(records: parsed.events.count, detail: "more than \(maxEventsPerFeed) distinct additional dates inside the six-hour lookback and next 14 days"))
                     }
                     var occurrenceStarts = Set(occurrences.map(\.start))
-                    for rdate in resolvedRDates.prefix(maxEventsPerFeed) {
-                        guard rdate >= windowStart, rdate <= windowEnd, rdate >= (m.dtStart ?? rdate),
-                              !m.exdates.contains(rdate),
-                              occurrenceStarts.insert(rdate).inserted else { continue }
+                    for rdate in resolvedRDates where occurrenceStarts.insert(rdate).inserted {
                         occurrences.append((rdate, m))
                     }
                 }
             }
             // Detached recurrence overrides.
             var overrides = events.filter { $0.recurrenceIDProperty != nil }
-            overrides.sort { revisionKey($0) > revisionKey($1) }
+            overrides = overrides.enumerated().sorted {
+                let lhs = revisionKey($0.element), rhs = revisionKey($1.element)
+                return lhs == rhs ? $0.offset < $1.offset : lhs > rhs
+            }.map(\.element)
             var seenRids = Set<Date>()
             for override in overrides {
                 if let range = override.recurrenceRange {
@@ -1345,11 +1360,7 @@ enum ICSBuilder {
                 let eventKey = "\(occurrence.event.uid)|\(Int(occurrence.start.timeIntervalSince1970))"
                 guard seenEventKeys.insert(eventKey).inserted else { continue }
                 guard result.count < maxEventsPerFeed else {
-                    if !eventCapWarned {
-                        eventCapWarned = true
-                        warnings.append("Feed has more than \(maxEventsPerFeed) events — truncated")
-                    }
-                    break
+                    return ICSBuildResult(error: occurrenceLimitError(records: parsed.events.count, detail: "more than \(maxEventsPerFeed) meeting occurrences inside the six-hour lookback and next 14 days"))
                 }
                 let end = occurrence.start.addingTimeInterval(occurrence.event.durationSeconds)
                 result.append(MeetingEvent(
@@ -1373,6 +1384,10 @@ enum ICSBuilder {
         return ICSBuildResult(events: events, warnings: warnings)
     }
 
+    private static func occurrenceLimitError(records: Int, detail: String) -> String {
+        "Calendar not updated: this feed has \(records) event records producing \(detail). This exceeds the meeting safety limit. Use a smaller calendar export or reduce unusually dense recurrence dates. Previously loaded meetings are kept if available; new changes could not be checked."
+    }
+
     /// Highest SEQUENCE / latest DTSTAMP wins — a stale VEVENT revision must not
     /// override the current one (flaky servers sometimes emit both).
     private static func latestRevision(of events: [ParsedEvent]) -> ParsedEvent? {
@@ -1385,14 +1400,17 @@ enum ICSBuilder {
 
     /// Resolves EXDATE/RDATE values: their own TZID/`Z` when present, otherwise
     /// the master's DTSTART zone (never the local zone).
-    private static func resolvedDates(_ properties: [ICSProperty], masterTz: TimeZone?, limit: Int? = nil) -> [Date] {
+    private static func resolvedDates(_ properties: [ICSProperty], masterTz: TimeZone?, limit: Int? = nil, window: ClosedRange<Date>? = nil, minimum: Date? = nil, excluding: Set<Date> = []) -> [Date] {
         var dates: [Date] = []
+        var seen = Set<Date>()
         for property in properties {
             for part in property.value.split(separator: ",") {
                 let piece = ICSProperty(name: property.name, params: property.params, value: String(part))
                 if let date = ICSParser.parseDate(piece, fallbackTimeZone: masterTz).date {
+                    guard window?.contains(date) ?? true, minimum.map({ date >= $0 }) ?? true,
+                          !excluding.contains(date), seen.insert(date).inserted else { continue }
                     dates.append(date)
-                    if let limit, dates.count >= limit { return dates }
+                    if let limit, dates.count >= limit { return dates.sorted() }
                 }
             }
         }
