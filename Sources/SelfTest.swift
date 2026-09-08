@@ -985,6 +985,31 @@ enum SelfTest {
         c.expect(!revisions.events.contains { $0.title == "Stale override" }, "stale override revision dropped")
         c.expect(revisions.events.contains { $0.title == "Current override" }, "highest SEQUENCE override wins")
 
+        // F05: EXDATE applies to DTSTART with or without a recurrence rule.
+        for extra in ["", "RDATE:20260827T100000Z"] {
+            let excluded = build("""
+            BEGIN:VEVENT
+            UID:excluded-first@test
+            DTSTART:20260826T100000Z
+            EXDATE:20260826T100000Z
+            \(extra)
+            END:VEVENT
+            """)
+            c.expect(excluded.events.count == (extra.isEmpty ? 0 : 1)
+                     && !excluded.events.contains { cal.component(.day, from: $0.start) == 26 },
+                     "F05: EXDATE excludes standalone DTSTART and preserves other RDATEs")
+        }
+        let excludedLocal = build("""
+        BEGIN:VEVENT
+        UID:excluded-local@test
+        DTSTART;TZID=Europe/Berlin:20260826T100000
+        EXDATE:20260826T100000
+        RDATE:20260827T100000
+        END:VEVENT
+        """)
+        c.expect(excludedLocal.events.count == 1 && excludedLocal.events.first?.start == ISO8601DateFormatter().date(from: "2026-08-27T08:00:00Z"),
+                 "F05: no-rule exclusions and additions inherit the master zone")
+
         // RDATE adds occurrences; one duplicating the generated occurrence
         // must not create a second card.
         let rdate = build("""

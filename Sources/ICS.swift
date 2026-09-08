@@ -1277,7 +1277,7 @@ enum ICSBuilder {
                         warnings.append("“\(m.title)” reached its recurrence workload limit — some occurrences may be missing")
                     }
                     for date in dates { occurrences.append((date, m)) }
-                } else if !m.isAllDay, let start = m.dtStart, start >= windowStart, start <= windowEnd {
+                } else if !m.isAllDay, let start = m.dtStart, start >= windowStart, start <= windowEnd, !m.exdates.contains(start) {
                     occurrences.append((start, m))
                 }
                 // RDATE: extra occurrence dates beyond the rule.
