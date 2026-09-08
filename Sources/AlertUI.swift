@@ -41,19 +41,19 @@ final class AlertController: ObservableObject {
 
     var isOpen: Bool { panel != nil }
 
-    func present(_ events: [MeetingEvent], playSound: Bool = true) {
-        guard !events.isEmpty else { return }
-        // A newly due reminder must never REPLACE a visible one (its events
-        // would be permanently discarded — they are already marked alerted) —
-        // merge into the open panel instead.
+    func present(_ events: [MeetingEvent], playSound: Bool = true, preview: Bool = false) {
+        let next = Self.nextPresentation(existing: isOpen ? shownEvents : [], existingIsPreview: isOpen && isPreview,
+                                         incoming: events, incomingIsPreview: preview)
+        guard next.acceptsDelivery else { return }
+        shownEvents = next.events
+        isPreview = next.isPreview
+        // Real reminders merge with real reminders. A real delivery replaces
+        // fabricated preview cards and immediately restores reconciliation.
         if isOpen {
-            shownEvents = Self.mergedShown(existing: shownEvents, new: events)
             reconcileSnoozeMenu(options: snoozeOptions(at: Date()))
             if playSound { store?.playSound() }
             return
         }
-        shownEvents = events
-        isPreview = false
         let panel = AlertPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         panel.level = .screenSaver
         panel.backgroundColor = .black
@@ -99,15 +99,14 @@ final class AlertController: ObservableObject {
             calendarName: "Preview",
             colorIndex: 0
         )
-        isPreview = true
-        present([event])
-        isPreview = true // present() resets it for real deliveries
+        present([event], preview: true)
     }
 
     func close() {
         snoozeMenuOpen = false
         closePanel()
         shownEvents = []
+        isPreview = false
     }
 
     func snoozeAll() {
@@ -134,13 +133,38 @@ final class AlertController: ObservableObject {
             reconcileSnoozeMenu(options: snoozeOptions(at: now))
             return
         }
-        store?.snooze(schedule)
+        if !isPreview { store?.snooze(schedule) }
         close()
     }
 
     func join(_ url: URL) {
-        NSWorkspace.shared.open(url)
-        close()
+        switch Self.joinAction(for: url, shown: shownEvents, isPreview: isPreview) {
+        case .ignore: return
+        case .dismissPreview: close()
+        case .open(let url):
+            NSWorkspace.shared.open(url)
+            close()
+        }
+    }
+
+    /// Preview and production deliveries never share a panel's event set.
+    nonisolated static func nextPresentation(existing: [MeetingEvent], existingIsPreview: Bool, incoming: [MeetingEvent], incomingIsPreview: Bool) -> (events: [MeetingEvent], isPreview: Bool, acceptsDelivery: Bool) {
+        guard !incoming.isEmpty, !(incomingIsPreview && !existingIsPreview && !existing.isEmpty) else {
+            return (existing, existingIsPreview, false)
+        }
+        if existingIsPreview || incomingIsPreview {
+            return (AppStore.normalizedEvents(incoming), incomingIsPreview, true)
+        }
+        return (mergedShown(existing: existing, new: incoming), false, true)
+    }
+
+    enum JoinAction: Equatable {
+        case ignore, dismissPreview, open(URL)
+    }
+
+    nonisolated static func joinAction(for url: URL, shown: [MeetingEvent], isPreview: Bool) -> JoinAction {
+        guard shown.contains(where: { $0.link == url }) else { return .ignore }
+        return isPreview ? .dismissPreview : .open(url)
     }
 
     /// Merges newly due events into the cards already on screen (deduped by

@@ -128,3 +128,5 @@ TCC grants (Calendar permission) are keyed to the code signature's *designated r
 - `Color.quaternary`/`NSImage.withTintColor` don't exist on this target; use `Color.primary.opacity(...)` and manual NSImage tinting.
 - Selftest constructs fixed dates in 2026 — keep deterministic (UTC/Berlin calendars explicitly).
 - Icon: `make-icon.swift` renders the SF `alarm` symbol white-on-gradient; menu bar uses the same symbol for consistency.
+
+- **Preview isolation**: real delivery replaces preview cards and resets preview state; Preview requests while real reminders are open are ignored. Preview Join only dismisses, preview snooze never writes bookkeeping, and stale Join actions are ignored. Real-to-real deliveries still merge. Pure transition/action tests cover cancellation, mute, and reschedule reconciliation.

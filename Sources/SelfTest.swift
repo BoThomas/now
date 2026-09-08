@@ -1443,6 +1443,7 @@ enum SelfTest {
     // MARK: - Reminder scheduling & alert behavior
 
     static func reminderTests(_ c: inout Checker) {
+        previewTransitionTests(&c)
         let cal = UUID()
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         func event(_ uid: String, startIn: TimeInterval, duration: TimeInterval) -> MeetingEvent {
@@ -2064,6 +2065,38 @@ enum SelfTest {
         let normalized = AppStore.normalizedEvents([tie1, e2, tie1, tie2])
         c.expect(normalized.count == 3, "duplicate ids deduped")
         c.expect(normalized.first?.id == tie2.id, "equal starts ordered by title tie-breaker")
+    }
+
+    static func previewTransitionTests(_ c: inout Checker) {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func event(_ uid: String) -> MeetingEvent {
+            MeetingEvent(uid: uid, title: uid, start: now, end: now.addingTimeInterval(1800), location: nil, notes: nil,
+                         link: URL(string: "https://zoom.us/j/\(uid)"), calendarID: UUID(), calendarName: "Test", colorIndex: 0)
+        }
+        let preview = event("preview")
+        let real = event("real")
+        let other = event("other")
+        let initial = AlertController.nextPresentation(existing: [], existingIsPreview: false, incoming: [preview], incomingIsPreview: true)
+        c.expect(initial.acceptsDelivery && initial.isPreview, "F10: preview opens as preview")
+        let delivered = AlertController.nextPresentation(existing: initial.events, existingIsPreview: initial.isPreview, incoming: [real], incomingIsPreview: false)
+        c.expect(delivered.acceptsDelivery && !delivered.isPreview && delivered.events.map(\.id) == [real.id], "F10: real delivery replaces preview and restores reconciliation")
+        let merged = AlertController.nextPresentation(existing: delivered.events, existingIsPreview: delivered.isPreview, incoming: [real, other], incomingIsPreview: false)
+        c.expect(Set(merged.events.map(\.id)) == [real.id, other.id] && !merged.isPreview, "F10: later real deliveries still merge and deduplicate")
+        let ignored = AlertController.nextPresentation(existing: merged.events, existingIsPreview: merged.isPreview, incoming: [preview], incomingIsPreview: true)
+        c.expect(!ignored.acceptsDelivery && !ignored.isPreview && ignored.events.map(\.id) == merged.events.map(\.id), "F10: Preview cannot replace or mark real reminders as synthetic")
+        let repeated = AlertController.nextPresentation(existing: [preview], existingIsPreview: true, incoming: [other], incomingIsPreview: true)
+        c.expect(repeated.events.map(\.id) == [other.id] && repeated.isPreview, "F10: repeated preview replaces prior fabricated cards")
+        c.expect(AlertController.reconciledShownEvents(shown: delivered.events, current: []).isEmpty, "F10: cancelled real reminder drops after preview replacement")
+        var muted = real
+        muted.isMuted = true
+        c.expect(AlertController.reconciledShownEvents(shown: delivered.events, current: [muted]).isEmpty, "F10: muted real reminder drops after preview replacement")
+        let moved = MeetingEvent(uid: real.uid, title: real.title, start: now.addingTimeInterval(300), end: real.end,
+                                 location: real.location, notes: real.notes, link: real.link, calendarID: real.calendarID,
+                                 calendarName: real.calendarName, colorIndex: real.colorIndex)
+        c.expect(AlertController.reconciledShownEvents(shown: delivered.events, current: [moved]).isEmpty, "F10: rescheduled real reminder drops its old card")
+        c.expect(AlertController.joinAction(for: preview.link!, shown: initial.events, isPreview: initial.isPreview) == .dismissPreview, "F10: preview Join dismisses without opening a fake meeting")
+        c.expect(AlertController.joinAction(for: preview.link!, shown: delivered.events, isPreview: delivered.isPreview) == .ignore, "F10: stale preview click cannot open a fake meeting or dismiss real cards")
+        c.expect(AlertController.joinAction(for: real.link!, shown: delivered.events, isPreview: delivered.isPreview) == .open(real.link!), "F10: real Join remains available")
     }
 
     // MARK: - Title filters (muted meetings)
