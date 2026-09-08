@@ -62,10 +62,11 @@ final class AppStore: ObservableObject {
     /// time zone, unsupported RRULE). Shown in orange in the settings rows.
     @Published private(set) var warnings: [UUID: String] = [:]
     @Published private(set) var isRefreshing = false
-    /// Time of the last refresh where every fetched subscription succeeded — a
-    /// failed or partial attempt never updates this (it is what "Last synced"
-    /// in the UI means).
-    @Published private(set) var lastRefresh: Date?
+    /// Completion time of the last full refresh, including partial/total failure.
+    /// Per-calendar errors report the outcome separately.
+    @Published private(set) var lastChecked: Date?
+    /// One common-run-loop clock for elapsed labels in Settings and the menu.
+    @Published private(set) var displayTime = Date()
     @Published private(set) var meetingActivity: MeetingActivity = .unknown
     @Published private(set) var meetingDetectionChecking = false
     @Published private(set) var meetingDetectionAvailable: Bool? = MeetingActivityProbe.platformPotentiallySupported ? nil : false
@@ -256,6 +257,8 @@ final class AppStore: ObservableObject {
 
     func addSubscription(name: String, urlString: String) {
         let subscription = CalendarSubscription(name: name, url: urlString, colorIndex: subscriptions.count)
+        // This addition belongs to the full refresh below, not a second resync.
+        previousEnabledIDs.insert(subscription.id)
         subscriptions.append(subscription)
         refresh()
     }
@@ -593,12 +596,12 @@ final class AppStore: ObservableObject {
         isRefreshing = true
         let requestID = fetchTracker.beginFull(subscriptionIDs: enabled.map(\.id))
         Task { [weak self] in
-            let results = await Self.performFetch(requests: enabled.map { FetchRequest(subscription: $0, requestID: requestID) }) { [weak self] result in
+            _ = await Self.performFetch(requests: enabled.map { FetchRequest(subscription: $0, requestID: requestID) }) { [weak self] result in
                 await self?.merge(results: [result])
             }
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
-                self.apply(results: results, fetched: enabled)
+                self.finishRefresh(fetched: enabled)
             }
         }
     }
@@ -664,11 +667,12 @@ final class AppStore: ObservableObject {
         return await transportDelegate.download(from: url, session: session)
     }
 
-    private func apply(results: [FetchResult], fetched: [CalendarSubscription]) {
-        let merged = Self.mergeICS(current: currentICSEvents, results: results, live: subscriptions, previousErrors: errors, previousWarnings: warnings, latestRequestIDs: fetchTracker.latestPerSubscription)
-        // Each result was already merged on arrival. Recheck generations for
-        // the batch timestamp without committing the snapshots a second time.
-        if merged.allSucceeded { lastRefresh = Date() }
+    private func finishRefresh(fetched: [CalendarSubscription]) {
+        // Results are applied independently on arrival. Completion means checked,
+        // not necessarily successful; failures remain visible in per-source errors.
+        let completedAt = now()
+        lastChecked = completedAt
+        displayTime = completedAt
         isRefreshing = false
         if pendingRefresh || fetched.map(\.id) != subscriptions.filter(\.isEnabled).map(\.id) || fetched.map(\.url) != subscriptions.filter(\.isEnabled).map(\.url) {
             pendingRefresh = false
@@ -745,6 +749,9 @@ final class AppStore: ObservableObject {
     }
 
     private func reconcileEvents() {
+        let enabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
+        errors = errors.filter { enabledIDs.contains($0.key) }
+        warnings = warnings.filter { enabledIDs.contains($0.key) }
         let byID = Dictionary(uniqueKeysWithValues: subscriptions.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
         let enabled = Set(subscriptions.filter(\.isEnabled).map(\.id))
         let native = events.filter { knownNativeCalendarIDs.contains($0.calendarID) }
@@ -761,6 +768,7 @@ final class AppStore: ObservableObject {
 
     private func tick() {
         let now = self.now()
+        displayTime = now
         if let until = pausedUntil, now >= until { pausedUntil = nil }
         if let alerts = alertController, alerts.isOpen {
             if alerts.shownEvents.allSatisfy({ now.timeIntervalSince($0.end) > 120 }) {

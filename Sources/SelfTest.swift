@@ -2025,7 +2025,7 @@ enum SelfTest {
         ], live: [subC, subD], previousErrors: [subC.id: "new targeted failure"], previousWarnings: [subC.id: "new targeted warning"], latestRequestIDs: tracker.latestPerSubscription)
         c.expect(supersededFull.events.map(\.id) == [cachedC.id], "full refresh result superseded by newer targeted resync")
         c.expect(supersededFull.errors[subC.id] == "new targeted failure" && supersededFull.warnings[subC.id] == "new targeted warning", "superseded full refresh preserves newer targeted diagnostics")
-        c.expect(!supersededFull.allSucceeded, "superseded full refresh cannot advance last successful sync")
+        c.expect(!supersededFull.allSucceeded, "superseded full refresh is not an all-successful result")
         c.expect(supersededFull.observedCalendarIDs.isEmpty, "F09: superseded results cannot consume snapshot grace")
         let currentResync = AppStore.mergeICS(current: [cachedC], results: [
             FetchResult(subscription: subC, events: [event("c5", cal: subC.id, minutesFromNow: 5)], error: nil, requestID: resyncID),

@@ -61,9 +61,12 @@ struct ReminderStateSmoke {
 
         let alerts = AlertController()
         let updates = UpdateController(store: store)
-        let controller = MenuBarController(store: store, alerts: alerts, updates: updates, openSettings: {}, quit: {})
+        var settingsOpened = false
+        let controller = MenuBarController(store: store, alerts: alerts, updates: updates, openSettings: { settingsOpened = true }, quit: {})
         let menu = NSMenu()
         controller.menuNeedsUpdate(menu)
+        let information = menu.items.filter { $0.action == nil && $0.submenu == nil && !$0.isSeparatorItem }
+        try require(!information.isEmpty && information.allSatisfy { !$0.isEnabled }, "menu informational rows are disabled before AppKit validation")
         let normalIDs = menu.items.compactMap { ($0.representedObject as? MeetingEvent)?.id }
         store.pauseIndefinitely()
         store.snooze([eventA.id: clock.addingTimeInterval(-1)])
@@ -82,6 +85,96 @@ struct ReminderStateSmoke {
                     "F11: native Resume action clears pause")
         store.tick()
         try require(deliveries.count == 3, "F11: reminder delivery resumes after Resume Now")
+        func requestCounts() async throws -> [String: Int] {
+            let (data, _) = await AppStore.fetchData(base + "/stats")
+            guard let data else { throw Failure(message: "Request counts unavailable") }
+            return try JSONDecoder().decode([String: Int].self, from: data)
+        }
+        let beforeAdd = try await requestCounts()
+        clock = clock.addingTimeInterval(1)
+        store.addSubscription(name: "Synthetic C", urlString: base + "/c")
+        try await waitFor("B7b: addition completes a full refresh") { !store.isRefreshing && store.events.contains { $0.uid == "c" } }
+        let afterAdd = try await requestCounts()
+        try require(["/a", "/b", "/c"].allSatisfy { afterAdd[$0, default: 0] - beforeAdd[$0, default: 0] == 1 },
+                    "B7b: adding requests each enabled feed exactly once")
+        try require(store.lastChecked == clock, "B7b: successful full refresh records completion time")
+        let cachedB = store.events.first { $0.uid == "b" }!
+        _ = await AppStore.fetchData(base + "/b-fail")
+        clock = clock.addingTimeInterval(1)
+        store.refresh()
+        try await waitFor("B7b: partial failure completes") { !store.isRefreshing }
+        try require(store.lastChecked == clock && store.errors[b.id] != nil, "B7b: failed check advances time and retains its error")
+        try require(store.events.first { $0.uid == "a" }?.title == "Updated A", "B7b: healthy calendar still updates when another fails")
+        try require(store.events.first { $0.uid == "b" }?.title == cachedB.title, "B7b: failed calendar retains cached events")
+        controller.menuNeedsUpdate(menu)
+        try require(menu.items.contains { $0.title.hasPrefix("Last synced ") }, "B7b: dropdown labels check completion accurately")
+        guard let failure = menu.items.first(where: { $0.title == "1 calendar failed to sync · Details…" }), let failureAction = failure.action else {
+            throw Failure(message: "Sync failure details action missing")
+        }
+        try require((failure.attributedTitle?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) == NSColor.systemRed, "sync failure summary is red")
+        try require(NSApp.sendAction(failureAction, to: failure.target, from: failure) && settingsOpened, "B7b: failure summary opens Settings")
+        _ = await AppStore.fetchData(base + "/b-ok")
+        store.refresh()
+        try await waitFor("B7b: recovery completes") { !store.isRefreshing }
+        controller.menuNeedsUpdate(menu)
+        try require(store.errors.isEmpty && !menu.items.contains { $0.title.contains("failed to sync") }, "B7b: recovery removes failure summary")
+        _ = await AppStore.fetchData(base + "/b-fail")
+        store.refresh()
+        try await waitFor("B7b: repeat failure completes") { !store.isRefreshing }
+        let beforeRemove = try await requestCounts()
+        clock = clock.addingTimeInterval(1)
+        store.removeSubscription(b.id)
+        try require(store.errors[b.id] == nil, "B7b: removing source immediately clears its error")
+        try await waitFor("B7b: removal completes a full refresh") { !store.isRefreshing }
+        let afterRemove = try await requestCounts()
+        try require(["/a", "/c"].allSatisfy { afterRemove[$0, default: 0] - beforeRemove[$0, default: 0] == 1 } && afterRemove["/b"] == beforeRemove["/b"],
+                    "B7b: removing requests remaining feeds once and never the removed feed")
+        try require(store.lastChecked == clock, "B7b: removal refresh updates completion time")
+
+        _ = await AppStore.fetchData(base + "/all-fail")
+        clock = clock.addingTimeInterval(1)
+        let cachedIDs = Set(store.events.map(\.id))
+        store.refresh()
+        try await waitFor("B7b: total failure completes") { !store.isRefreshing }
+        controller.menuNeedsUpdate(menu)
+        try require(store.lastChecked == clock && store.errors.count == 2 && Set(store.events.map(\.id)) == cachedIDs,
+                    "B7b: total failure advances check time and preserves all cached events")
+        try require(menu.items.contains { $0.title == "2 calendars failed to sync · Details…" }, "B7b: failure summary pluralizes multiple failures")
+        _ = await AppStore.fetchData(base + "/all-ok")
+        store.subscriptions[0].isEnabled = false
+        let beforeEnable = try await requestCounts()
+        let fullCheckTime = store.lastChecked
+        store.subscriptions[0].isEnabled = true
+        try await waitFor("B7b: re-enabled calendar loads") { store.events.contains { $0.uid == "a" } && store.errors[a.id] == nil }
+        let afterEnable = try await requestCounts()
+        try require(afterEnable["/a", default: 0] - beforeEnable["/a", default: 0] == 1 && afterEnable["/c"] == beforeEnable["/c"] && store.lastChecked == fullCheckTime,
+                    "B7b: re-enable remains targeted and does not claim a new full check")
+
+        let trackedMenu = controller.smokeMenu
+        controller.menuNeedsUpdate(trackedMenu)
+        let originalRows = trackedMenu.items
+        controller.smokeBeginTracking()
+        controller.smokeRefreshMenu(at: Date().addingTimeInterval(2))
+        controller.smokeEndTracking()
+        try require(trackedMenu.items.count == originalRows.count && zip(trackedMenu.items, originalRows).allSatisfy { $0 === $1 },
+                    "elapsed sync label does not replace menu rows on timer ticks")
+        try require(trackedMenu.items.filter { $0.action == nil && $0.submenu == nil }.allSatisfy { !$0.isEnabled },
+                    "informational rows remain disabled after a tracking tick")
+
+        clock = clock.addingTimeInterval(7)
+        store.tick()
+        let expectedSyncLabel = Fmt.syncStatus(store.lastChecked!, relativeTo: store.displayTime)
+        try require(store.displayTime == clock && trackedMenu.items.contains { $0.title == expectedSyncLabel },
+                    "menu sync label follows the same published clock as Settings without a menu timer tick")
+
+        let reference = Date()
+        let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        let widths = [1.0, 9.0, 10.0, 59.0].map { seconds in
+            (Fmt.syncStatus(reference.addingTimeInterval(-seconds), relativeTo: reference) as NSString).size(withAttributes: [.font: font]).width
+        }
+        try require(abs(widths[0] - widths[1]) < 0.1 && abs(widths[2] - widths[3]) < 0.1 && widths[2] > widths[0],
+                    "sync digits stay steady within each digit count without reserved padding")
+
         // Retain the actual scheduled timer independently, then release its
         // owner. Reflection keeps this lifecycle check out of the production API.
         var disposable: MenuBarController? = MenuBarController(store: store, alerts: alerts, updates: updates, openSettings: {}, quit: {})

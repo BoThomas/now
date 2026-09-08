@@ -223,8 +223,12 @@ enum Fmt {
         return h > 0 ? "\(sign)\(d)d \(h)h" : "\(sign)\(d)d"
     }
 
-    static func ago(_ date: Date) -> String {
-        relativeFormatter.localizedString(for: date, relativeTo: Date())
+    static func ago(_ date: Date, relativeTo now: Date = Date()) -> String {
+        relativeFormatter.localizedString(for: date, relativeTo: now)
+    }
+
+    static func syncStatus(_ date: Date, relativeTo now: Date) -> String {
+        "Last synced \(ago(date, relativeTo: now))"
     }
 
     /// Uppercase day-section header ("TODAY", "TOMORROW", "FRI, AUG 28") shared by

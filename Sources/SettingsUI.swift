@@ -1707,8 +1707,9 @@ struct SettingsView: View {
     }
 
     @ViewBuilder private var lastSyncedText: some View {
-        if let last = store.lastRefresh {
-            Text("Last synced \(Fmt.ago(last))").font(.caption).foregroundStyle(.secondary)
+        if let last = store.lastChecked {
+            Text(Fmt.syncStatus(last, relativeTo: store.displayTime))
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
         }
     }
 

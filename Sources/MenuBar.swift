@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
@@ -10,6 +11,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let openSettingsHandler: () -> Void
     private let quitHandler: () -> Void
     private var buttonTimer: Timer?
+    private var lastSyncItem: NSMenuItem?
+    private var displayClockObserver: AnyCancellable?
     /// While the dropdown is tracking, updater state changes (a check
     /// finishing, an update appearing) rebuild the OPEN menu in place —
     /// `menuNeedsUpdate` alone only fires on the next open.
@@ -51,6 +54,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // tracking (menu tracking runs a modal-ish run loop in .default mode).
         buttonTimer = AppStore.commonTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateButton() }
+        }
+        displayClockObserver = store.$displayTime.sink { [weak self] date in
+            MainActor.assumeIsolated {
+                guard let self, let last = self.store.lastChecked else { return }
+                self.updateLastSyncItem(last: last, at: date)
+            }
         }
         updateButton()
     }
@@ -152,6 +161,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
 
+        if let last = store.lastChecked { updateLastSyncItem(last: last, at: store.displayTime) }
+
         let eventItems = menu.items.compactMap { item -> (NSMenuItem, MeetingEvent)? in
             guard let event = item.representedObject as? MeetingEvent else { return nil }
             return (item, event)
@@ -214,13 +225,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             ]
             return fields.map { "\($0.utf8.count):\($0)" }.joined()
         }.joined(separator: "|")
-        return "\(store.isPaused)|\(day)|\(eventStates)"
+        let checked = store.lastChecked?.timeIntervalSinceReferenceDate ?? 0
+        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         let now = Date()
         lastUpdateSignature = currentUpdateSignature
         lastMenuStructureSignature = menuStructureSignature(at: now)
+        lastSyncItem = nil
         menu.removeAllItems()
         let visible = store.events.filter { AppStore.isVisible($0, at: now) }
         if store.isPaused {
@@ -287,8 +300,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refreshItem.keyEquivalentModifierMask = .command
         // No queuing a second full refresh behind the running one.
         refreshItem.isEnabled = !store.isRefreshing
-        if let last = store.lastRefresh {
-            menu.addItem(withTitle: "Last synced \(Fmt.ago(last))", action: nil, keyEquivalent: "")
+        if let last = store.lastChecked {
+            lastSyncItem = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
+            updateLastSyncItem(last: last, at: store.displayTime)
+        }
+        if !store.errors.isEmpty {
+            let count = store.errors.count
+            let title = "\(count) calendar\(count == 1 ? "" : "s") failed to sync · Details…"
+            let item = menu.addItem(withTitle: title, action: #selector(settingsAction), keyEquivalent: "")
+            item.target = self
+            item.attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: NSColor.systemRed])
         }
         menu.addItem(withTitle: "Preview Reminder", action: #selector(previewAction), keyEquivalent: "").target = self
         menu.addItem(.separator())
@@ -312,6 +333,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         loginItem.state = store.loginItemState == .enabled ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit now", action: #selector(quitAction), keyEquivalent: "q").target = self
+        // AppKit validates on opening, but a rebuild during tracking inserts
+        // default-enabled items. Keep informational rows disabled immediately.
+        for item in menu.items where item.action == nil && item.submenu == nil {
+            item.isEnabled = false
+        }
+    }
+
+    private func updateLastSyncItem(last: Date, at now: Date) {
+        let title = Fmt.syncStatus(last, relativeTo: now)
+        lastSyncItem?.title = title
+        lastSyncItem?.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        ])
     }
 
     private func sectionHeaderItem(_ title: String) -> NSMenuItem {
