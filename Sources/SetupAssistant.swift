@@ -163,7 +163,17 @@ struct SetupAssistantView: View {
                 Text("Step \((assistant.state.steps.firstIndex(of: assistant.state.step) ?? 0) + 1) of 3")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if assistant.state.step != .ready {
+            if assistant.state.step == .welcome {
+                HStack(spacing: 16) {
+                    Image(nsImage: NSImage(named: "AppIcon") ?? NSImage())
+                        .resizable().frame(width: 64, height: 64)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(assistant.state.step.title).font(.system(size: 24, weight: .semibold))
+                        Text("Glad you're here. Let's get you set up.").foregroundStyle(.secondary)
+                    }
+                }
+            } else if assistant.state.step != .ready {
                 Text(assistant.state.step.title).font(.system(size: 24, weight: .semibold))
             }
             ScrollView {
@@ -197,7 +207,6 @@ struct SetupAssistantView: View {
     @ViewBuilder private var content: some View {
         switch assistant.state.step {
         case .welcome:
-            Text("Glad you're here. Let's get you set up.").foregroundStyle(.secondary)
             Toggle("Start now at login", isOn: choice(\.launchAtLogin))
             Toggle("Check for updates automatically", isOn: choice(\.automaticUpdateChecks))
             HStack {
