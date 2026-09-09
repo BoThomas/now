@@ -145,6 +145,37 @@ struct NotificationSmoke {
             MeetingEvent(uid: id, title: "Synthetic \(id)", start: base.addingTimeInterval(start), end: base.addingTimeInterval(end), location: nil, notes: nil,
                          link: link, calendarID: source.id, calendarName: source.name, colorIndex: 0, isMuted: muted)
         }
+        do {
+            let groupedStore = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("grouped-cache")), initialState: state)
+            groupedStore.now = { clock }
+            let groupedTransport = FakeNotifications()
+            let groupedDelivery = ReminderNotificationController(transport: groupedTransport)
+            groupedDelivery.now = { clock }
+            groupedStore.connectNotifications(groupedDelivery)
+            await groupedStore.restoreCachedEvents()
+            let a = meeting("group-a", start: 30, link: URL(string: "https://example.com/a")!)
+            let b = meeting("group-b", start: 30)
+            let other = meeting("group-other", start: 31, link: URL(string: "https://example.com/other")!)
+            groupedStore.commitEvents([other, b, a]); groupedStore.tick(); await settle()
+            require(groupedTransport.submissions.count == 2, "same start gets one banner while a one-second difference stays separate")
+            let banner = groupedDelivery.receipts.values.first { $0.keys.count == 2 }!
+            require(banner.category == SystemNotificationTransport.chooseMeetingCategory && !banner.catchUp, "ordinary group offers Choose Meeting")
+            require(banner.body.contains(a.title) && banner.body.contains(b.title) && !banner.title.contains("in progress"), "upcoming group lists titles without claiming meetings started")
+            let privateText = NotificationLogic.content(events: [a, b], privateDetails: true, catchUp: false, now: clock)
+            require(!privateText.body.contains(a.title) && !privateText.body.contains(b.title), "group privacy hides titles")
+            let single = groupedDelivery.receipts.values.first { $0.keys.count == 1 }!
+            require(single.category == SystemNotificationTransport.category(join: true, snooze: true), "single keeps Join and Snooze")
+            groupedStore.tick(); await settle()
+            require(groupedTransport.submissions.count == 2, "accepted groups do not repeat")
+            var agenda = 0
+            var openedLink = false
+            groupedStore.openNotificationAgenda = { agenda += 1 }
+            groupedStore.openNotificationLink = { _ in openedLink = true }
+            groupedDelivery.receive(id: banner.id, action: "choose")
+            require(agenda == 1 && !openedLink, "Choose Meeting opens agenda without joining an arbitrary meeting")
+            require(groupedDelivery.receipts.values.contains { $0.id == single.id }, "group action preserves unrelated banner")
+            groupedStore.prepareForTermination({})
+        }
         let one = meeting("one")
         store.commitEvents([one]); store.tick(); store.tick(); await settle()
         require(system.submissions.count == 1 && fullscreen.isEmpty, "notification mode never presents fullscreen")
@@ -573,8 +604,8 @@ struct NotificationSmoke {
         store.commitEvents(pair)
         let pairBefore = system.submissions.count
         store.tick(); await settle()
-        require(system.submissions.count == pairBefore + 2 && system.submissions.suffix(2).allSatisfy { $0.keys.count == 1 && !$0.catchUp },
-                "ordinary simultaneous reminders keep independent actions")
+        require(system.submissions.count == pairBefore + 1 && system.submissions.last?.keys.count == 2 && system.submissions.last?.category == SystemNotificationTransport.chooseMeetingCategory,
+                "ordinary simultaneous reminders share a chooser banner")
 
         // Startup detection retries with persisted intent, bounded backoff and cancellation.
         let probe = ScriptedMeetingProbe()

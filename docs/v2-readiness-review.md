@@ -10,7 +10,7 @@ The user authorized fixes that do not require product decisions. Implemented: wa
 
 The original findings below are retained as audit evidence, with their original line references. They describe the pre-fix commit, not the current implementation. Final verification results are recorded at the end of this document.
 
-**Still requires product input:** ordinary notification grouping and cache retention after failed writes. The legacy location-only fingerprint blind spot lacks historical data to reconstruct; it remains a documented migration limitation. Actual supported-OS/calendar/notification/device acceptance and refreshed screenshots remain release checks.
+**Product decisions resolved:** ordinary reminders due together group by identical start time; the cache-write edge case is deferred with current behavior retained. The legacy location-only fingerprint blind spot lacks historical data to reconstruct; it remains a documented migration limitation. Actual supported-OS/calendar/notification/device acceptance and refreshed screenshots remain release checks.
 
 ## Confirmed bugs
 
@@ -142,7 +142,7 @@ This follow-up changed only review artifacts. The earlier full build/smoke resul
 2. **Implemented:** recurrence occurrence identity, safe legacy migration, explicitly cleared fields, DTEND ordering and recurrence value-type diagnostics.
 3. **Implemented:** durable never-shown feature guides and missing-staging/timeout recovery, including safe cancellation of a delayed quit.
 4. **Implemented:** scalar settings/source-ID decoding, live login checkmarks, keypad digits/Enter, and removal of the dead setup assignment.
-5. **Needs product input:** notification grouping and cache failure policy. Preserve the current behavior until decided.
+5. **Decided:** group ordinary reminders due together by exact start time; defer the cache-write edge case and keep the current policy.
 6. **Release gates and documentation implemented.** Real v1-to-v2/OS integration acceptance checks and screenshot review remain outstanding. The legacy location-only fingerprint blind spot remains a migration limitation, not a reconstructable edit history.
 
 
@@ -199,3 +199,9 @@ Timing refinement: the fallback window delay is now 18 hours from discovery, all
 Approved: fullscreen reminder dismissal requires plain Escape. Command, Shift, Option and Control combinations are swallowed to prevent both the reminder shortcut and AppKit cancellation fallback from closing the reminder. Existing non-command keyboard metadata normalization remains.
 
 Escape verification: stable-identity signed build, all selftests (plain Escape and Command/Shift/Option/Control combinations, with and without the snooze dropdown), reminder-state smoke and `git diff --check` passed.
+
+## Product decision: simultaneous notifications and cache edge case
+
+Ordinary reminders due together now group by exact start Date. Group banners list up to three titles (plus a remaining count), respect hidden-details privacy and offer Choose Meeting to open the agenda. Singles keep existing Join/Snooze actions. Catch-up and fullscreen grouping are unchanged; reminders arriving after an earlier banner was accepted do not re-announce that earlier reminder. The cache-write failure edge case is explicitly deferred for v2, retaining current behavior.
+
+Grouping verification passed: stable-identity signed build, all selftests, notification/lifecycle smoke and `git diff --check`. New smoke coverage verifies two equal starts produce one chooser banner, a one-second difference remains separate, singles retain Join/Snooze, private details hide titles, repeated ticks do not duplicate delivery, Choose Meeting opens the agenda without opening a link, and unrelated receipts survive. Real Notification Center acceptance remains part of the final manual checks.

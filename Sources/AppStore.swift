@@ -1093,16 +1093,20 @@ final class AppStore: ObservableObject {
         if isPaused { return }
         let due = Self.dueForAlert(events: events, alerted: alerted, snoozed: snoozed, leadSeconds: settings.leadSeconds, now: now)
         var fullscreen: [MeetingEvent] = []
+        var ordinary: [MeetingEvent] = []
         var catchUp: [MeetingEvent] = []
         for event in due {
             switch notificationRoute(event, at: now) {
             case .handled: acknowledge([event])
             case .deferReminder: break
             case .fullscreen: fullscreen.append(event)
-            case .notification: offerNotification([event], catchUp: false, at: now)
+            case .notification: ordinary.append(event)
             case .catchUp:
                 if !isRefreshing && !catchUpRefresh.pending { catchUp.append(event) }
             }
+        }
+        for group in NotificationLogic.sameStartGroups(ordinary) {
+            offerNotification(group, catchUp: false, at: now)
         }
         if !catchUp.isEmpty { offerNotification(catchUp, catchUp: true, at: now) }
         if !fullscreen.isEmpty {
@@ -1264,7 +1268,8 @@ final class AppStore: ObservableObject {
         return ReminderNotification(id: "now.meeting." + NotificationLogic.key(keys.joined()), keys: keys,
             fingerprints: sorted.map(NotificationLogic.fingerprint), expires: sorted.map(\.end).max()!, catchUp: catchUp,
             title: reason ?? text.title, body: reason == nil ? text.body : text.title + "\n" + text.body,
-            category: SystemNotificationTransport.category(join: sorted.count == 1 && sorted[0].link != nil, snooze: canSnooze),
+            category: !catchUp && sorted.count > 1 ? SystemNotificationTransport.chooseMeetingCategory
+                : SystemNotificationTransport.category(join: sorted.count == 1 && sorted[0].link != nil, snooze: canSnooze),
             sound: reason == nil && settings.soundEnabled && !(settings.notifyDuringMeetings && meetingActivity.isDetectedMeeting),
             visibleKeys: keys, replacementReason: reason, fingerprintVersion: 2)
     }
@@ -1323,7 +1328,8 @@ final class AppStore: ObservableObject {
         } else {
             acknowledge(current)
             notifications?.removeMeetings(containing: Set(current.map(NotificationLogic.eventKey)))
-            if action == "join", current.count == 1, let url = current[0].link { openNotificationLink(url) }
+            if action == "choose" || (!item.catchUp && item.keys.count > 1 && action != UNNotificationDismissActionIdentifier) { openNotificationAgenda?() }
+            else if action == "join", current.count == 1, let url = current[0].link { openNotificationLink(url) }
             else if action != UNNotificationDismissActionIdentifier { openNotificationMeetings?(current) }
         }
     }

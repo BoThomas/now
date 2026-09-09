@@ -29,7 +29,19 @@ enum NotificationLogic {
         return settings.reminderDelivery == .notification ? .notification : .fullscreen
     }
 
+    static func sameStartGroups(_ events: [MeetingEvent]) -> [[MeetingEvent]] {
+        Dictionary(grouping: events, by: \.start).sorted { $0.key < $1.key }
+            .map { $0.value.sorted { $0.id < $1.id } }
+    }
+
     static func content(events: [MeetingEvent], privateDetails: Bool, catchUp: Bool, now: Date) -> (title: String, body: String) {
+        if events.count > 1 && !catchUp {
+            let started = events.allSatisfy { $0.start <= now }
+            let title = "\(events.count) meetings " + (started ? "are in progress" : "are starting")
+            let names = events.prefix(3).map { String(($0.title.isEmpty ? "Untitled meeting" : $0.title).prefix(60)) }.joined(separator: " · ")
+            let more = events.count > 3 ? " · +\(events.count - 3) more" : ""
+            return (title, privateDetails ? "Choose a meeting in your agenda." : names + more + "\nChoose a meeting in your agenda.")
+        }
         if events.count != 1 {
             return ("\(events.count) meetings are in progress", "Open now to view your agenda.")
         }
@@ -196,8 +208,12 @@ final class SystemNotificationTransport: NSObject, NotificationTransport, UNUser
                 categories.insert(UNNotificationCategory(identifier: Self.category(join: join, snooze: snooze), actions: actions, intentIdentifiers: [], options: [.customDismissAction]))
             }
         }
+        categories.insert(UNNotificationCategory(identifier: Self.chooseMeetingCategory,
+            actions: [UNNotificationAction(identifier: "choose", title: "Choose Meeting…", options: [.foreground])],
+            intentIdentifiers: [], options: [.customDismissAction]))
         center.setNotificationCategories(categories)
     }
+    nonisolated static let chooseMeetingCategory = "now.meeting.choose"
     nonisolated static func category(join: Bool, snooze: Bool) -> String { "now.meeting.\(join).\(snooze)" }
     func permission() async -> NotificationPermission {
         let value = await center.notificationSettings()
