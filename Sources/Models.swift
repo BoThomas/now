@@ -129,34 +129,34 @@ struct AppSettings: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let lead = try c.decodeIfPresent(Int.self, forKey: .leadSeconds) ?? 300
+        let lead = (try? c.decodeIfPresent(Int.self, forKey: .leadSeconds)) ?? 300
         leadSeconds = min(max(lead, Self.leadSecondsRange.lowerBound), Self.leadSecondsRange.upperBound)
-        let refresh = try c.decodeIfPresent(Int.self, forKey: .refreshMinutes) ?? 15
+        let refresh = (try? c.decodeIfPresent(Int.self, forKey: .refreshMinutes)) ?? 15
         refreshMinutes = Self.nearest(refresh, in: Self.allowedRefreshMinutes, default: 15)
-        soundEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundEnabled) ?? true
-        let sound = try c.decodeIfPresent(String.self, forKey: .soundName) ?? "Hero"
+        soundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .soundEnabled)) ?? true
+        let sound = (try? c.decodeIfPresent(String.self, forKey: .soundName)) ?? "Hero"
         soundName = AppStore.soundNames.contains(sound) ? sound : "Hero"
-        showMenuBarCountdown = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarCountdown) ?? true
-        menuMeetingLimit = Self.normalizedMenuMeetingLimit(try c.decodeIfPresent(Int.self, forKey: .menuMeetingLimit) ?? 5)
-        launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
+        showMenuBarCountdown = (try? c.decodeIfPresent(Bool.self, forKey: .showMenuBarCountdown)) ?? true
+        menuMeetingLimit = Self.normalizedMenuMeetingLimit((try? c.decodeIfPresent(Int.self, forKey: .menuMeetingLimit)) ?? 5)
+        launchAtLogin = (try? c.decodeIfPresent(Bool.self, forKey: .launchAtLogin)) ?? false
         // `lateMinutes` belonged to the former "Show started meetings"
         // visibility setting. Its semantics changed enough that carrying the
         // old value forward would be misleading, so an absent new key always
         // starts at the intentional 10-minute default.
-        let elapsed = try c.decodeIfPresent(Int.self, forKey: .elapsedStartMinutes) ?? 10
+        let elapsed = (try? c.decodeIfPresent(Int.self, forKey: .elapsedStartMinutes)) ?? 10
         elapsedStartMinutes = Self.nearest(elapsed, in: Self.allowedElapsedStartMinutes, default: 10)
-        skipDeclined = try c.decodeIfPresent(Bool.self, forKey: .skipDeclined) ?? true
+        skipDeclined = (try? c.decodeIfPresent(Bool.self, forKey: .skipDeclined)) ?? true
         // New and existing installs share the same default when no explicit
         // snooze choice is saved. At-start reminders cannot snooze to the past.
-        let snooze = try c.decodeIfPresent(Int.self, forKey: .snoozeSeconds) ?? (leadSeconds > 0 ? 0 : 60)
+        let snooze = (try? c.decodeIfPresent(Int.self, forKey: .snoozeSeconds)) ?? (leadSeconds > 0 ? 0 : 60)
         if snooze == 0 && leadSeconds > 0 {
             snoozeSeconds = 0
         } else {
             snoozeSeconds = snooze > 0 ? min(snooze, Self.snoozeSecondsRange.upperBound) : 60
         }
-        automaticUpdateChecks = try c.decodeIfPresent(Bool.self, forKey: .automaticUpdateChecks) ?? true
-        suppressRemindersDuringMeetings = try c.decodeIfPresent(Bool.self, forKey: .suppressRemindersDuringMeetings) ?? false
-        includeBrowserMeetings = try c.decodeIfPresent(Bool.self, forKey: .includeBrowserMeetings) ?? false
+        automaticUpdateChecks = (try? c.decodeIfPresent(Bool.self, forKey: .automaticUpdateChecks)) ?? true
+        suppressRemindersDuringMeetings = (try? c.decodeIfPresent(Bool.self, forKey: .suppressRemindersDuringMeetings)) ?? false
+        includeBrowserMeetings = (try? c.decodeIfPresent(Bool.self, forKey: .includeBrowserMeetings)) ?? false
         reminderDelivery = (try? c.decode(ReminderDelivery.self, forKey: .reminderDelivery)) ?? .fullscreen
         notifyDuringMeetings = (try? c.decode(Bool.self, forKey: .notifyDuringMeetings)) ?? false
         if notifyDuringMeetings { suppressRemindersDuringMeetings = false }
@@ -166,7 +166,7 @@ struct AppSettings: Codable, Equatable {
         hideNotificationDetails = (try? c.decode(Bool.self, forKey: .hideNotificationDetails)) ?? false
         notifySyncErrors = (try? c.decode(Bool.self, forKey: .notifySyncErrors)) ?? false
         notifyUpdates = (try? c.decode(Bool.self, forKey: .notifyUpdates)) ?? false
-        skippedUpdateVersion = try c.decodeIfPresent(String.self, forKey: .skippedUpdateVersion)
+        skippedUpdateVersion = (try? c.decodeIfPresent(String.self, forKey: .skippedUpdateVersion))
     }
 }
 
@@ -238,13 +238,18 @@ struct Persisted: Codable {
         settings = (try? c.decode(AppSettings.self, forKey: .settings)) ?? AppSettings()
         nativeCalendars = (try? c.decode([FailableDecoded<NativeCalendar>].self, forKey: .nativeCalendars).compactMap(\.value)) ?? []
         pausedUntil = try? c.decodeIfPresent(Date.self, forKey: .pausedUntil)
+        var ids = Set<UUID>()
+        subscriptions = subscriptions.filter { ids.insert($0.id).inserted }
+        nativeCalendars = nativeCalendars.filter { ids.insert($0.id).inserted }
     }
 }
 
 struct MeetingEvent: Identifiable {
     let id: String
     let uid: String
-    /// Stable source occurrence identity for notification edits; agenda IDs remain unchanged.
+    /// Pre-v2 agenda identity, retained only for unambiguous saved-state migration.
+    var legacyID: String { "\(calendarID.uuidString)-\(uid)-\(Int(start.timeIntervalSince1970))" }
+    /// Stable source occurrence identity for notification edits and recurring agenda disambiguation.
     let notificationIdentity: String?
     let title: String
     let start: Date
@@ -284,6 +289,12 @@ struct MeetingEvent: Identifiable {
         self.colorIndex = colorIndex
         self.colorHex = colorHex ?? Palette.hex(for: colorIndex)
         self.isMuted = isMuted
-        self.id = "\(calendarID.uuidString)-\(uid)-\(Int(start.timeIntervalSince1970))"
+        let oldID = "\(calendarID.uuidString)-\(uid)-\(Int(start.timeIntervalSince1970))"
+        // Recurring siblings can move onto the same start. Include the original
+        // source occurrence, while preserving the existing reschedule semantics.
+        if let identity = notificationIdentity,
+           (identity.hasPrefix("ics:") || identity.hasPrefix("native:")), !identity.hasSuffix(":single") {
+            self.id = oldID + "-occurrence:" + identity
+        } else { self.id = oldID }
     }
 }

@@ -57,7 +57,6 @@ struct SetupAssistantState: Codable, Equatable {
         if draft.inMeetingDelivery == .notification { draft.inMeetingDelivery = .normal }
         if draft.catchUpDelivery == .notification { draft.catchUpDelivery = .normal }
         draft.notifyUpdates = false
-        draft.notifySyncErrors = false
     }
 
     static func effective(_ draft: AppSettings, notificationsAllowed: Bool) -> AppSettings {

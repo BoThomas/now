@@ -42,6 +42,9 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
     update_text = update_text.replace("private func applyDecision(", "func applyDecision(")
     update_text = update_text.replace("@Published private(set) var stagedVersion", "@Published var stagedVersion")
     update_text = update_text.replace("private(set) var state = UpdateState()", "var state = UpdateState()")
+    for name in ["stagedRoot", "installAttempt"]:
+        update_text = update_text.replace("private var " + name, "var " + name)
+    update_text = update_text.replace("private func installHelperExited", "func installHelperExited")
     # Exercise production decision/notification paths without network or archives.
     start = update_text.index("    private func beginStaging(")
     end = update_text.index("    func retryPreparation()", start)

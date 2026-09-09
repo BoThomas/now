@@ -13,7 +13,7 @@ struct NativeCalendarInfo: Identifiable, Equatable {
 }
 
 /// Owns the app's single `EKEventStore` (a second instance makes `calendars(for:)`
-/// return nothing on recent macOS — see docs/plans/native-calendar-integration.md).
+/// return nothing on recent macOS — see AGENTS.md).
 /// Main-thread use only, like the rest of AppStore. Reading is never prompted for
 /// outside `requestAccess()`, so instantiating this at launch is TCC-silent.
 @MainActor
@@ -92,7 +92,8 @@ final class NativeCalendarSource {
 
     /// Materializes each occurrence of recurring events itself, so no RRULE handling is
     /// needed here: detached/changed occurrences come through with their own start date
-    /// and share the `eventIdentifier`, matching `MeetingEvent.id = (calendarID, uid, start)`.
+    /// and share the `eventIdentifier`. Agenda IDs include the original occurrence
+    /// identity as well as the actual start, so moved siblings remain distinct.
     ///
     /// Window semantics match the ICS path exactly: an event is kept when its
     /// START lies within `−6h … +14d` of `now` and it has not already ended at

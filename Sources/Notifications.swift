@@ -48,7 +48,11 @@ enum NotificationLogic {
     }
 
     static func legacyFingerprint(_ event: MeetingEvent) -> String {
-        key([event.id, event.title, String(event.end.timeIntervalSince1970), event.link?.absoluteString ?? "", String(event.isMuted)].joined(separator: "\n"))
+        key([event.legacyID, event.title, String(event.end.timeIntervalSince1970), event.link?.absoluteString ?? "", String(event.isMuted)].joined(separator: "\n"))
+    }
+
+    static func priorAgendaFingerprint(_ event: MeetingEvent) -> String {
+        key([event.legacyID, event.title, String(event.end.timeIntervalSince1970), event.link?.absoluteString ?? "", event.location ?? "", String(event.isMuted)].joined(separator: "\n"))
     }
 
     static func fingerprint(_ event: MeetingEvent) -> String {
@@ -87,8 +91,12 @@ struct ReminderLedger: Codable, Equatable {
     }
     mutating func reconcile(events: [MeetingEvent], enabled: Set<UUID>, observed: Set<UUID>, now: Date) {
         // Upgrade old occurrence-ID entries only when that exact occurrence is present.
-        for event in events {
-            let old = NotificationLogic.key(event.id), key = NotificationLogic.eventKey(event)
+        let legacyCounts = Dictionary(grouping: events, by: \.legacyID).mapValues(\.count)
+        // Once an old key matches multiple occurrences, it cannot safely be
+        // assigned later merely because one sibling disappears.
+        for (id, count) in legacyCounts where count > 1 { entries.removeValue(forKey: NotificationLogic.key(id)) }
+        for event in events where legacyCounts[event.legacyID] == 1 {
+            let old = NotificationLogic.key(event.legacyID), key = NotificationLogic.eventKey(event)
             if old != key, let entry = entries.removeValue(forKey: old), entries[key] == nil { entries[key] = entry }
         }
         let live = Dictionary(events.map { (NotificationLogic.eventKey($0), $0) }, uniquingKeysWith: { first, _ in first })

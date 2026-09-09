@@ -18,6 +18,8 @@ struct UpdateView: View {
                 upToDateView
             case .installed(let version):
                 installedView(version)
+            case .features(let version):
+                installedView(version, confirmedInstall: false)
             case .problem(let title, let message, let retry):
                 problemView(title: title, message: message, retry: retry)
             case nil:
@@ -65,6 +67,9 @@ struct UpdateView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Button("Skip This Version") { controller.skipVersion(manifest.version) }
+                .font(.system(size: 12))
+                .help("Stop automatic offers for this version. Check for Updates can show it again.")
             footer(
                 primaryTitle: "Install & Relaunch",
                 primaryEnabled: staged,
@@ -148,19 +153,20 @@ struct UpdateView: View {
     /// One-time confirmation shown once a successful install's startup has
     /// been health-acknowledged (the commit point) — until then the app is
     /// quietly back, leaving the user to guess whether the update worked.
-    private func installedView(_ version: String) -> some View {
+    private func installedView(_ version: String, confirmedInstall: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
                 appIcon
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Update installed")
+                    Text(confirmedInstall ? "Update installed" : "What’s New")
                         .font(.system(size: 17, weight: .semibold))
-                    Text("now \(version) is installed and running.")
+                    Text(confirmedInstall ? "now \(version) is installed and running." : "Discover new features in now \(version).")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
             }
+            if confirmedInstall {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 11))
@@ -168,6 +174,7 @@ struct UpdateView: View {
                 Text("Signature verified · update installed")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
             }
             if let guides = controller.store.featureGuides, !guides.updateIDs.isEmpty {
                 ScrollView {

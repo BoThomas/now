@@ -85,11 +85,13 @@ final class AppStore: ObservableObject {
     var updateNotificationSubmitted: ((ReminderNotification) -> Void)?
     var updateNotificationResponse: ((ReminderNotification, String) -> Void)?
     var updateNotificationTick: (() -> Void)?
+    var openNotificationLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
     var openNotificationMeetings: (([MeetingEvent]) -> Void)?
     var openNotificationAgenda: (() -> Void)?
     var openNotificationSyncSettings: (() -> Void)?
     private var reminderLedger = ReminderLedger()
     private var notificationEventsByKey: [String: MeetingEvent] = [:]
+    private var ambiguousLegacyNotificationIDs: Set<String> = []
     private var notificationFingerprints: [String: String] = [:]
     private let ledgerKey = "local.tboch.now.reminder-ledger.v1"
     private var catchUpRefresh = CatchUpRefreshTracker()
@@ -216,13 +218,29 @@ final class AppStore: ObservableObject {
             }
         }
         scheduleRefreshTimer()
+        scheduleTickTimer()
+        syncLoginItem(settings.launchAtLogin)
+        if settings.needsMeetingDetection { setInMeetingDelivery(settings.inMeetingDelivery) }
+        refresh()
+    }
+
+    private func scheduleTickTimer() {
+        tickTimer?.invalidate()
         tickTimer = Self.commonTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             // Timer fires on the main run loop — hop into our MainActor context.
             MainActor.assumeIsolated { self?.tick() }
         }
-        syncLoginItem(settings.launchAtLogin)
-        if settings.needsMeetingDetection { setInMeetingDelivery(settings.inMeetingDelivery) }
-        refresh()
+    }
+
+    /// The updater may time out while a disk barrier delays terminateLater.
+    func cancelTermination() {
+        guard shuttingDown else { return }
+        shuttingDown = false
+        if started {
+            scheduleTickTimer()
+            scheduleRefreshTimer()
+            refresh()
+        }
     }
 
     /// Restoration is shared by full/targeted refreshes and completes before tick.
@@ -965,10 +983,15 @@ final class AppStore: ObservableObject {
         events = sorted
         notificationEventsByKey = [:]
         notificationFingerprints = [:]
+        let legacyCounts = Dictionary(grouping: sorted, by: \.legacyID).mapValues(\.count)
+        ambiguousLegacyNotificationIDs.formUnion(legacyCounts.filter { $0.value > 1 }.keys)
         for event in sorted {
             let key = NotificationLogic.eventKey(event)
             notificationEventsByKey[key] = event
             notificationEventsByKey[NotificationLogic.key(event.id)] = event
+            if legacyCounts[event.legacyID] == 1 && !ambiguousLegacyNotificationIDs.contains(event.legacyID) {
+                notificationEventsByKey[NotificationLogic.key(event.legacyID)] = event
+            }
             notificationFingerprints[key] = NotificationLogic.fingerprint(event)
         }
         // Keep an open alert in sync: cancelled/removed/disabled events drop
@@ -1119,7 +1142,7 @@ final class AppStore: ObservableObject {
         controller.onResponse = { [weak self] item, action in
             guard let self else { return }
             if item.updateVersion != nil { self.updateNotificationResponse?(item, action); return }
-            if !self.cacheLoaded || self.isRefreshing || (self.started && !self.completedInitialRefresh) {
+            if !self.cacheLoaded || (!self.completedInitialRefresh && (self.started || self.isRefreshing)) {
                 self.pendingNotificationResponses.append((item, action))
             } else { self.handleNotificationResponse(item, action: action) }
         }
@@ -1187,6 +1210,7 @@ final class AppStore: ObservableObject {
                 keys.append(key)
                 // Migrate fingerprint format without claiming a meeting changed.
                 let same = fingerprint == notificationFingerprints[key]
+                    || fingerprint == NotificationLogic.priorAgendaFingerprint(event)
                     || (original.fingerprintVersion == nil && fingerprint == NotificationLogic.legacyFingerprint(event))
                 fingerprints.append(same ? notificationFingerprints[key]! : fingerprint)
                 changed = changed || !same
@@ -1263,7 +1287,7 @@ final class AppStore: ObservableObject {
         guard let current = events.first(where: { $0.id == event.id }),
               Self.joinHandlesReminder(current, leadSeconds: settings.leadSeconds, now: now()) else { return }
         acknowledge([current])
-        notifications?.removeMeetings(containing: [NotificationLogic.eventKey(current), NotificationLogic.key(current.id)])
+        notifications?.removeMeetings(containing: [NotificationLogic.eventKey(current), NotificationLogic.key(current.id), NotificationLogic.key(current.legacyID)])
     }
 
     nonisolated static func joinHandlesReminder(_ event: MeetingEvent, leadSeconds: Int, now: Date) -> Bool {
@@ -1299,7 +1323,7 @@ final class AppStore: ObservableObject {
         } else {
             acknowledge(current)
             notifications?.removeMeetings(containing: Set(current.map(NotificationLogic.eventKey)))
-            if action == "join", current.count == 1, let url = current[0].link { NSWorkspace.shared.open(url) }
+            if action == "join", current.count == 1, let url = current[0].link { openNotificationLink(url) }
             else if action != UNNotificationDismissActionIdentifier { openNotificationMeetings?(current) }
         }
     }

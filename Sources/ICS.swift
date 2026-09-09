@@ -153,6 +153,7 @@ struct RRULE: Equatable {
 struct ParsedEvent {
     var uid: String
     var title: String
+    var hasExplicitTitle: Bool
     var location: String?
     var description: String?
     var altDescription: String?
@@ -188,9 +189,10 @@ struct ParsedEvent {
     var sequence = 0
     var dtstamp: Date?
 
-    init(uid: String, title: String, location: String?, description: String?, altDescription: String?, conference: String?, url: String?, attach: String?, status: String, isAllDay: Bool, dtStart: Date?, tz: TimeZone?, durationSeconds: TimeInterval, hasExplicitEnd: Bool = false, rrule: RRULE?, exdates: [Date], recurrenceID: Date?, sequence: Int = 0, dtstamp: Date? = nil) {
+    init(uid: String, title: String, location: String?, description: String?, altDescription: String?, conference: String?, url: String?, attach: String?, status: String, isAllDay: Bool, dtStart: Date?, tz: TimeZone?, durationSeconds: TimeInterval, hasExplicitEnd: Bool = false, rrule: RRULE?, exdates: [Date], recurrenceID: Date?, sequence: Int = 0, dtstamp: Date? = nil, hasExplicitTitle: Bool? = nil) {
         self.uid = uid
         self.title = title
+        self.hasExplicitTitle = hasExplicitTitle ?? !title.isEmpty
         self.location = location
         self.description = description
         self.altDescription = altDescription
@@ -446,7 +448,7 @@ enum ICSParser {
         var status = ""
         var isAllDay = false
         var dtStart: Date?
-        var dtEnd: Date?
+        var dtEndProperty: ICSProperty?
         var tz: TimeZone?
         var duration: TimeInterval?
         var rruleText = ""
@@ -487,7 +489,7 @@ enum ICSParser {
                 tz = parsed.tz
                 isAllDay = parsed.allDay
             case "DTEND":
-                dtEnd = parseDate(property, fallbackTimeZone: tz, dateFormatters: dateFormatters).date
+                dtEndProperty = property
             case "DURATION":
                 duration = parseDuration(property.value)
                 if duration == nil {
@@ -538,6 +540,9 @@ enum ICSParser {
         // Duration precedence: valid DURATION > positive DTEND-DTSTART > 1h.
         // Invalid (negative/zero/malformed) values never shrink the event.
         let explicit = duration.flatMap { $0 > 0 ? $0 : nil }
+        // DTEND is independently floating unless it supplies TZID or Z.
+        // Its position relative to DTSTART must never affect interpretation.
+        let dtEnd = dtEndProperty.flatMap { parseDate($0, dateFormatters: dateFormatters).date }
         let fromEnd = dtEnd.flatMap { end -> TimeInterval? in
             guard let start = dtStart else { return nil }
             let delta = end.timeIntervalSince(start)
@@ -547,9 +552,9 @@ enum ICSParser {
         return ParsedEvent(
             uid: uid,
             title: title,
-            location: location.isEmpty ? nil : location,
-            description: description.isEmpty ? nil : description,
-            altDescription: altDescription.isEmpty ? nil : altDescription,
+            location: properties.contains { $0.name == "LOCATION" } ? location : nil,
+            description: properties.contains { $0.name == "DESCRIPTION" } ? description : nil,
+            altDescription: properties.contains { $0.name == "X-ALT-DESC" } ? altDescription : nil,
             conference: conference.isEmpty ? nil : conference,
             url: url.isEmpty ? nil : url,
             attach: attach.isEmpty ? nil : attach,
@@ -563,7 +568,8 @@ enum ICSParser {
             exdates: [],
             recurrenceID: ridBestEffort,
             sequence: sequence,
-            dtstamp: dtstamp
+            dtstamp: dtstamp,
+            hasExplicitTitle: properties.contains { $0.name == "SUMMARY" }
         ).withRawRecurrence(
             exdateProperties: exdateProperties,
             rdateProperties: rdateProperties,
@@ -1308,6 +1314,18 @@ enum ICSBuilder {
             var occurrences: [(start: Date, anchor: Date?, event: ParsedEvent)] = []
             if let originalMaster = master {
                 var m = originalMaster
+                if !m.isAllDay {
+                    func timedDates(_ properties: [ICSProperty]) -> [ICSProperty] {
+                        properties.filter { property in
+                            let dateOnly = property.params["VALUE"]?.uppercased() == "DATE"
+                                || property.value.split(separator: ",").contains { $0.count == 8 && !$0.contains("T") }
+                            if dateOnly { warnings.append("\(property.name) DATE values on a timed event are not supported — dates skipped") }
+                            return !dateOnly
+                        }
+                    }
+                    m.exdateProperties = timedDates(m.exdateProperties)
+                    m.rdateProperties = timedDates(m.rdateProperties)
+                }
                 m.exdates = Self.resolvedDates(m.exdateProperties, masterTz: m.tz, dateFormatters: dateFormatters)
                 if m.unsupportedRRULEText != nil {
                     warnings.append("Unsupported RRULE \"\(m.unsupportedRRULEText!)\" — “\(m.title)” shows only its first occurrence")
@@ -1360,7 +1378,7 @@ enum ICSBuilder {
                 }
                 guard let rid = Self.resolvedRecurrenceID(of: override, masterTz: master?.tz, dateFormatters: dateFormatters) else { continue }
                 guard seenRids.insert(rid).inserted else { continue } // duplicate revision
-                if let index = occurrences.firstIndex(where: { $0.start == rid }) {
+                if let index = occurrences.firstIndex(where: { ($0.anchor ?? $0.start) == rid }) {
                     occurrences.remove(at: index)
                 }
                 guard override.status != "CANCELLED" else { continue }
@@ -1370,7 +1388,7 @@ enum ICSBuilder {
                 occurrences.append((start, rid, Self.inheriting(override, from: master)))
             }
             for occurrence in occurrences {
-                let eventKey = "\(occurrence.event.uid)|\(Int(occurrence.start.timeIntervalSince1970))"
+                let eventKey = "\(occurrence.event.uid)|\((occurrence.anchor ?? occurrence.start).timeIntervalSince1970)"
                 guard seenEventKeys.insert(eventKey).inserted else { continue }
                 guard result.count < maxEventsPerFeed else {
                     return ICSBuildResult(error: occurrenceLimitError(records: parsed.events.count, detail: "more than \(maxEventsPerFeed) meeting occurrences inside the six-hour lookback and next 14 days"))
@@ -1442,7 +1460,7 @@ enum ICSBuilder {
     private static func inheriting(_ override: ParsedEvent, from master: ParsedEvent?) -> ParsedEvent {
         guard let master else { return override }
         var copy = override
-        if copy.title.isEmpty { copy.title = master.title }
+        if !copy.hasExplicitTitle { copy.title = master.title }
         if copy.location == nil { copy.location = master.location }
         if copy.description == nil { copy.description = master.description }
         if copy.altDescription == nil { copy.altDescription = master.altDescription }

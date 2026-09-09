@@ -83,7 +83,7 @@ SIGNING_IDENTITY_SHA1="${NOW_SIGNING_IDENTITY_SHA1:-A505B08900C56A28709479297A04
 SIGNING_IDENTITY_SHA1="${(U)SIGNING_IDENTITY_SHA1}"
 AVAILABLE_IDENTITIES=$(security find-identity -v -p codesigning)
 [[ "$AVAILABLE_IDENTITIES" == *"$SIGNING_IDENTITY_SHA1"* ]] || die "required signing identity $SIGNING_IDENTITY_SHA1 not found"
-[[ -x scripts/update-smoke.sh ]] || die "mandatory scripts/update-smoke.sh is missing or not executable"
+[[ -x scripts/preflight.sh && -x scripts/update-smoke.sh ]] || die "mandatory release preflight scripts are missing or not executable"
 
 CURRENT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
 if [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+$ ]]; then CURRENT="$CURRENT.0"; fi
@@ -187,7 +187,7 @@ release_failed() {
     "preparing release files"|"building and testing")
       print -u2 "Recovery: fix the failure in this worktree, then resume the preflight and publication:"
       print -u2 "  ./build-app.sh --require-identity && ./outputs/now.app/Contents/MacOS/now --selftest"
-      print -u2 "  ./scripts/update-smoke.sh --app outputs/now.app && cp outputs/now.zip 'outputs/now-$TAG.zip'"
+      print -u2 "  ./scripts/preflight.sh --app outputs/now.app && cp outputs/now.zip 'outputs/now-$TAG.zip'"
       print -u2 "  git add Info.plist CHANGELOG.md && git commit -m 'Release $TAG' && git tag '$TAG'"
       print -u2 "  git push --atomic -u origin HEAD '$TAG'"
       print -u2 "Do not rerun release.sh until these generated release changes are committed or removed."
@@ -243,14 +243,10 @@ PHASE="building and testing"
 # Stable signing is mandatory for releases: an ad-hoc release zip would
 # invalidate existing Calendar (TCC) grants on every update.
 ./build-app.sh --require-identity >/dev/null
-./outputs/now.app/Contents/MacOS/now --selftest
-
-# Hard preflight for every release: the update smoke exercises the real
-# updater path (check → stage → signature gate → swap → relaunch) against a
-# forged local release. For v1.5.0+ this is existential — the updater rides
-# in the app being released. (Quits a running now for the test; re-opens it.)
-print "• Running update smoke test"
-./scripts/update-smoke.sh --app outputs/now.app
+# All regression suites are mandatory, including real process restarts and
+# the signed updater transaction. No publication happens before they pass.
+print "• Running full release preflight"
+./scripts/preflight.sh --app outputs/now.app
 cp outputs/now.zip "outputs/now-$TAG.zip"
 
 print "• Preparing release notes"

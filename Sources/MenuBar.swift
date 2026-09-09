@@ -226,7 +226,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return fields.map { "\($0.utf8.count):\($0)" }.joined()
         }.joined(separator: "|")
         let checked = store.lastChecked?.timeIntervalSinceReferenceDate ?? 0
-        return "\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.calendarSyncProblemTitle ?? "")|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)|\(store.notificationProblemTitle ?? "")"
+        return "\(store.loginItemState)|\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.calendarSyncProblemTitle ?? "")|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)|\(store.notificationProblemTitle ?? "")"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

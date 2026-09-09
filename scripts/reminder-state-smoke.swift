@@ -204,6 +204,19 @@ struct ReminderStateSmoke {
         try require(trackedMenu.items.filter { $0.action == nil && $0.submenu == nil }.allSatisfy { !$0.isEnabled },
                     "informational rows remain disabled after a tracking tick")
 
+        let priorLoginState = store.loginItemState
+        controller.smokeBeginTracking()
+        store.loginItemState = .enabled
+        controller.smokeRefreshMenu(at: clock)
+        try require(trackedMenu.items.first { $0.title == "Launch at Login" }?.state == .on,
+                    "tracked menu adopts changed login registration without reopening")
+        store.loginItemState = .disabled
+        controller.smokeRefreshMenu(at: clock)
+        try require(trackedMenu.items.first { $0.title == "Launch at Login" }?.state == .off,
+                    "tracked menu clears disabled login registration")
+        store.loginItemState = priorLoginState
+        controller.smokeEndTracking()
+
         clock = clock.addingTimeInterval(7)
         store.tick()
         let expectedSyncLabel = Fmt.syncStatus(store.lastChecked!, relativeTo: store.displayTime)

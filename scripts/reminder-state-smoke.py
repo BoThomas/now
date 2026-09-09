@@ -85,6 +85,7 @@ with tempfile.TemporaryDirectory(prefix="now-reminder-smoke-") as directory:
     store_text = store.read_text()
     store_text = store_text.replace("eventCache: CalendarEventCache = CalendarEventCache()", "eventCache: CalendarEventCache = CalendarEventCache(directory: URL(fileURLWithPath: " + json.dumps(str(directory / "cache")) + "))")
     store_text = store_text.replace("    private func commitEvents(", "    func commitEvents(", 1)
+    store_text = store_text.replace("@Published private(set) var loginItemState", "@Published var loginItemState")
     native_start = store_text.index("    func fetchNativeEvents() {")
     native_end = store_text.index("    private func scheduleNativeStoreRefresh()", native_start)
     store.write_text(store_text[:native_start] + "    func fetchNativeEvents() { precondition(nativeCalendars.isEmpty) }\n\n" + store_text[native_end:])

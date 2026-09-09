@@ -3,6 +3,22 @@ import AppKit
 import EventKit
 import Combine
 
+/// A cancelled terminateLater reply must not terminate a recovered app later.
+struct TerminationRequestGate {
+    private var pending: UUID?
+    mutating func begin() -> UUID { let token = UUID(); pending = token; return token }
+    mutating func finish(_ token: UUID) -> Bool {
+        guard pending == token else { return false }
+        pending = nil
+        return true
+    }
+    mutating func cancel() -> Bool {
+        let hadPending = pending != nil
+        pending = nil
+        return hadPending
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = AppStore()
@@ -15,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var setupWindow: NSWindow?
     private lazy var setupAssistant = SetupAssistantController(isNewProfile: !store.hadSavedProfile, settings: store.settings)
     private var updateWindow: NSWindow?
+    private var terminationGate = TerminationRequestGate()
     /// A window request that arrived while a reminder was showing — shown
     /// when the alert closes (via `policyDidChange`).
     private var pendingUpdateWindow = false
@@ -76,6 +93,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateController.onTerminateForUpdate = { [weak self] in
             self?.terminateForUpdate()
         }
+        updateController.onCancelUpdateTermination = { [weak self] in
+            guard let self else { return }
+            if self.terminationGate.cancel() { NSApp.reply(toApplicationShouldTerminate: false) }
+            self.store.cancelTermination()
+        }
         // The helper relaunches us with NOW_UPDATE_ERROR when an install
         // failed — tell the user and stop auto-offering that version. The
         // env var is for THIS launch only: unset it immediately so a later
@@ -113,7 +135,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         store.start()
         updateController.start()
-        if setupAssistant.pending || (store.subscriptions.isEmpty && !store.nativeCalendars.contains(where: \.isEnabled)) {
+        // Only unfinished initial setup opens automatically; completed profiles stay quiet.
+        if setupAssistant.pending {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                 guard let self else { return }
                 // An install confirmation is pending (shown at +2 s) — let it
@@ -141,11 +164,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        store.prepareForTermination {
+        let request = terminationGate.begin()
+        store.prepareForTermination { [weak self] in
             // terminateLater runs a modal loop; ordinary main-queue Tasks may
             // stall there. Deliver the reply in the common run-loop modes.
             RunLoop.main.perform(inModes: [.common]) {
-                MainActor.assumeIsolated { sender.reply(toApplicationShouldTerminate: true) }
+                MainActor.assumeIsolated {
+                    guard self?.terminationGate.finish(request) == true else { return }
+                    sender.reply(toApplicationShouldTerminate: true)
+                }
             }
         }
         return .terminateLater
@@ -367,6 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the post-install confirmation.
     private static func updateWindowTitle(for content: UpdateWindowContent?) -> String {
         if case .installed = content { return "Update Complete" }
+        if case .features = content { return "What’s New" }
         return "Update now"
     }
 

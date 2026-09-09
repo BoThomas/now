@@ -15,6 +15,7 @@ private final class LifecycleFixture {
     let defaults: UserDefaults
     var details: [MeetingEvent] = []
     var agenda = 0
+    var openedLinks: [URL] = []
 
     init(root: URL) {
         clock = base
@@ -27,6 +28,7 @@ private final class LifecycleFixture {
         store.now = { [weak self] in self?.clock ?? Date() }
         controller.now = { [weak self] in self?.clock ?? Date() }
         store.connectNotifications(controller)
+        store.openNotificationLink = { [weak self] in self?.openedLinks.append($0) }
         store.openNotificationMeetings = { [weak self] in self?.details = $0 }
         store.openNotificationAgenda = { [weak self] in self?.agenda += 1 }
     }
@@ -52,6 +54,18 @@ extension NotificationSmoke {
     @MainActor static func lifecycleTests(root: URL) async {
         func require(_ value: @autoclosure () -> Bool, _ message: String) {
             guard value() else { print("FAIL lifecycle: " + message); exit(1) }
+        }
+        for action in ["join", UNNotificationDefaultActionIdentifier] {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            let url = URL(string: "https://example.invalid/meeting")!
+            let event = f.event("warm-action", link: url)
+            f.commit([event]); await f.tick()
+            let id = f.controller.receipts.keys.first!
+            let batch = f.store.beginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
+            f.controller.receive(id: id, action: action)
+            require(f.store.isRefreshing && (action == "join" ? f.openedLinks == [url] : f.details.map(\.id) == [event.id]), "warm Join/body click executes before unrelated refresh completes")
+            f.store.finishRefresh(fetched: [f.source, f.second], requestID: batch)
         }
         do {
             let f = LifecycleFixture(root: root); defer { f.cleanup() }
@@ -225,6 +239,27 @@ extension NotificationSmoke {
             diagnostics.deferRestoredReconciliation = { true }
             diagnostics.reconcile()
             require(diagnostics.receipts.isEmpty, "interrupted diagnostic add releases its reservation even during calendar startup")
+        }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            let original = f.event("legacy-recurring")
+            let event = MeetingEvent(uid: original.uid, title: original.title, start: original.start, end: original.end,
+                location: nil, notes: nil, link: nil, calendarID: f.source.id, calendarName: f.source.name,
+                colorIndex: 0, notificationIdentity: "ics:16:legacy-recurring:" + String(original.start.timeIntervalSince1970))
+            require(event.id != event.legacyID, "recurring fixture uses new disambiguated agenda ID")
+            let legacy = ReminderNotification(id: "now.meeting.legacy-recurring", keys: [NotificationLogic.key(event.legacyID)],
+                fingerprints: [NotificationLogic.priorAgendaFingerprint(event)], expires: event.end, catchUp: false,
+                title: "", body: "", category: "", sound: false, fingerprintVersion: 2, accepted: true)
+            f.defaults.set(try! JSONEncoder().encode([legacy.id: legacy]), forKey: "local.tboch.now.notification-receipts.v1")
+            let restored = ReminderNotificationController(transport: f.transport, defaults: f.defaults)
+            restored.now = { f.clock }
+            f.store.connectNotifications(restored)
+            f.commit([event]); restored.reconcile(); await settle()
+            require(restored.receipts[legacy.id]?.keys == [NotificationLogic.eventKey(event)] && f.transport.submissions.isEmpty,
+                    "pre-v2 recurring receipt migrates without a spurious meeting-updated notification")
+            restored.receive(id: legacy.id, action: UNNotificationDefaultActionIdentifier)
+            require(f.details.map(\.id) == [event.id], "migrated recurring receipt resolves its live meeting")
         }
         // Saved receipt before startup refresh: test response on both sides of cleanup.
         for missing in [false, true] {

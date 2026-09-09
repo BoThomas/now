@@ -325,7 +325,7 @@ final class AlertController: ObservableObject {
     }
 
     nonisolated static func keyAction(modifiers: NSEvent.ModifierFlags, keyCode: UInt16, characters: String?, snoozeable: Bool, hasFocusedControl: Bool) -> KeyAction {
-        let mods = modifiers.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+        let mods = modifiers.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad])
         if mods == .command,
            let key = characters?.lowercased(),
            key == "w" || key == "m" {

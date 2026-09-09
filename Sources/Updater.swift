@@ -126,10 +126,10 @@ enum UpdateLogic {
 
     /// The decision pipeline for one fetched release. `minAge` is 0 for manual
     /// checks and 24 h for automatic ones (the delete-a-bad-release brake).
-    static func decide(manifest: UpdateManifest?, currentVersion: String, skipped: String?, now: Date, minAge: TimeInterval) -> UpdateDecision {
+    static func decide(manifest: UpdateManifest?, currentVersion: String, skipped: String?, now: Date, minAge: TimeInterval, userInitiated: Bool = false) -> UpdateDecision {
         guard let manifest else { return .error("no usable release") }
         if !isVersion(manifest.version, newerThan: currentVersion) { return .upToDate }
-        if let skipped, skipped == manifest.version { return .skippedVersion(manifest.version) }
+        if !userInitiated, let skipped, skipped == manifest.version { return .skippedVersion(manifest.version) }
         if now.timeIntervalSince(manifest.publishedAt) < minAge { return .upToDate }
         return .available(manifest)
     }
@@ -893,8 +893,9 @@ enum UpdateInstaller {
     /// for `~/.Trash` — replacing it wholesale once silently skipped the
     /// trash step) with overrides applied on top.
     @MainActor
-    static func spawnHelper(bundlePath: String, stagedAppPath: String, backupPath: String, releasesURL: String, extraEnv: [String: String] = [:]) -> Bool {
+    static func spawnHelper(bundlePath: String, stagedAppPath: String, backupPath: String, releasesURL: String, extraEnv: [String: String] = [:], onExit: (@Sendable (Int32) -> Void)? = nil) -> Bool {
         let process = Process()
+        process.terminationHandler = { process in onExit?(process.terminationStatus) }
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", helperScript]
         var environment = ProcessInfo.processInfo.environment
@@ -942,6 +943,7 @@ enum UpdateWindowContent: Equatable {
     /// The helper relaunched us as a freshly installed version — one-time
     /// confirmation that the update worked.
     case installed(version: String)
+    case features(version: String)
     /// Any refusal/failure: fetch error (retryable), install guard refusal,
     /// or the NOW_UPDATE_ERROR relaunch path.
     case problem(title: String, message: String, retry: UpdateRetry?)
@@ -978,12 +980,14 @@ final class UpdateController: ObservableObject {
     /// and terminate without the quit confirmations for the install.
     var onWindowRequest: (() -> Void)?
     var onTerminateForUpdate: (() -> Void)?
+    var onCancelUpdateTermination: (() -> Void)?
 
     /// Detected at launch when the running version equals the pending-install
     /// marker; consumed (and confirmed to the user) only after the startup
     /// health acknowledgement — the install's commit point.
     private(set) var pendingInstalledVersion: String?
     private(set) var state = UpdateState()
+    private var installAttempt: UUID?
     private var stagedRoot: URL?
     private var checkTimer: Timer?
     private var stagingTask: Task<Void, Never>?
@@ -1029,6 +1033,10 @@ final class UpdateController: ObservableObject {
         // re-offering the failed version. (The failed-install relaunch runs
         // the OLD app with NOW_UPDATE_ERROR and shows the problem window —
         // the two paths never overlap.)
+        if let pending = state.pendingInstallVersion, pending != UpdateLogic.currentVersion {
+            state = UpdateLogic.stateAfterInstallFailure(state)
+            saveState()
+        }
         pendingInstalledVersion = UpdateLogic.justInstalledVersion(pending: state.pendingInstallVersion, currentVersion: UpdateLogic.currentVersion)
         UpdateStaging.cleanupLaunchArtifacts(bundlePath: Bundle.main.bundlePath)
         // Launch +10 s: past the startup burst, before the user leaves.
@@ -1049,9 +1057,14 @@ final class UpdateController: ObservableObject {
     /// where the marker must survive so the failed version isn't re-offered.)
     func startupHealthAcknowledged() {
         let installedUpdate = UpdateLogic.justInstalledVersion(pending: state.pendingInstallVersion, currentVersion: UpdateLogic.currentVersion) != nil
-        store.featureGuides?.startupHealthAcknowledged(installedUpdate: installedUpdate)
+        store.featureGuides?.startupHealthAcknowledged(installedUpdate: installedUpdate, existingProfile: store.hadSavedProfile)
         pendingInstalledVersion = nil
-        guard let installed = UpdateLogic.justInstalledVersion(pending: state.pendingInstallVersion, currentVersion: UpdateLogic.currentVersion) else { return }
+        guard let installed = UpdateLogic.justInstalledVersion(pending: state.pendingInstallVersion, currentVersion: UpdateLogic.currentVersion) else {
+            if windowContent == nil, !(store.featureGuides?.updateIDs.isEmpty ?? true) {
+                windowContent = .features(version: UpdateLogic.currentVersion)
+            }
+            return
+        }
         state = UpdateLogic.stateAfterSuccessfulInstall(state)
         saveState()
         windowContent = .installed(version: installed)
@@ -1124,7 +1137,8 @@ final class UpdateController: ObservableObject {
             currentVersion: UpdateLogic.currentVersion,
             skipped: store.settings.skippedUpdateVersion,
             now: now,
-            minAge: userInitiated ? 0 : Self.ageGate
+            minAge: userInitiated ? 0 : Self.ageGate,
+            userInitiated: userInitiated
         )
         applyDecision(decision, userInitiated: userInitiated)
     }
@@ -1144,7 +1158,7 @@ final class UpdateController: ObservableObject {
             }
             if userInitiated {
                 presentAvailable(manifest)
-            } else if !store.settings.notifyUpdates, stagedVersion == manifest.version,
+            } else if !store.settings.notifyUpdates, store.settings.skippedUpdateVersion != manifest.version, stagedVersion == manifest.version,
                       UpdateLogic.shouldEscalate(availableVersion: manifest.version, state: state, now: Date()) {
                 presentAvailable(manifest)
             }
@@ -1207,6 +1221,10 @@ final class UpdateController: ObservableObject {
     }
 
     func updateWindowDidShow() {
+        switch windowContent {
+        case .installed, .features: store.featureGuides?.didPresent()
+        default: break
+        }
         let shownVersion: String?
         switch windowContent {
         case .available(let manifest):
@@ -1234,6 +1252,14 @@ final class UpdateController: ObservableObject {
                 presentAvailable(manifest)
             }
         }
+    }
+
+    /// Skipping is version-specific and survives restart; manual checks bypass it.
+    func skipVersion(_ version: String) {
+        guard installAttempt == nil, available?.version == version else { return }
+        store.settings.skippedUpdateVersion = version
+        applyDecision(.skippedVersion(version), userInitiated: false)
+        dismissWindow()
     }
 
     func dismissWindow() {
@@ -1280,7 +1306,7 @@ final class UpdateController: ObservableObject {
                     self.stagedRoot = staged.stagingRoot
                     self.stagedVersion = staged.manifest.version
                     // Escalation is evaluated once staging is ready.
-                    if !self.store.settings.notifyUpdates, self.available?.version == staged.manifest.version,
+                    if !self.store.settings.notifyUpdates, self.store.settings.skippedUpdateVersion != staged.manifest.version, self.available?.version == staged.manifest.version,
                        UpdateLogic.shouldEscalate(availableVersion: staged.manifest.version, state: self.state, now: Date()) {
                         self.presentAvailable(staged.manifest)
                     }
@@ -1316,12 +1342,21 @@ final class UpdateController: ObservableObject {
     // MARK: Install
 
     func install() {
+        guard installAttempt == nil else { return }
         guard let manifest = available else {
             windowContent = .problem(title: "No update staged", message: "Check for updates first.", retry: .check)
             return
         }
         guard stagedVersion == manifest.version, let stagedRoot else {
             windowContent = .problem(title: "Update is still downloading", message: "Try again in a moment — the update is being prepared.", retry: .preparation)
+            return
+        }
+        let stagedApp = stagedRoot.appendingPathComponent("extracted/now.app")
+        guard FileManager.default.fileExists(atPath: stagedApp.appendingPathComponent("Contents/MacOS/now").path) else {
+            state.pendingInstallVersion = nil
+            saveState()
+            clearStaging()
+            retryPreparation()
             return
         }
         if let problem = UpdateLogic.installLocationProblem(Bundle.main.bundlePath) {
@@ -1335,6 +1370,8 @@ final class UpdateController: ObservableObject {
         let bundleURL = URL(fileURLWithPath: Bundle.main.bundlePath)
         let backupPath = bundleURL.deletingLastPathComponent()
             .appendingPathComponent("now.app.old-\(UUID().uuidString)").path
+        let attempt = UUID()
+        installAttempt = attempt
         state.pendingInstallVersion = manifest.version
         saveState()
         guard UpdateInstaller.spawnHelper(
@@ -1342,14 +1379,33 @@ final class UpdateController: ObservableObject {
             stagedAppPath: stagedRoot.appendingPathComponent("extracted/now.app").path,
             backupPath: backupPath,
             releasesURL: Links.releases.absoluteString,
-            extraEnv: [:]
+            extraEnv: [:],
+            onExit: { [weak self] status in
+                RunLoop.main.perform(inModes: [.common]) {
+                    MainActor.assumeIsolated { self?.installHelperExited(attempt: attempt, status: status) }
+                }
+            }
         ) else {
+            installAttempt = nil
             state.pendingInstallVersion = nil
             saveState()
             windowContent = .problem(title: "Couldn't start the updater", message: "The update helper failed to launch. Download the update manually.", retry: nil)
             return
         }
         onTerminateForUpdate?()
+    }
+
+    /// Only reachable while the old app survives (e.g. its quit timed out).
+    /// A successful swap terminates this process before the helper completes.
+    private func installHelperExited(attempt: UUID, status: Int32) {
+        guard installAttempt == attempt else { return }
+        installAttempt = nil
+        guard status != 0 else { return }
+        onCancelUpdateTermination?()
+        state.pendingInstallVersion = nil
+        saveState()
+        clearStaging()
+        windowContent = .problem(title: "Update did not start", message: "now could not finish quitting. The installed app is unchanged. Try preparing the update again.", retry: .preparation)
     }
 
     /// The helper relaunched us after a FAILED update — show what happened

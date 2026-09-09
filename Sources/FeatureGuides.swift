@@ -19,16 +19,19 @@ enum FeatureGuideCatalog {
 
 struct FeatureGuideState: Codable, Equatable {
     var encountered: Set<String> = []
+    var pendingPresentation: Set<String> = []
 
-    private enum CodingKeys: String, CodingKey { case encountered, pendingSettings }
+    private enum CodingKeys: String, CodingKey { case encountered, pendingSettings, pendingPresentation }
     init() {}
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         encountered = try values.decodeIfPresent(Set<String>.self, forKey: .encountered) ?? []
+        pendingPresentation = try values.decodeIfPresent(Set<String>.self, forKey: .pendingPresentation) ?? []
     }
     func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(encountered, forKey: .encountered)
+        try values.encode(pendingPresentation, forKey: .pendingPresentation)
         // Older releases require this key to decode the encountered history.
         // Retain an empty wire field for downgrades, without retired UI state.
         try values.encode(Set<String>(), forKey: .pendingSettings)
@@ -36,13 +39,11 @@ struct FeatureGuideState: Codable, Equatable {
 
     /// Called only after startup health is acknowledged. Union retains history
     /// across downgrades too. Closing/skipping a guide does not nag next release.
-    mutating func acknowledge(catalog: [FeatureGuideDefinition], installedUpdate: Bool) -> [String] {
+    mutating func acknowledge(catalog: [FeatureGuideDefinition], installedUpdate: Bool, existingProfile: Bool = false) -> [String] {
         let introduced = catalog.filter { !encountered.contains($0.id) }
         encountered.formUnion(catalog.map(\.id))
-        if installedUpdate {
-            return introduced.map(\.id)
-        }
-        return []
+        if installedUpdate || existingProfile { pendingPresentation.formUnion(introduced.map(\.id)) }
+        return catalog.map(\.id).filter { pendingPresentation.contains($0) }
     }
 }
 
@@ -76,10 +77,17 @@ final class FeatureGuideController: ObservableObject {
         state = defaults.data(forKey: Self.storageKey).flatMap { try? JSONDecoder().decode(FeatureGuideState.self, from: $0) } ?? FeatureGuideState()
     }
 
-    func startupHealthAcknowledged(installedUpdate: Bool) {
+    func startupHealthAcknowledged(installedUpdate: Bool, existingProfile: Bool = false) {
         guard !acknowledged else { return }
         acknowledged = true
-        updateIDs = state.acknowledge(catalog: catalog, installedUpdate: installedUpdate)
+        updateIDs = state.acknowledge(catalog: catalog, installedUpdate: installedUpdate, existingProfile: existingProfile)
+        save()
+    }
+
+    /// Called only after the containing window becomes visible. Keep the
+    /// in-memory IDs for that window, but never repeat a seen/skipped guide.
+    func didPresent() {
+        state.pendingPresentation.subtract(updateIDs)
         save()
     }
 

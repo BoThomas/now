@@ -31,6 +31,7 @@ enum SelfTest {
         var reminders = Checker()
         reminderTests(&reminders)
         notificationTests(&reminders)
+        readinessTests(&reminders)
         var settings = Checker()
         settingsTests(&settings)
         var fetch = Checker()

@@ -300,6 +300,22 @@ struct NotificationSmoke {
             NotificationPreview.renderSettings(store: previewStore, alerts: previewAlerts, updates: previewUpdates, directory: directory)
             previewDefaults.removePersistentDomain(forName: previewDomain)
         }
+        let deferredGuides = FeatureGuideController()
+        let resumedStore = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("guide-resume")), initialState: Persisted())
+        resumedStore.featureGuides = deferredGuides
+        let resumedUpdater = UpdateController(store: resumedStore)
+        resumedUpdater.startupHealthAcknowledged()
+        require(deferredGuides.updateIDs == [FeatureGuideCatalog.notificationsID], "unseen guide survives process state restore without install marker")
+        if case .features = resumedUpdater.windowContent {} else { require(false, "unseen guide gets a new window after restart") }
+        let failureStore = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("guide-failure")), initialState: Persisted())
+        failureStore.featureGuides = FeatureGuideController()
+        let failureUpdater = UpdateController(store: failureStore)
+        failureUpdater.windowContent = .problem(title: "Failure", message: "Keep this error", retry: .check)
+        failureUpdater.startupHealthAcknowledged()
+        if case .problem = failureUpdater.windowContent {} else { require(false, "pending guide must not replace an active update error") }
+        resumedUpdater.updateWindowDidShow()
+        store.featureGuides = guides
+        updater.updateWindowDidShow()
         updater.dismissWindow()
         let nextGuides = FeatureGuideController()
         nextGuides.startupHealthAcknowledged(installedUpdate: true)
@@ -309,6 +325,43 @@ struct NotificationSmoke {
         store.settings.automaticUpdateChecks = true
         system.status.authorization = .allowed
         let release = UpdateManifest(version: "999.0.0", zipURL: URL(string: "https://example.com/update.zip")!, assetSize: 1, publishedAt: Date().addingTimeInterval(-4 * 86400), notes: "Synthetic")
+        do {
+            let recoveryStore = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("recovery-cache")), initialState: Persisted())
+            let recovery = UpdateController(store: recoveryStore)
+            recovery.applyDecision(.available(release), userInitiated: true)
+            recovery.stagedVersion = release.version
+            recovery.stagedRoot = root.appendingPathComponent("missing-stage")
+            recovery.state.pendingInstallVersion = release.version
+            var terminated = false
+            recovery.onTerminateForUpdate = { terminated = true }
+            recovery.install()
+            require(!terminated && recovery.stagedVersion == nil && recovery.state.pendingInstallVersion == nil, "missing staging re-prepares without starting an install or retaining marker")
+
+            let timeoutRoot = root.appendingPathComponent("helper-timeout")
+            try! FileManager.default.createDirectory(at: timeoutRoot, withIntermediateDirectories: true)
+            let token = UUID()
+            var cancelledQuit = false
+            recovery.onCancelUpdateTermination = { cancelledQuit = true; recoveryStore.cancelTermination() }
+            recoveryStore.prepareForTermination {}
+            recovery.installAttempt = token
+            recovery.stagedRoot = timeoutRoot
+            recovery.stagedVersion = release.version
+            recovery.state.pendingInstallVersion = release.version
+            recovery.installHelperExited(attempt: UUID(), status: 1)
+            require(recovery.state.pendingInstallVersion != nil, "stale helper completion cannot clear a newer attempt")
+            require(UpdateInstaller.spawnHelper(bundlePath: root.appendingPathComponent("unused.app").path,
+                stagedAppPath: timeoutRoot.appendingPathComponent("extracted/now.app").path,
+                backupPath: root.appendingPathComponent("unused-backup.app").path,
+                releasesURL: "https://example.invalid", extraEnv: ["NOW_SMOKE_POLL_TIMEOUT": "1"],
+                onExit: { status in Task { @MainActor in recovery.installHelperExited(attempt: token, status: status) } }), "timeout helper launches")
+            for _ in 0..<50 where recovery.installAttempt != nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+            require(cancelledQuit && recovery.installAttempt == nil && recovery.stagedVersion == nil && recovery.state.pendingInstallVersion == nil,
+                    "real helper timeout clears staged state and persisted install marker")
+            let persistedRecovery = UserDefaults.standard.data(forKey: UpdateController.stateKey).flatMap { try? JSONDecoder().decode(UpdateState.self, from: $0) }
+            require(persistedRecovery != nil && persistedRecovery?.pendingInstallVersion == nil, "timeout clears the durable marker as well as memory")
+            require(!FileManager.default.fileExists(atPath: timeoutRoot.path), "timeout helper removed its staging")
+            if case .problem(_, _, .preparation) = recovery.windowContent {} else { require(false, "timeout exposes recoverable preparation error") }
+        }
         let priorUpdates = system.submissions.count
         updater.state.firstSeenUpdateVersion = release.version
         updater.state.firstSeenUpdateDate = Date().addingTimeInterval(-4 * 86400)
@@ -323,6 +376,18 @@ struct NotificationSmoke {
         delivery.receive(id: updateToken, action: UNNotificationDefaultActionIdentifier)
         if case .available(let shown) = updater.windowContent { require(shown.version == release.version, "update click opens matching release") }
         else { require(false, "update click opens existing update window") }
+        updater.skipVersion(release.version)
+        require(updater.available == nil && updater.stagedVersion == nil && updater.windowContent == nil,
+                "skip clears menu offer, staging and window")
+        require(!delivery.receipts.values.contains { $0.updateVersion == release.version }, "skip removes update notification")
+        let savedSkip = UserDefaults.standard.data(forKey: AppStore.storageKey).flatMap { try? JSONDecoder().decode(Persisted.self, from: $0) }
+        require(savedSkip?.settings.skippedUpdateVersion == release.version, "skip persists across restart")
+        let automatic = UpdateLogic.decide(manifest: release, currentVersion: "1.0.0", skipped: store.settings.skippedUpdateVersion, now: Date(), minAge: 86400)
+        if case .skippedVersion = automatic {} else { require(false, "automatic check suppresses skipped version") }
+        let manual = UpdateLogic.decide(manifest: release, currentVersion: "1.0.0", skipped: store.settings.skippedUpdateVersion, now: Date(), minAge: 0, userInitiated: true)
+        updater.applyDecision(manual, userInitiated: true)
+        if case .available = updater.windowContent {} else { require(false, "manual check reopens skipped version") }
+        require(store.settings.skippedUpdateVersion == release.version, "manual check preserves automatic skip preference")
         updater.dismissWindow()
         let updateRestart = UpdateController(store: store)
         updateRestart.applyDecision(.available(release), userInitiated: false)
@@ -330,7 +395,9 @@ struct NotificationSmoke {
         require(system.submissions.count == priorUpdates + 1, "update notification marker survives restart and dismissal")
         var nextRelease = release
         nextRelease.version = "999.1.0"
-        updateRestart.applyDecision(.available(nextRelease), userInitiated: false)
+        let newerDecision = UpdateLogic.decide(manifest: nextRelease, currentVersion: "1.0.0", skipped: store.settings.skippedUpdateVersion, now: Date(), minAge: 86400)
+        if case .available = newerDecision {} else { require(false, "skipping does not suppress newer releases") }
+        updateRestart.applyDecision(newerDecision, userInitiated: false)
         await settle()
         require(system.submissions.count == priorUpdates + 2, "new version can notify once")
         updateRestart.applyDecision(.upToDate, userInitiated: false)

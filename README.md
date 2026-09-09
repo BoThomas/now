@@ -7,7 +7,7 @@
 
 Native macOS menu bar app for meeting reminders, inspired by [inyourface.app](https://inyourface.app).
 
-Add your calendars with shared iCal links or Apple Calendar directly; `now` takes over the whole screen right before a meeting starts, with a big one-click **Join** button when it finds a meeting link.
+Add your calendars with shared iCal links or Apple Calendar directly; `now` reminds you before meetings with a fullscreen alert or a macOS notification, with a **Join** action when it finds a meeting link.
 
 <table>
   <tr>
@@ -21,6 +21,8 @@ Add your calendars with shared iCal links or Apple Calendar directly; `now` take
 <p>
   <a href="https://github.com/BoThomas/now/releases/latest"><img src="https://img.shields.io/badge/⬇_Download-Latest_Release-2478D0?style=for-the-badge" alt="Download latest release"></a>
 </p>
+
+**Requires an Apple Silicon Mac (arm64), macOS 13 or later.**
 
 Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/releases/latest), unzip, and move `now.app` to `/Applications`.
 
@@ -60,8 +62,6 @@ Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/
 - Launch at Login.
 - Native Swift, no Electron.
 
-</details>
-
 ## Offline calendars
 
 After a successful ICS sync, `now` saves the fetched meeting occurrences locally. On restart it restores upcoming and ongoing meetings before refreshing. Offline reminders use the same pause, title-filter, and meeting-detection settings as online reminders.
@@ -88,7 +88,8 @@ Builds `outputs/now.app` and `outputs/now.zip`. macOS 13+, arm64.
 ./outputs/now.app/Contents/MacOS/now --native [list]       # inspect Apple Calendar access
 ./outputs/now.app/Contents/MacOS/now --meeting            # inspect active meeting audio metadata
 python3 scripts/calendar-cache-smoke.py                 # isolated offline restart/cache checks
-./release.sh --dry-run                                     # release pipeline check
+./scripts/preflight.sh                                    # full build + release regression suites
+./release.sh --dry-run                                     # release prerequisites (no tests/publication)
 ```
 
 See [AGENTS.md](AGENTS.md) for development notes and the release workflow.
@@ -107,9 +108,9 @@ Notifications offer **Join** when a single meeting has a link and **Snooze** whe
 
 An outstanding notification is replaced silently with **Meeting updated** when its title, time, location, or Join link changes. If it briefly disappears from the calendar and returns, the replacement says **Meeting reminder restored**. Dismissed or joined reminders stay handled, and snoozes keep their deadlines. Grouped reminders stay available while another member is relevant; their displayed count may be outdated, but actions use current meeting data. A notification click during startup waits for calendars to load; if the meeting is gone, now opens its menu-bar agenda.
 
-**Notify about new updates** sends one silent notification per new version while automatic update checks are enabled. Clicking opens the update window; manual checks still open it directly. This replaces automatic update-window popups when enabled.
+**Notify about new updates** sends one silent notification per new version while automatic update checks are enabled. Clicking opens the update window; manual checks still open it directly. This replaces automatic update-window popups when enabled. **Skip This Version** in the update window stops automatic offers for that release and clears its downloaded update. Manual **Check for Updates…** can show it again; newer releases are still offered automatically.
 
-On first launch, a three-screen assistant offers startup/update preferences and notification access, followed by reminder style, timing, meeting behavior, privacy, and a preview of the selected style. Notification-dependent options remain disabled until access is enabled. It finishes by opening Settings to add calendar/event sources. New setup starts with a one-minute reminder and just-in-time snooze. Other defaults stay unchanged; closing setup saves your draft for next time. Existing users keep their settings and receive new-feature guidance in Update Complete only when crossing a feature’s introduction. Later updates do not repeat old guides.
+On first launch, a three-screen assistant offers startup/update preferences and notification access, followed by reminder style, timing, meeting behavior, privacy, and a preview of the selected style. Notification-dependent options remain disabled until access is enabled. It finishes by opening Settings to add calendar/event sources. New setup starts with a one-minute reminder and just-in-time snooze. Other defaults stay unchanged; closing setup saves your draft for next time. Existing users keep their settings and receive new-feature guidance when first encountering a feature, including upgrades installed manually from a ZIP. Automatic installs show it in Update Complete; manual upgrades show What’s New. Later launches and updates do not repeat guides already shown.
 
 **Notify about calendar sync problems** is separately optional: one silent notification after five minutes of continuous failure, with details in Settings. Unchanged failures do not repeat, and Pause Reminders does not disable sync diagnostics.
 

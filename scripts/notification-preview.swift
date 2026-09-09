@@ -122,8 +122,9 @@ final class SetupAppSmoke {
                 NotificationCenter.default.removeObserver(agendaObserver)
                 require(delegate.store.hadSavedProfile == existingProfile, "profile presence captured before migration")
                 if existingProfile {
-                    require(NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible }, "existing empty profile opens Settings")
+                    require(!NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible }, "existing empty profile stays quiet")
                     require(!delegate.setupAssistant.pending, "existing profile bypasses assistant")
+                    require(NSApp.windows.contains { $0.title == "What’s New" && $0.isVisible }, "manual upgrade presents unseen features without install marker")
                 } else {
                     require(delegate.setupWindow?.isVisible == true, "fresh launch displays assistant without sources")
                     require(NSApp.activationPolicy() == .regular, "assistant owns app menus")
@@ -141,6 +142,8 @@ final class SetupAppSmoke {
                     require(delegate.store.settings.leadSeconds == 45, "real AppDelegate retains setup settings")
                 }
                 @MainActor func settingsVisible() -> Bool { NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible } }
+                delegate.openSettings()
+                require(settingsVisible(), "Settings remains available on explicit request")
                 delegate.notificationInteraction()
                 require(settingsVisible(), "notification preserves already-open Settings")
                 NSApp.windows.first { $0.title == "now · Settings" }?.close()

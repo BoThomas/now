@@ -40,15 +40,23 @@ extension SelfTest {
         let catalog = FeatureGuideCatalog.entries
         var guides = FeatureGuideState()
         c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true) == [FeatureGuideCatalog.notificationsID], "guide: legacy user sees feature on crossing its introduction")
+        guides.pendingPresentation.removeAll() // The guide window became visible.
         for _ in 0..<3 {
             c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true).isEmpty, "guide: subsequent updates never repeat introduction")
         }
         let futureGuide = FeatureGuideDefinition(id: "future-feature", content: .information(title: "Future", message: "Explanation"))
         c.expect(guides.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true) == [futureGuide.id], "guide: future update introduces only its new feature")
+        guides.pendingPresentation.removeAll()
         var skipped = FeatureGuideState()
         c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true).count == 2, "guide: skipped releases collect all new features")
+        skipped.pendingPresentation.removeAll() // Both guides were displayed.
         _ = skipped.acknowledge(catalog: catalog, installedUpdate: true)
         c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true).isEmpty, "guide: downgrade preserves feature history")
+        var manual = FeatureGuideState()
+        c.expect(manual.acknowledge(catalog: catalog, installedUpdate: false, existingProfile: true) == [FeatureGuideCatalog.notificationsID], "guide: manual upgrade discovers unseen features without updater marker")
+        manual.pendingPresentation.removeAll()
+        c.expect(manual.acknowledge(catalog: catalog, installedUpdate: false, existingProfile: true).isEmpty, "guide: manual upgrade guide does not repeat")
+        c.expect(manual.acknowledge(catalog: catalog + [futureGuide], installedUpdate: false, existingProfile: true) == [futureGuide.id], "guide: later manual upgrade discovers only new features")
         var initial = FeatureGuideState()
         c.expect(initial.acknowledge(catalog: catalog + [futureGuide], installedUpdate: false).isEmpty, "guide: first-run assistant replaces inline setup cards")
         c.expect(initial.acknowledge(catalog: catalog, installedUpdate: true).isEmpty, "guide: later update does not repeat pending initial setup")
