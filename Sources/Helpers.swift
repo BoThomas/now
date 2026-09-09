@@ -190,6 +190,18 @@ enum Fmt {
         return "\(s / 3600)h " + String(format: "%02dm", (s % 3600) / 60)
     }
 
+    static func isStartingNow(start: Date, end: Date, now: Date) -> Bool {
+        now >= start && now < end && now.timeIntervalSince(start) < 10
+    }
+
+    /// Keep the start instant readable before introducing a second countdown.
+    static func reminderStatus(start: Date, end: Date, now: Date) -> String {
+        if now < start { return "STARTS IN \(mmss(start.timeIntervalSince(now)))" }
+        guard now < end else { return "FINISHED" }
+        if isStartingNow(start: start, end: end, now: now) { return "NOW" }
+        return "NOW · ENDS IN \(mmss(end.timeIntervalSince(now)))"
+    }
+
     static func duration(_ interval: TimeInterval) -> String {
         guard let seconds = wholeSeconds(interval) else { return "—" }
         let m = seconds / 60

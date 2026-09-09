@@ -165,6 +165,21 @@ extension SelfTest {
             c.expect(legacy?.catchUpDelivery == (enabled ? .notification : .normal), "catch-up: legacy checkbox preserves behavior")
         }
         let plain = NotificationLogic.content(events: [future], privateDetails: false, catchUp: false, now: now)
+        for elapsed: TimeInterval in [-1, 0, 1, 9.999, 10, 60] {
+            let instant = future.start.addingTimeInterval(elapsed)
+            let atStart = elapsed >= 0 && elapsed < 10
+            for privacy in [false, true] {
+                for catchUp in [false, true] {
+                    let single = NotificationLogic.content(events: [future], privateDetails: privacy, catchUp: catchUp, now: instant)
+                    c.expect(single.body.hasPrefix("Starts now") == atStart, "notification: start wording at \(elapsed)")
+                    if privacy {
+                        c.expect(single.title.contains("starting now") == atStart, "notification: private start wording")
+                    }
+                    let group = NotificationLogic.content(events: [future, event("same-start")], privateDetails: privacy, catchUp: catchUp, now: instant)
+                    c.expect(group.title.contains("starting now") == atStart, "notification: grouped start wording")
+                }
+            }
+        }
         c.expect(plain.title == future.title && !plain.body.contains("secret") && !plain.body.contains("Secret"), "notification: normal content includes only title and timing")
         c.expect(!NotificationPermission(authorization: .denied).canSubmit && NotificationPermission(authorization: .allowed).canSubmit, "notification: permission denial blocks; alerts-disabled can use center")
 

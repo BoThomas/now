@@ -860,13 +860,7 @@ struct SingleEventView: View {
     }
 
     var statusText: String {
-        if now < event.start {
-            return "STARTS IN \(Fmt.mmss(event.start.timeIntervalSince(now)))"
-        }
-        if now < event.end {
-            return "NOW · ENDS IN \(Fmt.mmss(event.end.timeIntervalSince(now)))"
-        }
-        return "FINISHED"
+        Fmt.reminderStatus(start: event.start, end: event.end, now: now)
     }
 
     var timeRangeText: String {

@@ -35,21 +35,25 @@ enum NotificationLogic {
     }
 
     static func content(events: [MeetingEvent], privateDetails: Bool, catchUp: Bool, now: Date) -> (title: String, body: String) {
+        let startingNow = !events.isEmpty && events.allSatisfy {
+            Fmt.isStartingNow(start: $0.start, end: $0.end, now: now)
+        }
         if events.count > 1 && !catchUp {
             let started = events.allSatisfy { $0.start <= now }
-            let title = "\(events.count) meetings " + (started ? "are in progress" : "are starting")
+            let title = "\(events.count) meetings " + (startingNow ? "are starting now" : (started ? "are in progress" : "are starting"))
             let names = events.prefix(3).map { String(($0.title.isEmpty ? "Untitled meeting" : $0.title).prefix(60)) }.joined(separator: " · ")
             let more = events.count > 3 ? " · +\(events.count - 3) more" : ""
             return (title, privateDetails ? "Choose a meeting in your agenda." : names + more + "\nChoose a meeting in your agenda.")
         }
         if events.count != 1 {
-            return ("\(events.count) meetings are in progress", "Open now to view your agenda.")
+            return ("\(events.count) meetings " + (startingNow ? "are starting now" : "are in progress"), "Open now to view your agenda.")
         }
         guard let event = events.first else { return ("Meeting reminder", "Open now to view your agenda.") }
         let started = event.start <= now
-        let title = privateDetails ? (started ? "A meeting is in progress" : "A meeting is starting")
+        let title = privateDetails ? (startingNow ? "A meeting is starting now" : (started ? "A meeting is in progress" : "A meeting is starting"))
             : String((event.title.isEmpty ? "Untitled meeting" : event.title).prefix(180))
-        let body = started ? "Started at \(Fmt.time.string(from: event.start)) · ends at \(Fmt.time.string(from: event.end))"
+        let body = startingNow ? "Starts now · ends at \(Fmt.time.string(from: event.end))"
+            : started ? "Started at \(Fmt.time.string(from: event.start)) · ends at \(Fmt.time.string(from: event.end))"
             : "Starts at \(Fmt.time.string(from: event.start)) · \(Fmt.leadTime(max(1, Int(event.start.timeIntervalSince(now))))) from now"
         return (title, body)
     }
