@@ -183,3 +183,9 @@ Approved and implemented: after successful startup health acknowledgement, exist
 ## Final pre-commit verification
 
 The complete `./scripts/preflight.sh` passed after the approved quiet-launch, Skip This Version and manual-ZIP guide changes: signed build, all selftests, notification/lifecycle tests, fresh/existing/legacy GUI startup, reminder/menu/quit tests, cache and transport tests, workload checks, and all 13 signed updater scenarios. The existing and legacy GUI scenarios explicitly verify What’s New without an install marker. Local full output: `outputs/v2-review/manual-upgrade-preflight.log`. Shell syntax and `git diff --check` passed. These readiness changes are committed together; the app remains 1.10.0 and no release/tag is created.
+
+## Product decision: faster release discovery
+
+Automatic checks now run every six hours, with the same minimum interval on launch/wake and after failures. Newly published releases are eligible immediately. Update notifications inform on discovery when enabled; otherwise the prepared update window waits a full 24 hours from first discovery and still defers for reminders. Manual checks remain immediate, and Skip This Version remains respected.
+
+Timing verification passed: stable-identity signed build, all selftests (six-hour throttling, immediate release eligibility, 24-hour escalation boundary and once-only behavior), notification/lifecycle smoke, all three isolated startup GUI cases, and `git diff --check`. A local minute timer checks eligibility without network traffic; only the six-hour throttle permits automatic GitHub requests.

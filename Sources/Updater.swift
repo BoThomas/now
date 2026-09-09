@@ -125,7 +125,7 @@ enum UpdateLogic {
     }
 
     /// The decision pipeline for one fetched release. `minAge` is 0 for manual
-    /// checks and 24 h for automatic ones (the delete-a-bad-release brake).
+    /// checks; production automatic checks also accept newly published releases.
     static func decide(manifest: UpdateManifest?, currentVersion: String, skipped: String?, now: Date, minAge: TimeInterval, userInitiated: Bool = false) -> UpdateDecision {
         guard let manifest else { return .error("no usable release") }
         if !isVersion(manifest.version, newerThan: currentVersion) { return .upToDate }
@@ -140,21 +140,21 @@ enum UpdateLogic {
         return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }
 
-    /// Throttle for automatic checks: a SUCCESS silences for 24 h; a FAILURE
-    /// retries after ≥ 1 h, at most 3 attempts per day (a network blip at
-    /// launch must not silence checks for a whole day). Manual checks bypass.
+    /// Space all automatic attempts six hours apart, including failures and
+    /// launch/wake triggers. Manual checks bypass this throttle.
+    static let automaticCheckInterval: TimeInterval = 6 * 3600
     static func shouldAutoCheck(state: UpdateState, now: Date, calendar: Calendar = .current) -> Bool {
         let stamp = dayStamp(now, calendar: calendar)
         let attempts = state.attemptsDayStamp == stamp ? state.attemptsToday : 0
-        if attempts >= 3 { return false }
-        if let attempt = state.lastAttemptDate, now.timeIntervalSince(attempt) < 3600 { return false }
-        if let success = state.lastSuccessCheckDate, now.timeIntervalSince(success) < 24 * 3600 { return false }
+        if attempts >= 4 { return false }
+        if let attempt = state.lastAttemptDate, now.timeIntervalSince(attempt) < automaticCheckInterval { return false }
+        if let success = state.lastSuccessCheckDate, now.timeIntervalSince(success) < automaticCheckInterval { return false }
         return true
     }
 
     /// Escalation: auto-checks light the menu quietly; the window auto-shows
-    /// once per version only after it sat uninstalled for ~3 days.
-    static let escalationDwell: TimeInterval = 3 * 86400
+    /// once per version only after it sat uninstalled for 24 hours.
+    static let escalationDwell: TimeInterval = 86400
 
     static func shouldEscalate(availableVersion: String, state: UpdateState, now: Date) -> Bool {
         guard let seen = state.firstSeenUpdateVersion, seen == availableVersion,
@@ -957,9 +957,8 @@ enum UpdateRetry: Equatable {
 @MainActor
 final class UpdateController: ObservableObject {
     nonisolated static let stateKey = "local.tboch.now.updates.v1"
-    /// Automatic checks ignore releases younger than this (manual bypasses) —
-    /// the maintainer's window to delete a bad release before it spreads.
-    nonisolated static let ageGate: TimeInterval = 24 * 3600
+    /// Inform users on discovery, without an additional release-age delay.
+    nonisolated static let ageGate: TimeInterval = 0
 
     @Published private(set) var available: UpdateManifest?
     /// Version whose bundle is downloaded + verified and ready to install.
@@ -1043,8 +1042,10 @@ final class UpdateController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             self?.checkMaybeAutomatic()
         }
-        // .common mode like every app timer (menus/modals must not stall it).
-        checkTimer = AppStore.commonTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
+        // Poll eligibility locally so launch timing and request latency cannot
+        // turn a six-hour cadence into twelve hours. The throttle gates all
+        // network requests; this timer itself does not contact GitHub.
+        checkTimer = AppStore.commonTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkMaybeAutomatic() }
         }
     }
@@ -1070,7 +1071,7 @@ final class UpdateController: ObservableObject {
         windowContent = .installed(version: installed)
     }
 
-    /// Automatic trigger (launch timer / 24 h timer / wake) — honors the
+    /// Automatic trigger (launch / local eligibility timer / wake) — honors the
     /// settings toggle and the throttle. Also called by AppDelegate's wake
     /// observer.
     func checkMaybeAutomatic() {

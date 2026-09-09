@@ -71,7 +71,8 @@ extension SelfTest {
         }
         c.expect(shouldNotify(updateState, updateSettings), "update notice: eligible release")
         c.expect(!shouldNotify(updateState, updateSettings, "2.0.0"), "update notice: installed release removed")
-        c.expect(!shouldNotify(updateState, updateSettings, "1.0.0", now.addingTimeInterval(-1)), "update notice: automatic age gate respected")
+        c.expect(shouldNotify(updateState, updateSettings, "1.0.0", manifest.publishedAt), "update notice: newly published release is immediately eligible")
+        c.expect(!shouldNotify(updateState, updateSettings, "1.0.0", manifest.publishedAt.addingTimeInterval(-1)), "update notice: future-dated release stays quiet")
         updateState.lastNotificationVersion = "2.0.0"
         c.expect(!shouldNotify(updateState, updateSettings), "update notice: once per version")
         updateState.lastNotificationVersion = "3.0.0"
