@@ -2696,14 +2696,14 @@ enum SelfTest {
         var escalate = UpdateState()
         c.expect(!UpdateLogic.shouldEscalate(availableVersion: "1.5.0", state: escalate, now: now), "never-seen version does not escalate")
         escalate.firstSeenUpdateVersion = "1.5.0"
-        escalate.firstSeenUpdateDate = now.addingTimeInterval(-86400 + 1)
-        c.expect(!UpdateLogic.shouldEscalate(availableVersion: "1.5.0", state: escalate, now: now), "one second before 24 hours stays quiet")
-        escalate.firstSeenUpdateDate = now.addingTimeInterval(-86400)
-        c.expect(UpdateLogic.shouldEscalate(availableVersion: "1.5.0", state: escalate, now: now), "exactly 24 hours uninstalled escalates")
+        escalate.firstSeenUpdateDate = now.addingTimeInterval(-18 * 3600 + 1)
+        c.expect(!UpdateLogic.shouldEscalate(availableVersion: "1.5.0", state: escalate, now: now), "one second before 18 hours stays quiet")
+        escalate.firstSeenUpdateDate = now.addingTimeInterval(-18 * 3600)
+        c.expect(UpdateLogic.shouldEscalate(availableVersion: "1.5.0", state: escalate, now: now), "exactly 18 hours uninstalled escalates")
         escalate.lastNotifiedVersion = "1.5.0"
         c.expect(!UpdateLogic.shouldEscalate(availableVersion: "1.5.0", state: escalate, now: now), "already-notified version never re-nags")
         escalate.firstSeenUpdateVersion = "1.6.0"
-        escalate.firstSeenUpdateDate = now.addingTimeInterval(-86400)
+        escalate.firstSeenUpdateDate = now.addingTimeInterval(-18 * 3600)
         c.expect(!UpdateLogic.shouldEscalate(availableVersion: "1.5.0", state: escalate, now: now), "different first-seen version does not escalate")
 
         // -- Requirement string (must mirror build-app.sh's DR form) --------

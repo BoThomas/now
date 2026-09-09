@@ -186,6 +186,10 @@ The complete `./scripts/preflight.sh` passed after the approved quiet-launch, Sk
 
 ## Product decision: faster release discovery
 
-Automatic checks now run every six hours, with the same minimum interval on launch/wake and after failures. Newly published releases are eligible immediately. Update notifications inform on discovery when enabled; otherwise the prepared update window waits a full 24 hours from first discovery and still defers for reminders. Manual checks remain immediate, and Skip This Version remains respected.
+Automatic checks now run every six hours, with the same minimum interval on launch/wake and after failures. Newly published releases are eligible immediately. Update notifications inform on discovery when enabled; otherwise the prepared update window waits 18 hours from first discovery and still defers for reminders. Manual checks remain immediate, and Skip This Version remains respected.
 
 Timing verification passed: stable-identity signed build, all selftests (six-hour throttling, immediate release eligibility, 24-hour escalation boundary and once-only behavior), notification/lifecycle smoke, all three isolated startup GUI cases, and `git diff --check`. A local minute timer checks eligibility without network traffic; only the six-hour throttle permits automatic GitHub requests.
+
+Timing refinement: the fallback window delay is now 18 hours from discovery, allowing for up to six hours before discovery. The six-hour API cadence is unchanged. Sleep, network failure, preparation and reminder-window deferral can extend actual presentation time.
+
+18-hour refinement verification: stable-identity signed build, all selftests (including the exact 18-hour boundary and once-only suppression), and `git diff --check` passed.

@@ -108,7 +108,7 @@ Notifications offer **Join** when a single meeting has a link and **Snooze** whe
 
 An outstanding notification is replaced silently with **Meeting updated** when its title, time, location, or Join link changes. If it briefly disappears from the calendar and returns, the replacement says **Meeting reminder restored**. Dismissed or joined reminders stay handled, and snoozes keep their deadlines. Grouped reminders stay available while another member is relevant; their displayed count may be outdated, but actions use current meeting data. A notification click during startup waits for calendars to load; if the meeting is gone, now opens its menu-bar agenda.
 
-Automatic update checks run every six hours and accept newly published releases immediately. Without update notifications enabled, the update window appears once after the release has been known for a full day, when prepared and no reminder is open.
+Automatic update checks run every six hours and accept newly published releases immediately. Without update notifications enabled, the update window appears once after the release has been known for 18 hours, when prepared and no reminder is open.
 
 **Notify about new updates** sends one silent notification per new version while automatic update checks are enabled. Clicking opens the update window; manual checks still open it directly. This replaces automatic update-window popups when enabled. **Skip This Version** in the update window stops automatic offers for that release and clears its downloaded update. Manual **Check for Updates…** can show it again; newer releases are still offered automatically.
 

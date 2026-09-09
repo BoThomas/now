@@ -153,8 +153,8 @@ enum UpdateLogic {
     }
 
     /// Escalation: auto-checks light the menu quietly; the window auto-shows
-    /// once per version only after it sat uninstalled for 24 hours.
-    static let escalationDwell: TimeInterval = 86400
+    /// once per version only after it sat uninstalled for 18 hours.
+    static let escalationDwell: TimeInterval = 18 * 3600
 
     static func shouldEscalate(availableVersion: String, state: UpdateState, now: Date) -> Bool {
         guard let seen = state.firstSeenUpdateVersion, seen == availableVersion,
