@@ -1511,6 +1511,16 @@ struct CustomTimingEditor: View {
     }
 }
 
+/// Re-renders its content when notification permission changes. SettingsView
+/// observes only AppStore, which never publishes for controller-only
+/// permission updates — this wrapper observes the controller directly, like
+/// the Notifications section does.
+private struct NotificationPermissionGate<Content: View>: View {
+    @ObservedObject var notifications: ReminderNotificationController
+    @ViewBuilder let content: (Bool) -> Content
+    var body: some View { content(notifications.permission.authorization == .denied) }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var alerts: AlertController
@@ -1537,6 +1547,16 @@ struct SettingsView: View {
     static let sidebarThreshold: CGFloat = 880
     /// Common lead times; arbitrary values are edited through Custom….
     private static let leadPresets = [0, 10, 30, 60, 120, 300, 600, 900]
+
+    @ViewBuilder private func permissionGated<Content: View>(
+        @ViewBuilder _ content: @escaping (Bool) -> Content
+    ) -> some View {
+        if let notifications = store.notifications {
+            NotificationPermissionGate(notifications: notifications, content: content)
+        } else {
+            content(false)
+        }
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -1980,18 +2000,26 @@ struct SettingsView: View {
     private var reminderSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader(SettingsSection.reminder.title, SettingsSection.reminder.symbol)
-            Picker("Delivery", selection: Binding(
-                get: { store.settings.reminderDelivery },
-                set: { value in
-                    store.settings.reminderDelivery = value
-                    if value == .notification { store.notifications?.requestPermission() }
+            permissionGated { denied in
+                Picker("Delivery", selection: Binding(
+                    get: { store.settings.reminderDelivery },
+                    set: { value in
+                        store.settings.reminderDelivery = value
+                        if value == .notification { store.notifications?.requestPermission() }
+                    }
+                )) {
+                    Text("Fullscreen").tag(ReminderDelivery.fullscreen)
+                    // macOS never re-prompts after a denial; a notification
+                    // delivery choice would then silently stop all reminders.
+                    // Menu items neither gray nor reliably block selection,
+                    // so the option is omitted entirely while denied.
+                    if !denied || store.settings.reminderDelivery == .notification {
+                        Text("macOS notification").tag(ReminderDelivery.notification)
+                    }
                 }
-            )) {
-                Text("Fullscreen").tag(ReminderDelivery.fullscreen)
-                Text("macOS notification").tag(ReminderDelivery.notification)
+                .pickerStyle(.menu)
+                .frame(maxWidth: 360, alignment: .leading)
             }
-            .pickerStyle(.menu)
-            .frame(maxWidth: 360, alignment: .leading)
             Picker("Remind me", selection: Binding(
                 get: { store.settings.leadSeconds },
                 set: { value in
@@ -2038,30 +2066,38 @@ struct SettingsView: View {
                     onCancel: { showCustomSnoozeTime = false })
             }
             Divider()
-            Picker("On launch or wake, meetings already in progress", selection: Binding(
-                get: { store.settings.catchUpDelivery },
-                set: { value in
-                    store.settings.catchUpDelivery = value
-                    if value == .notification { store.notifications?.requestPermission() }
-                })) {
-                Text("Use normal reminder style").tag(CatchUpDelivery.normal)
-                Text("Use notification").tag(CatchUpDelivery.notification)
-                Text("Skip reminder").tag(CatchUpDelivery.skip)
-            }
-            .fixedSize()
-            Picker("During another meeting", selection: Binding(
-                get: { store.settings.inMeetingDelivery },
-                set: { mode in
-                    store.setInMeetingDelivery(mode)
-                    if mode == .notification { store.notifications?.requestPermission() }
+            permissionGated { denied in
+                Picker("On launch or wake, meetings already in progress", selection: Binding(
+                    get: { store.settings.catchUpDelivery },
+                    set: { value in
+                        store.settings.catchUpDelivery = value
+                        if value == .notification { store.notifications?.requestPermission() }
+                    })) {
+                    Text("Use normal reminder style").tag(CatchUpDelivery.normal)
+                    if !denied || store.settings.catchUpDelivery == .notification {
+                        Text("Use notification").tag(CatchUpDelivery.notification)
+                    }
+                    Text("Skip reminder").tag(CatchUpDelivery.skip)
                 }
-            )) {
-                Text("Remind normally").tag(InMeetingDelivery.normal)
-                Text("Use a notification").tag(InMeetingDelivery.notification)
-                Text("Suppress reminders").tag(InMeetingDelivery.suppress)
+                .fixedSize()
             }
-            .pickerStyle(.menu)
-            .disabled(store.meetingDetectionChecking)
+            permissionGated { denied in
+                Picker("During another meeting", selection: Binding(
+                    get: { store.settings.inMeetingDelivery },
+                    set: { mode in
+                        store.setInMeetingDelivery(mode)
+                        if mode == .notification { store.notifications?.requestPermission() }
+                    }
+                )) {
+                    Text("Remind normally").tag(InMeetingDelivery.normal)
+                    if !denied || store.settings.inMeetingDelivery == .notification {
+                        Text("Use a notification").tag(InMeetingDelivery.notification)
+                    }
+                    Text("Suppress reminders").tag(InMeetingDelivery.suppress)
+                }
+                .pickerStyle(.menu)
+                .disabled(store.meetingDetectionChecking)
+            }
             Text("Uses local audio activity from meeting apps. No audio is recorded.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
