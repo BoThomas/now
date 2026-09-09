@@ -1521,6 +1521,26 @@ private struct NotificationPermissionGate<Content: View>: View {
     var body: some View { content(notifications.permission.authorization == .denied) }
 }
 
+/// A picker option that must not be selectable while `unavailable`.
+/// `.selectionDisabled` (the documented API for unavailable picker flavors)
+/// requires macOS 14; on macOS 13 the option is omitted unless it is the
+/// current selection — menu items neither gray nor reliably block selection
+/// there, so omission is the only safe fallback.
+struct GatedPickerOption<Value: Hashable>: View {
+    let title: String
+    let tag: Value
+    let unavailable: Bool
+    let isSelected: Bool
+
+    var body: some View {
+        if #available(macOS 14.0, *) {
+            Text(title).tag(tag).selectionDisabled(unavailable)
+        } else if !unavailable || isSelected {
+            Text(title).tag(tag)
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var alerts: AlertController
@@ -2011,11 +2031,8 @@ struct SettingsView: View {
                     Text("Fullscreen").tag(ReminderDelivery.fullscreen)
                     // macOS never re-prompts after a denial; a notification
                     // delivery choice would then silently stop all reminders.
-                    // Menu items neither gray nor reliably block selection,
-                    // so the option is omitted entirely while denied.
-                    if !denied || store.settings.reminderDelivery == .notification {
-                        Text("macOS notification").tag(ReminderDelivery.notification)
-                    }
+                    GatedPickerOption(title: "macOS notification", tag: ReminderDelivery.notification,
+                                      unavailable: denied, isSelected: store.settings.reminderDelivery == .notification)
                 }
                 .pickerStyle(.menu)
                 .frame(maxWidth: 360, alignment: .leading)
@@ -2074,9 +2091,8 @@ struct SettingsView: View {
                         if value == .notification { store.notifications?.requestPermission() }
                     })) {
                     Text("Use normal reminder style").tag(CatchUpDelivery.normal)
-                    if !denied || store.settings.catchUpDelivery == .notification {
-                        Text("Use notification").tag(CatchUpDelivery.notification)
-                    }
+                    GatedPickerOption(title: "Use notification", tag: CatchUpDelivery.notification,
+                                      unavailable: denied, isSelected: store.settings.catchUpDelivery == .notification)
                     Text("Skip reminder").tag(CatchUpDelivery.skip)
                 }
                 .fixedSize()
@@ -2090,9 +2106,8 @@ struct SettingsView: View {
                     }
                 )) {
                     Text("Remind normally").tag(InMeetingDelivery.normal)
-                    if !denied || store.settings.inMeetingDelivery == .notification {
-                        Text("Use a notification").tag(InMeetingDelivery.notification)
-                    }
+                    GatedPickerOption(title: "Use a notification", tag: InMeetingDelivery.notification,
+                                      unavailable: denied, isSelected: store.settings.inMeetingDelivery == .notification)
                     Text("Suppress reminders").tag(InMeetingDelivery.suppress)
                 }
                 .pickerStyle(.menu)

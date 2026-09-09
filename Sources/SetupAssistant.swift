@@ -235,7 +235,8 @@ struct SetupAssistantView: View {
             HStack {
                 Picker("Reminder style", selection: Binding(get: { effective.reminderDelivery }, set: { assistant.draft.reminderDelivery = $0 })) {
                     Text("Fullscreen").tag(ReminderDelivery.fullscreen)
-                    Text("macOS notification").tag(ReminderDelivery.notification).disabled(!notifications.permission.canSubmit)
+                    GatedPickerOption(title: "macOS notification", tag: ReminderDelivery.notification,
+                                      unavailable: !notifications.permission.canSubmit, isSelected: effective.reminderDelivery == .notification)
                 }
                 Button {
                     if effective.reminderDelivery == .notification { notifications.previewMeeting(settings: effective) }
@@ -259,7 +260,8 @@ struct SetupAssistantView: View {
             }
             Picker("During another meeting", selection: Binding(get: { effective.inMeetingDelivery }, set: { assistant.draft.inMeetingDelivery = $0 })) {
                 Text("Remind normally").tag(InMeetingDelivery.normal)
-                Text("Use a notification").tag(InMeetingDelivery.notification).disabled(!notifications.permission.canSubmit)
+                GatedPickerOption(title: "Use a notification", tag: InMeetingDelivery.notification,
+                                  unavailable: !notifications.permission.canSubmit, isSelected: effective.inMeetingDelivery == .notification)
                 Text("Suppress reminders").tag(InMeetingDelivery.suppress)
             }.disabled(!MeetingActivityProbe.platformPotentiallySupported)
             Toggle("Hide meeting details in notifications", isOn: choice(\.hideNotificationDetails))
