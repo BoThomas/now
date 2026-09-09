@@ -5,6 +5,7 @@ import CryptoKit
 /// Presentation fields and muted state are always taken from the live subscription.
 struct CachedMeeting: Codable {
     let uid: String
+    let notificationIdentity: String?
     let title: String
     let start: Date
     let end: Date
@@ -13,6 +14,7 @@ struct CachedMeeting: Codable {
     let link: URL?
 
     init(_ event: MeetingEvent) {
+        notificationIdentity = event.notificationIdentity
         uid = event.uid; title = event.title; start = event.start; end = event.end
         location = event.location; notes = event.notes; link = event.link
     }
@@ -21,12 +23,12 @@ struct CachedMeeting: Codable {
         MeetingEvent(uid: uid, title: title, start: start, end: end, location: location,
                      notes: notes, link: link, calendarID: subscription.id,
                      calendarName: subscription.name, colorIndex: subscription.colorIndex,
-                     colorHex: subscription.colorHex)
+                     colorHex: subscription.colorHex, notificationIdentity: notificationIdentity)
     }
 
     var estimatedBytes: Int {
         // JSON escaping can expand each byte sixfold. Bound encoding allocations too.
-        256 + [uid, title, location ?? "", notes ?? "", link?.absoluteString ?? ""].reduce(0) { $0 + $1.utf8.count * 6 }
+        256 + [uid, notificationIdentity ?? "", title, location ?? "", notes ?? "", link?.absoluteString ?? ""].reduce(0) { $0 + $1.utf8.count * 6 }
     }
 }
 

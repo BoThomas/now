@@ -52,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
     sources = [str(p) for p in sorted((ROOT / "Sources").glob("*.swift")) if p.name not in ["App.swift", "AppStore.swift", "Updater.swift"]]
     subprocess.run(["swiftc", "-parse-as-library", "-swift-version", "5", "-sdk", sdk,
                     "-target", "arm64-apple-macos13.0", "-module-cache-path", str(directory / "modules"),
-                    *sources, str(app), str(store), str(updater), str(ROOT / "scripts/notification-smoke.swift"), str(ROOT / "scripts/notification-preview.swift"),
+                    *sources, str(app), str(store), str(updater), str(ROOT / "scripts/notification-smoke.swift"), str(ROOT / "scripts/notification-preview.swift"), str(ROOT / "scripts/notification-lifecycle-smoke.swift"),
                     "-o", str(executable)], check=True)
     gui = "--gui" in sys.argv
     if gui:

@@ -91,11 +91,35 @@ final class SetupAppSmoke {
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
+        // Exercise the actual startup-to-status-menu fallback without registering
+        // with Notification Center or reading any real calendar.
+        let coldID = "now.meeting.cold-start-smoke"
+        let receipt = ReminderNotification(id: coldID, keys: ["missing-occurrence"], fingerprints: ["missing"],
+            expires: Date().addingTimeInterval(1800), catchUp: false,
+            title: "", body: "", category: "", sound: false)
+        UserDefaults.standard.set(try! JSONEncoder().encode([coldID: receipt]), forKey: "local.tboch.now.notification-receipts.v1")
+        var openedColdAgenda = false
+        let agendaObserver = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { notification in
+            MainActor.assumeIsolated {
+                guard let menu = notification.object as? NSMenu, menu.delegate is MenuBarController else { return }
+                openedColdAgenda = true
+                let cancel: @MainActor @Sendable () -> Void = { menu.cancelTracking() }
+                _ = AppStore.commonTimer(withTimeInterval: 0.1, repeats: false) { _ in
+                    MainActor.assumeIsolated { cancel() }
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            delegate.notificationInteraction()
+            delegate.store.notifications?.receive(id: coldID, action: "com.apple.UNNotificationDefaultActionIdentifier")
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
             Task { @MainActor in
                 func require(_ result: Bool, _ label: String) {
                     if !result { print("FAIL: " + label); exit(1) }
                 }
+                require(openedColdAgenda, "cold missing-meeting click opens the actual menu-bar agenda")
+                NotificationCenter.default.removeObserver(agendaObserver)
                 require(delegate.store.hadSavedProfile == existingProfile, "profile presence captured before migration")
                 if existingProfile {
                     require(NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible }, "existing empty profile opens Settings")

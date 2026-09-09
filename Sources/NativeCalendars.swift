@@ -158,7 +158,9 @@ final class NativeCalendarSource {
             calendarID: native.id,
             calendarName: calendarTitle,
             colorIndex: native.colorIndex,
-            colorHex: hex
+            colorHex: hex,
+            notificationIdentity: "native:" + String(identifier.utf8.count) + ":" + identifier + ":"
+                + ((ekEvent.hasRecurrenceRules || ekEvent.isDetached) ? String((ekEvent.occurrenceDate ?? ekEvent.startDate).timeIntervalSince1970) : "single")
         )
     }
 

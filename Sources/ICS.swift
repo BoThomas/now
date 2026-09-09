@@ -1305,7 +1305,7 @@ enum ICSBuilder {
         for uid in groups.keys.sorted() {
             let events = groups[uid]!
             let master = latestRevision(of: events.filter { $0.recurrenceIDProperty == nil && $0.dtStart != nil })
-            var occurrences: [(start: Date, event: ParsedEvent)] = []
+            var occurrences: [(start: Date, anchor: Date?, event: ParsedEvent)] = []
             if let originalMaster = master {
                 var m = originalMaster
                 m.exdates = Self.resolvedDates(m.exdateProperties, masterTz: m.tz, dateFormatters: dateFormatters)
@@ -1327,9 +1327,9 @@ enum ICSBuilder {
                         let message = "Calendar not updated: recurrence processing reached the \(scope) limit of \(limit) calculation steps while checking “\(title)”. This feed contains \(parsed.events.count) event records and \(recurringSeries) recurring series. We used \(used) steps, including \(historicalSteps) checking dates before the current window. COUNT rules require counting from their original start on each refresh. Reduce old recurring history or use a smaller calendar export. Previously loaded meetings are kept if available; new changes could not be checked."
                         return ICSBuildResult(error: message)
                     }
-                    for date in expansion.dates { occurrences.append((date, m)) }
+                    for date in expansion.dates { occurrences.append((date, date, m)) }
                 } else if !m.isAllDay, let start = m.dtStart, start >= windowStart, start <= windowEnd, !m.exdates.contains(start) {
-                    occurrences.append((start, m))
+                    occurrences.append((start, (!m.rdateProperties.isEmpty || m.unsupportedRRULEText != nil) ? start : nil, m))
                 }
                 // RDATE: extra occurrence dates beyond the rule.
                 if !m.isAllDay {
@@ -1342,7 +1342,7 @@ enum ICSBuilder {
                     }
                     var occurrenceStarts = Set(occurrences.map(\.start))
                     for rdate in resolvedRDates where occurrenceStarts.insert(rdate).inserted {
-                        occurrences.append((rdate, m))
+                        occurrences.append((rdate, rdate, m))
                     }
                 }
             }
@@ -1367,7 +1367,7 @@ enum ICSBuilder {
                 guard !override.isAllDay else { continue }
                 let start = override.dtStart ?? rid
                 guard start >= windowStart, start <= windowEnd else { continue }
-                occurrences.append((start, Self.inheriting(override, from: master)))
+                occurrences.append((start, rid, Self.inheriting(override, from: master)))
             }
             for occurrence in occurrences {
                 let eventKey = "\(occurrence.event.uid)|\(Int(occurrence.start.timeIntervalSince1970))"
@@ -1387,7 +1387,8 @@ enum ICSBuilder {
                     calendarID: subscription.id,
                     calendarName: subscription.name,
                     colorIndex: subscription.colorIndex,
-                    colorHex: resolvedHex
+                    colorHex: resolvedHex,
+                    notificationIdentity: "ics:" + String(uid.utf8.count) + ":" + uid + ":" + (occurrence.anchor.map { String($0.timeIntervalSince1970) } ?? "single")
                 ))
             }
         }

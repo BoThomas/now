@@ -568,6 +568,7 @@ struct NotificationSmoke {
         require(probe.calls == unsupportedCalls && probeStore.settings.inMeetingDelivery == .suppress && probeStore.meetingDetectionAvailable == false,
                 "unsupported capability preserves preference without endless retries")
         probeStore.setInMeetingDelivery(.normal)
+        await lifecycleTests(root: root)
         print("NOTIFICATION SMOKE OK — async races, permission recovery, routing, privacy, snooze, restart, wake grouping, cleanup, update notices, feature migration")
     }
 }

@@ -244,6 +244,8 @@ struct Persisted: Codable {
 struct MeetingEvent: Identifiable {
     let id: String
     let uid: String
+    /// Stable source occurrence identity for notification edits; agenda IDs remain unchanged.
+    let notificationIdentity: String?
     let title: String
     let start: Date
     let end: Date
@@ -268,8 +270,9 @@ struct MeetingEvent: Identifiable {
     var readableNsColorOnBlack: NSColor { Palette.readable(nsColor, on: .onBlack) }
     var alertButtonColor: Color { Color(nsColor: Palette.alertButtonColor(nsColor)) }
 
-    init(uid: String, title: String, start: Date, end: Date, location: String?, notes: String?, link: URL?, calendarID: UUID, calendarName: String, colorIndex: Int, colorHex: String? = nil, isMuted: Bool = false) {
+    init(uid: String, title: String, start: Date, end: Date, location: String?, notes: String?, link: URL?, calendarID: UUID, calendarName: String, colorIndex: Int, colorHex: String? = nil, isMuted: Bool = false, notificationIdentity: String? = nil) {
         self.uid = uid
+        self.notificationIdentity = notificationIdentity
         self.title = title
         self.start = start
         self.end = end

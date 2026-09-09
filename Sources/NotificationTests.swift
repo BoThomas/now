@@ -182,6 +182,38 @@ extension SelfTest {
         ledger.record(future); ledger.reconcile(events: [future], enabled: [calendar], observed: [], now: future.end)
         c.expect(ledger.entries.isEmpty, "notification: ended acknowledgement expires")
 
+        // Notification identity survives a time edit without merging recurring siblings.
+        let sub = CalendarSubscription(name: "Identity", url: "https://example.test/feed", colorIndex: 0)
+        let anchor = Date(timeIntervalSince1970: 1_800_000_000)
+        func feed(_ start: String, recurring: Bool = false, override: String = "") -> [MeetingEvent] {
+            let rule = recurring ? "RRULE:FREQ=DAILY;COUNT=2\n" : ""
+            let text = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:identity\nSUMMARY:Meeting\nDTSTART:" + start
+                + "\nDURATION:PT1H\n" + rule + "END:VEVENT\n" + override + "END:VCALENDAR\n"
+            return ICSBuilder.meetings(fromICS: text, subscription: sub, now: anchor).events
+        }
+        // 2027-01-15 falls within the injected parser window.
+        let original = feed("20270115T100000Z")
+        let moved = feed("20270115T110000Z")
+        c.expect(original.count == 1 && moved.count == 1, "notification identity: standalone fixture parsed")
+        if let first = original.first, let second = moved.first {
+            c.expect(first.id != second.id && NotificationLogic.eventKey(first) == NotificationLogic.eventKey(second), "notification identity: time edits preserve notification identity only")
+            var saved = ReminderLedger()
+            saved.entries[NotificationLogic.key(first.id)] = ReminderLedger.Entry(calendarID: sub.id, end: first.end, snooze: anchor.addingTimeInterval(60))
+            saved.reconcile(events: [first], enabled: [sub.id], observed: [], now: anchor)
+            saved.reconcile(events: [second], enabled: [sub.id], observed: [sub.id], now: anchor)
+            c.expect(saved.entries[NotificationLogic.eventKey(second)]?.snooze == anchor.addingTimeInterval(60), "notification identity: legacy ledger migrates and preserves moved snooze")
+            let cached = CachedMeeting(first)
+            let restored = try? JSONDecoder().decode(CachedMeeting.self, from: JSONEncoder().encode(cached))
+            c.expect(restored?.notificationIdentity == first.notificationIdentity, "notification identity: disk cache retains source occurrence anchor")
+        }
+        let recurring = feed("20270115T100000Z", recurring: true)
+        let detached = feed("20270115T100000Z", recurring: true, override: "BEGIN:VEVENT\nUID:identity\nRECURRENCE-ID:20270115T100000Z\nDTSTART:20270115T120000Z\nDURATION:PT1H\nEND:VEVENT\n")
+        c.expect(recurring.count == 2 && detached.count == 2, "notification identity: recurring fixture parsed")
+        if recurring.count == 2, detached.count == 2 {
+            c.expect(NotificationLogic.eventKey(recurring[0]) == NotificationLogic.eventKey(detached[0]), "notification identity: moved override retains original recurrence anchor")
+            c.expect(NotificationLogic.eventKey(recurring[0]) != NotificationLogic.eventKey(recurring[1]), "notification identity: recurring siblings remain independent")
+        }
+
         var tracker = SyncNotificationTracker()
         let other = UUID()
         c.expect(tracker.candidates(failed: [calendar], now: now).isEmpty, "notification: transient failure silent")

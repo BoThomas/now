@@ -97,3 +97,19 @@ the prior settings; unsupported capability is visible and does not loop retries.
 
 Feature guides retain only encountered history in memory; encoding includes an
 empty legacy pendingSettings field so older releases can still decode that history.
+
+## Accepted-notification lifecycle (9 September 2026)
+
+Submission validation and accepted-notification reconciliation are separate. Consuming a snooze deadline or a meeting-activity change cannot invalidate a notification that was just delivered. Explicit delivery/privacy setting changes still withdraw the affected meeting receipts.
+
+Group membership changes use the approved fallback: retain the existing notification while a relevant member remains, with possibly outdated text but live action resolution. This avoids using a replacement add for routine member removal, which could create another banner. Grouped sync failures also remain available while any original failure episode continues.
+
+Meaningful edits of an outstanding meeting notification use a fresh, silent replacement labeled “Meeting updated.” A temporarily omitted event returning is labeled “Meeting reminder restored.” Full-refresh changes coalesce before replacement. A hidden receipt retains bounded restoration/retry intent; two successful source omissions, source invalidation, muting, or meeting end retire it. Explicit user actions remove membership/intent, so edits never override a dismissal, join, or snooze. Replacement add failures retain retry intent with backoff; stale completions cannot delete replacements. Recent replaced-token actions resolve through bounded aliases to handle clicks already in flight.
+
+Notification keys use source occurrence identity independently of agenda IDs: ICS standalone UID or original recurrence anchor, and native event identifier plus original occurrence date for recurring events. This preserves handled/snoozed state across time edits without merging recurring siblings. Old ledger/receipt keys migrate only with an exact live occurrence match. Cache identity is optional for backward decoding; unknown provider identity changes are never guessed by title or proximity.
+
+Cold receipts survive until the initial full refresh completes regardless of response arrival order. A short, bounded action grace period covers callbacks arriving just after cleanup. No stored Join URL is used. Missing-meeting clicks open the status-item agenda; dismiss actions remain silent. The startup smoke exercises this against the actual AppDelegate and NSMenu, with fake notification transport.
+
+The feature guide preserves active detection, capability checks, and retries when its meeting mode is unchanged. Changed modes use validated owners or explicitly recheck capability.
+
+Regression coverage lives in `scripts/notification-lifecycle-smoke.swift`, included by `scripts/notification-smoke.py`, with parser/cache identity and ledger migration checks in `Sources/NotificationTests.swift`.

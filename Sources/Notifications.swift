@@ -42,8 +42,17 @@ enum NotificationLogic {
         return (title, body)
     }
 
-    static func fingerprint(_ event: MeetingEvent) -> String {
+    static func eventKey(_ event: MeetingEvent) -> String {
+        guard let identity = event.notificationIdentity else { return key(event.id) }
+        return key(event.calendarID.uuidString + ":" + identity)
+    }
+
+    static func legacyFingerprint(_ event: MeetingEvent) -> String {
         key([event.id, event.title, String(event.end.timeIntervalSince1970), event.link?.absoluteString ?? "", String(event.isMuted)].joined(separator: "\n"))
+    }
+
+    static func fingerprint(_ event: MeetingEvent) -> String {
+        key([event.id, event.title, String(event.end.timeIntervalSince1970), event.link?.absoluteString ?? "", event.location ?? "", String(event.isMuted)].joined(separator: "\n"))
     }
 }
 
@@ -74,14 +83,19 @@ struct ReminderLedger: Codable, Equatable {
     }
     var entries: [String: Entry] = [:]
     mutating func record(_ event: MeetingEvent, snooze: Date? = nil) {
-        entries[NotificationLogic.key(event.id)] = Entry(calendarID: event.calendarID, end: event.end, snooze: snooze)
+        entries[NotificationLogic.eventKey(event)] = Entry(calendarID: event.calendarID, end: event.end, snooze: snooze)
     }
     mutating func reconcile(events: [MeetingEvent], enabled: Set<UUID>, observed: Set<UUID>, now: Date) {
-        let live = Dictionary(uniqueKeysWithValues: events.map { (NotificationLogic.key($0.id), $0) })
+        // Upgrade old occurrence-ID entries only when that exact occurrence is present.
+        for event in events {
+            let old = NotificationLogic.key(event.id), key = NotificationLogic.eventKey(event)
+            if old != key, let entry = entries.removeValue(forKey: old), entries[key] == nil { entries[key] = entry }
+        }
+        let live = Dictionary(events.map { (NotificationLogic.eventKey($0), $0) }, uniquingKeysWith: { first, _ in first })
         for (key, var entry) in entries {
-            guard enabled.contains(entry.calendarID), entry.end > now else { entries.removeValue(forKey: key); continue }
             if let event = live[key] { entry.end = event.end; entry.misses = 0 }
             else if observed.contains(entry.calendarID) { entry.misses += 1 }
+            guard enabled.contains(entry.calendarID), entry.end > now else { entries.removeValue(forKey: key); continue }
             if entry.misses >= 2 { entries.removeValue(forKey: key) }
             else { entries[key] = entry }
         }
@@ -135,6 +149,19 @@ struct ReminderNotification: Codable, Equatable {
     var body: String
     var category: String
     var sound: Bool
+    // Optional fields preserve decoding of receipts written by previous versions.
+    var hidden: Bool? = nil
+    var visibleKeys: [String]? = nil
+    var replacementReason: String? = nil
+    var fingerprintVersion: Int? = nil
+    var accepted: Bool? = nil
+}
+
+enum NotificationReconciliation {
+    case keep(ReminderNotification)
+    case hide(ReminderNotification)
+    case replace(ReminderNotification)
+    case remove
 }
 
 @MainActor
@@ -219,6 +246,12 @@ final class ReminderNotificationController: ObservableObject {
     private let storageKey = "local.tboch.now.notification-receipts.v1"
     private(set) var receipts: [String: ReminderNotification] = [:]
     private var pending: Set<String> = []
+    private var replacementOrigins: [String: ReminderNotification] = [:]
+    private var startupReceipts: [String: ReminderNotification] = [:]
+    private var startupActionsUntil: Date?
+    private var responseAliases: [String: (item: ReminderNotification, expires: Date)] = [:]
+    var deferRestoredReconciliation: (() -> Bool)?
+    var reconcileDelivered: ((ReminderNotification) -> NotificationReconciliation)?
     private var retryAfter: [String: Date] = [:]
     var now: () -> Date = { Date() }
     private var refreshing = false
@@ -238,6 +271,13 @@ final class ReminderNotificationController: ObservableObject {
                 id == item.id && id.hasPrefix("now.") && item.keys.count <= 20_000
                     && Set(item.keys).count == item.keys.count
                     && (item.sync || item.test || item.updateVersion != nil || item.fingerprints.count == item.keys.count)
+            }
+            startupReceipts = receipts
+            // An interrupted add has no delivery acknowledgement. Retry from a
+            // hidden receipt rather than reserving it forever after a crash.
+            for (id, var item) in receipts where item.accepted == false {
+                item.hidden = true
+                receipts[id] = item
             }
         }
     }
@@ -284,68 +324,168 @@ final class ReminderNotificationController: ObservableObject {
         return permission.canSubmit
     }
     func offer(_ proposed: ReminderNotification, now: Date) {
+        submit(proposed, replacing: nil, now: now)
+    }
+
+    private func submit(_ proposed: ReminderNotification, replacing old: ReminderNotification?, now: Date) {
         let retryKey = proposed.id
-        guard !receipts.values.contains(where: { !$0.keys.isEmpty && !Set($0.keys).isDisjoint(with: proposed.keys) }),
+        guard !receipts.values.contains(where: { $0.id != old?.id && !$0.keys.isEmpty && !Set($0.keys).isDisjoint(with: proposed.keys) }),
               !receipts.values.contains(where: { proposed.test && $0.test }), now >= retryAfter[retryKey, default: .distantPast] else { return }
         var item = proposed
-        // Every attempt owns a unique token. A cancelled add completing later
-        // must never remove a replacement request for the same occurrence.
         item.id += "." + UUID().uuidString
+        item.hidden = false
+        item.accepted = false
+        item.visibleKeys = proposed.visibleKeys ?? item.keys
+        if var old {
+            old.hidden = true
+            replacementOrigins[item.id] = old
+            responseAliases[old.id] = (old, now.addingTimeInterval(120))
+            discard(old.id)
+        }
         receipts[item.id] = item
         pending.insert(item.id)
         let revision = permissionRevision
         Task {
             let status = await transport.permission()
             if revision == permissionRevision { permission = status }
-            guard receipts[item.id] == item, item.expires > self.now(), validate?(item) ?? true else {
-                discard(item.id); return
+            guard receipts[item.id] == item else { return }
+            guard item.expires > self.now(), validate?(item) ?? true else {
+                retrySubmission(item.id); return
             }
             guard status.canSubmit else {
                 retryAfter[retryKey] = now.addingTimeInterval(30)
-                discard(item.id); return
+                retrySubmission(item.id); return
             }
-            // Save the opaque action receipt before submission: actions can arrive
-            // immediately, or after a crash/relaunch. Text is stripped on disk.
+            // Persist before add: responses can precede its completion.
             persist()
             do {
                 try await transport.add(item)
-                guard receipts[item.id] == item, item.expires > self.now(), validate?(item) ?? true else {
-                    discard(item.id); return
+                guard receipts[item.id] == item else { transport.remove([item.id]); return }
+                guard item.expires > self.now(), validate?(item) ?? true else {
+                    retrySubmission(item.id); return
                 }
                 pending.remove(item.id)
+                replacementOrigins.removeValue(forKey: item.id)
                 problem = nil
                 retryAfter.removeValue(forKey: retryKey)
-                onSubmitted?(item)
+                var delivered = item
+                delivered.accepted = true
+                receipts[item.id] = delivered
+                onSubmitted?(delivered)
                 persist()
             } catch {
                 guard receipts[item.id] == item else { transport.remove([item.id]); return }
-                problem = "macOS could not accept a notification. Check Notification Settings or try the test again."
+                problem = "macOS could not accept a notification. Check Notification Settings or try the preview again."
                 retryAfter[retryKey] = now.addingTimeInterval(60)
-                discard(item.id)
+                retrySubmission(item.id)
             }
         }
     }
-    func removeMeetings(containing keys: Set<String>) {
-        for item in Array(receipts.values) where !item.sync && !Set(item.keys).isDisjoint(with: keys) { discard(item.id) }
+
+    /// A failed replacement retains its old, hidden receipt as retry intent.
+    /// Explicit cancellation never goes through this path and cannot resurrect it.
+    private func retrySubmission(_ id: String) {
+        let old = replacementOrigins[id]
+        discard(id)
+        if let old { receipts[old.id] = old; persist() }
     }
+
+    func removeMeetings(containing keys: Set<String>) {
+        for (id, item) in startupReceipts where !item.sync && item.updateVersion == nil {
+            let remaining = removing(keys, from: item)
+            startupReceipts[id] = remaining.keys.isEmpty ? nil : remaining
+        }
+        for (id, alias) in responseAliases where !alias.item.sync && alias.item.updateVersion == nil {
+            let remaining = removing(keys, from: alias.item)
+            responseAliases[id] = remaining.keys.isEmpty ? nil : (remaining, alias.expires)
+        }
+        for item in Array(receipts.values) where !item.sync && !Set(item.keys).isDisjoint(with: keys) {
+            if pending.contains(item.id) {
+                // Remove acted-on members from retry intent before cancelling an add.
+                if let origin = replacementOrigins[item.id] {
+                    let remaining = removing(keys, from: origin)
+                    replacementOrigins[item.id] = remaining.keys.isEmpty ? nil : remaining
+                }
+                retrySubmission(item.id)
+                continue
+            }
+            let remaining = removing(keys, from: item)
+            if remaining.keys.isEmpty { discard(item.id) }
+            else { receipts[item.id] = remaining; persist() }
+        }
+    }
+
+    private func removing(_ keys: Set<String>, from item: ReminderNotification) -> ReminderNotification {
+        var result = item
+        let pairs = zip(item.keys, item.fingerprints).filter { !keys.contains($0.0) }
+        result.keys = pairs.map { $0.0 }
+        result.fingerprints = pairs.map { $0.1 }
+        result.visibleKeys = item.visibleKeys?.filter { !keys.contains($0) }
+        return result
+    }
+
     func discard(_ id: String) {
         receipts.removeValue(forKey: id)
         pending.remove(id)
+        replacementOrigins.removeValue(forKey: id)
         transport.remove([id])
         persist()
     }
+
     func reconcile() {
         retryAfter = retryAfter.filter { $0.value > now() }
-        for (id, item) in receipts where item.expires <= now() || !(validate?(item) ?? true) { discard(id) }
-    }
-    func receive(id: String, action: String) {
-        guard let item = receipts[id] else { return }
-        if item.test {
-            discard(id)
-            return
+        responseAliases = responseAliases.filter { $0.value.expires > now() }
+        if responseAliases.count > 512 || responseAliases.values.reduce(0, { $0 + $1.item.keys.count }) > 20_000 {
+            var budget = 20_000
+            responseAliases = Dictionary(uniqueKeysWithValues: responseAliases.sorted { $0.value.expires > $1.value.expires }.prefix(512).filter {
+                guard $0.value.item.keys.count <= budget else { return false }
+                budget -= $0.value.item.keys.count
+                return true
+            })
         }
-        // Resolution and stale-action handling belong to the store, including
-        // deferred cold-launch responses before calendar restoration completes.
+        let protectStartup = deferRestoredReconciliation?() ?? false
+        if !protectStartup && startupActionsUntil == nil { startupActionsUntil = now().addingTimeInterval(120) }
+        if let until = startupActionsUntil, now() >= until { startupReceipts = [:] }
+        for (id, item) in Array(receipts) {
+            if protectStartup && startupReceipts[id] != nil && !item.sync && !item.test && item.updateVersion == nil { continue }
+            if item.accepted == false && !pending.contains(id) && (item.sync || item.test || item.updateVersion != nil) {
+                // Diagnostic/update producers retry from their own durable state;
+                // an interrupted add must not reserve those notices indefinitely.
+                discard(id)
+                continue
+            }
+            if pending.contains(id) {
+                if item.expires <= now() || !(validate?(item) ?? true) { retrySubmission(id) }
+                continue
+            }
+            guard let reconcileDelivered else {
+                if item.expires <= now() || !(validate?(item) ?? true) { discard(id) }
+                continue
+            }
+            switch reconcileDelivered(item) {
+            case .remove: discard(id)
+            case .keep(let next), .hide(let next):
+                if next.hidden == true && item.hidden != true { transport.remove([id]) }
+                if next != item { receipts[id] = next; persist() }
+            case .replace(let next):
+                // Never leave stale content visible while permission/retry is pending.
+                var hidden = item; hidden.hidden = true; hidden.replacementReason = next.replacementReason
+                if item.hidden != true { transport.remove([id]); receipts[id] = hidden; persist() }
+                submit(next, replacing: hidden, now: now())
+            }
+        }
+    }
+
+    func receive(id: String, action: String) {
+        // A cold-start callback may arrive just after initial refresh cleanup.
+        // Keep only the launch's bounded, opaque receipts briefly for that race.
+        let cold = startupActionsUntil.map { now() < $0 } ?? true
+        let alias = responseAliases[id].flatMap { $0.expires > now() ? $0.item : nil }
+        guard let item = receipts[id] ?? alias ?? (cold ? startupReceipts[id] : nil) else { return }
+        let actedKeys = Set(item.keys)
+        startupReceipts = startupReceipts.filter { $0.key != id && Set($0.value.keys).isDisjoint(with: actedKeys) }
+        responseAliases = responseAliases.filter { $0.key != id && Set($0.value.item.keys).isDisjoint(with: actedKeys) }
+        if item.test { discard(id); return }
         onResponse?(item, action)
         discard(id)
     }
