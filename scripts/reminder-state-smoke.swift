@@ -271,7 +271,7 @@ struct ReminderStateSmoke {
         // Retain the actual scheduled timer independently, then release its
         // owner. Reflection keeps this lifecycle check out of the production API.
         var disposable: MenuBarController? = MenuBarController(store: store, alerts: alerts, updates: updates, openSettings: {}, quit: {})
-        weak var releasedController = disposable
+        weak let releasedController = disposable
         guard let timer = Mirror(reflecting: disposable!).children.first(where: { $0.label == "buttonTimer" })?.value as? Timer else {
             throw Failure(message: "Controller timer missing")
         }

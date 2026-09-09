@@ -56,8 +56,11 @@ typeset -A REOPEN_SEEN
 cleanup() {
   [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null || true
   rm -rf "$WORK"
-  for path in "${REOPEN_AFTER[@]:-}"; do
-    [[ -n "$path" ]] && open "$path" 2>/dev/null || true
+  # NB: never name this loop variable "path" — in zsh that array is tied to
+  # $PATH, and assigning it would break every subsequent command lookup
+  # (including this very `open`, which `|| true` would then swallow).
+  for app in "${REOPEN_AFTER[@]:-}"; do
+    [[ -n "$app" ]] && /usr/bin/open "$app" 2>/dev/null || true
   done
 }
 trap cleanup EXIT

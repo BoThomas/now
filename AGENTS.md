@@ -130,6 +130,8 @@ TCC grants (Calendar permission) are keyed to the code signature's *designated r
 
 ## Gotchas
 
+- **zsh `path` is `$PATH`**: `for path in …` overwrites the command lookup PATH, so later external commands (including inside the same loop) fail with "command not found" — and `|| true`/`2>/dev/null` swallow it. `scripts/update-smoke.sh`'s cleanup once silently failed to re-open the user's app this way. Use a different loop-variable name (and absolute tool paths in cleanup paths).
+
 - `swiftc` expression type-check blowups: break long `CGRect(...)` expressions with mixed Int/CGFloat math into sub-expressions (this bit `make-icon.swift`).
 - `Color.quaternary`/`NSImage.withTintColor` don't exist on this target; use `Color.primary.opacity(...)` and manual NSImage tinting.
 - Selftest constructs fixed dates in 2026 — keep deterministic (UTC/Berlin calendars explicitly).
