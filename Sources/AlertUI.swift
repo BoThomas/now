@@ -342,8 +342,8 @@ final class AlertController: ObservableObject {
             return .joinIndex(number)
         }
         switch keyCode {
-        case 53: // Escape
-            return .close
+        case 53: // Only plain Escape dismisses; prevent AppKit fallback too.
+            return mods.isEmpty ? .close : .swallow
         case 36, 76: // Return / keypad Enter
             // Modified Return always passes through. Plain Return ACTIVATES the
             // focused control (like Space does): with Full Keyboard Access on,
@@ -467,6 +467,7 @@ final class AlertController: ObservableObject {
         // shortcut modifiers. Command/Option/Control/Shift must be respected.
         let mods = modifiers.intersection([.command, .option, .control, .shift])
         if mods == .command, let key = characters?.lowercased(), key == "w" || key == "m" { return .swallow }
+        if keyCode == 53 && !mods.isEmpty { return .swallow }
         if keyCode == 48 && (mods.isEmpty || mods == .shift) { return .dismissAndPassThrough }
         guard mods.isEmpty else { return .passThrough }
         switch keyCode {

@@ -1677,6 +1677,10 @@ enum SelfTest {
         c.expect(AlertController.keyAction(modifiers: .command, keyCode: 36, characters: "\r", snoozeable: true, hasFocusedControl: false) == .passThrough, "modified Return passes through")
         c.expect(AlertController.keyAction(modifiers: .shift, keyCode: 36, characters: "\r", snoozeable: true, hasFocusedControl: false) == .passThrough, "shift-Return passes through")
         c.expect(AlertController.keyAction(modifiers: plain, keyCode: 53, characters: nil, snoozeable: true, hasFocusedControl: false) == .close, "Escape closes")
+        for modifier: NSEvent.ModifierFlags in [.command, .shift, .option, .control, [.command, .option]] {
+            c.expect(AlertController.snoozeMenuKeyAction(modifiers: modifier, keyCode: 53, characters: nil) == .swallow, "modified Escape stays inert while snooze menu is open")
+            c.expect(AlertController.keyAction(modifiers: modifier, keyCode: 53, characters: nil, snoozeable: true, hasFocusedControl: false) == .swallow, "modified Escape cannot dismiss reminder or reach AppKit cancellation")
+        }
         c.expect(AlertController.keyAction(modifiers: plain, keyCode: 36, characters: "\r", snoozeable: false, hasFocusedControl: false) == .joinOrClose, "Return without link closes")
         c.expect(AlertController.keyAction(modifiers: plain, keyCode: 6, characters: "s", snoozeable: true, hasFocusedControl: false) == .snooze, "plain s snoozes")
         c.expect(AlertController.keyAction(modifiers: plain, keyCode: 6, characters: "s", snoozeable: false, hasFocusedControl: false) == .swallow, "s with nothing running swallowed")

@@ -10,7 +10,7 @@ The user authorized fixes that do not require product decisions. Implemented: wa
 
 The original findings below are retained as audit evidence, with their original line references. They describe the pre-fix commit, not the current implementation. Final verification results are recorded at the end of this document.
 
-**Still requires product input:** ordinary notification grouping, cache retention after failed writes, and whether modified Escape should dismiss reminders. The legacy location-only fingerprint blind spot lacks historical data to reconstruct; it remains a documented migration limitation. Actual supported-OS/calendar/notification/device acceptance and refreshed screenshots remain release checks.
+**Still requires product input:** ordinary notification grouping and cache retention after failed writes. The legacy location-only fingerprint blind spot lacks historical data to reconstruct; it remains a documented migration limitation. Actual supported-OS/calendar/notification/device acceptance and refreshed screenshots remain release checks.
 
 ## Confirmed bugs
 
@@ -142,7 +142,7 @@ This follow-up changed only review artifacts. The earlier full build/smoke resul
 2. **Implemented:** recurrence occurrence identity, safe legacy migration, explicitly cleared fields, DTEND ordering and recurrence value-type diagnostics.
 3. **Implemented:** durable never-shown feature guides and missing-staging/timeout recovery, including safe cancellation of a delayed quit.
 4. **Implemented:** scalar settings/source-ID decoding, live login checkmarks, keypad digits/Enter, and removal of the dead setup assignment.
-5. **Needs product input:** notification grouping, cache failure policy and modified Escape behavior. Preserve the current behavior until decided.
+5. **Needs product input:** notification grouping and cache failure policy. Preserve the current behavior until decided.
 6. **Release gates and documentation implemented.** Real v1-to-v2/OS integration acceptance checks and screenshot review remain outstanding. The legacy location-only fingerprint blind spot remains a migration limitation, not a reconstructable edit history.
 
 
@@ -193,3 +193,9 @@ Timing verification passed: stable-identity signed build, all selftests (six-hou
 Timing refinement: the fallback window delay is now 18 hours from discovery, allowing for up to six hours before discovery. The six-hour API cadence is unchanged. Sleep, network failure, preparation and reminder-window deferral can extend actual presentation time.
 
 18-hour refinement verification: stable-identity signed build, all selftests (including the exact 18-hour boundary and once-only suppression), and `git diff --check` passed.
+
+## Product decision: plain Escape only
+
+Approved: fullscreen reminder dismissal requires plain Escape. Command, Shift, Option and Control combinations are swallowed to prevent both the reminder shortcut and AppKit cancellation fallback from closing the reminder. Existing non-command keyboard metadata normalization remains.
+
+Escape verification: stable-identity signed build, all selftests (plain Escape and Command/Shift/Option/Control combinations, with and without the snooze dropdown), reminder-state smoke and `git diff --check` passed.
