@@ -12,18 +12,24 @@ struct NotificationSettingsView: View {
         })
     }
 
+    /// macOS never re-prompts after a denial: flipped-on features could never
+    /// deliver, so the toggles are inert until access is restored in Settings.
+    private var denied: Bool { notifications.permission.authorization == .denied }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Toggle("Notify about new updates", isOn: feature(\.notifyUpdates))
-                .disabled(!store.settings.automaticUpdateChecks)
+                .disabled(!store.settings.automaticUpdateChecks || denied)
             Toggle("Notify about calendar sync problems", isOn: feature(\.notifySyncErrors))
+                .disabled(denied)
             if store.settings.usesNotifications {
                 Toggle("Hide meeting details in notifications", isOn: $store.settings.hideNotificationDetails)
-                if notifications.permission.authorization == .denied || notifications.permission.authorization == .notRequested {
-                    Text(notifications.permission.message)
-                        .font(.callout).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                    .disabled(denied)
+            }
+            if denied || (store.settings.usesNotifications && notifications.permission.authorization == .notRequested) {
+                Text(notifications.permission.message)
+                    .font(.callout).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 if notifications.permission.authorization == .notRequested {
@@ -51,6 +57,9 @@ struct NotificationSettingsView: View {
             if let problem = notifications.problem { Text(problem).font(.caption).foregroundStyle(.red) }
         }
         .onAppear { notifications.refreshPermission(force: true) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            notifications.refreshPermission(force: true)
+        }
 
     }
 }
