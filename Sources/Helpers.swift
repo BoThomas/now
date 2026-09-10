@@ -196,10 +196,10 @@ enum Fmt {
 
     /// Keep the start instant readable before introducing a second countdown.
     static func reminderStatus(start: Date, end: Date, now: Date) -> String {
-        if now < start { return "STARTS IN \(mmss(start.timeIntervalSince(now)))" }
-        guard now < end else { return "FINISHED" }
-        if isStartingNow(start: start, end: end, now: now) { return "NOW" }
-        return "NOW · ENDS IN \(mmss(end.timeIntervalSince(now)))"
+        if now < start { return "Starts In \(mmss(start.timeIntervalSince(now)))" }
+        guard now < end else { return "Finished" }
+        if isStartingNow(start: start, end: end, now: now) { return "Starts Now" }
+        return "Starts Now · Ends In \(mmss(end.timeIntervalSince(now)))"
     }
 
     static func duration(_ interval: TimeInterval) -> String {

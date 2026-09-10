@@ -319,15 +319,15 @@ enum SelfTest {
         c.expect(Fmt.duration(93_600) == "26h 0m" && Fmt.mmss(93_600) == "26h 00m", "long event formatting preserved")
         let reminderStart = Date(timeIntervalSinceReferenceDate: 0)
         for (elapsed, expected): (TimeInterval, String) in [
-            (-1, "STARTS IN 0:01"), (0, "NOW"), (1, "NOW"), (9.999, "NOW"),
-            (10, "NOW · ENDS IN 14:50"), (60, "NOW · ENDS IN 14:00"), (900, "FINISHED")
+            (-1, "Starts In 0:01"), (0, "Starts Now"), (1, "Starts Now"), (9.999, "Starts Now"),
+            (10, "Starts Now · Ends In 14:50"), (60, "Starts Now · Ends In 14:00"), (900, "Finished")
         ] {
             c.expect(Fmt.reminderStatus(start: reminderStart, end: reminderStart.addingTimeInterval(900),
                                         now: reminderStart.addingTimeInterval(elapsed)) == expected,
                      "reminder start grace at \(elapsed) seconds")
         }
         c.expect(Fmt.reminderStatus(start: reminderStart, end: reminderStart.addingTimeInterval(5),
-                                   now: reminderStart.addingTimeInterval(5)) == "FINISHED",
+                                   now: reminderStart.addingTimeInterval(5)) == "Finished",
                  "ended short reminder takes precedence over start grace")
         for action in ["DISPLAY", "AUDIO", "EMAIL"] {
             let parsed = ICSParser.parse(wrap("""
