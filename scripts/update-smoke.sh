@@ -50,10 +50,17 @@ fi
 
 WORK="$(mktemp -d "${TMPDIR}now update test.XXXXXX")"   # note the space — on purpose
 SERVER_PID=""
+MUTATION_PID=""
 declare -a REOPEN_AFTER=()
 typeset -A REOPEN_SEEN
 
 cleanup() {
+  # The staging handoff can fail while its CLI is still waiting. Stop and reap
+  # that exact child before deleting its files or reopening the installed app.
+  if [[ -n "$MUTATION_PID" ]]; then
+    kill "$MUTATION_PID" 2>/dev/null || true
+    wait "$MUTATION_PID" 2>/dev/null || true
+  fi
   [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null || true
   rm -rf "$WORK"
   # NB: never name this loop variable "path" — in zsh that array is tied to
@@ -190,11 +197,14 @@ done
 print "  http://127.0.0.1:$PORT"
 
 run_smoke() {
+  # In a background handoff, exec makes $! the CLI PID instead of a wrapper.
+  local -a launcher=()
+  if [[ "$1" == --exec ]]; then launcher=(exec); shift; fi
   # $1 = base path segment (ok/bad/old/missing); the updater appends
   # /repos/:repo/releases/latest to the base, so each scenario's base is
   # http://…/<segment>/api — matching the www/<segment>/api file layout.
   local segment="$1"; shift
-  env -u NOW_SMOKE_REPORT -u NOW_SMOKE_FAILURE_REPORT -u NOW_SMOKE_HOME \
+  "${launcher[@]}" env -u NOW_SMOKE_REPORT -u NOW_SMOKE_FAILURE_REPORT -u NOW_SMOKE_HOME \
       -u NOW_SMOKE_POLL_TIMEOUT -u NOW_SMOKE_HEALTH_TIMEOUT -u NOW_SMOKE_HELPER_FAULT -u NOW_SMOKE_HELPER_DONE \
       -u NOW_SMOKE_ARCHIVE_LIMIT -u NOW_SMOKE_EXTRACTED_LIMIT -u NOW_SMOKE_SKIP_QUIT \
       -u NOW_SMOKE_STAGE_READY -u NOW_SMOKE_STAGE_CONTINUE \
@@ -382,7 +392,7 @@ print "• Install-time validation: verified staging modified before install"
 for mutation in signature version; do
   reset_install
   rm -f "$WORK/stage-ready" "$WORK/stage-continue"
-  run_smoke ok NOW_SMOKE_STAGE_READY="$WORK/stage-ready" NOW_SMOKE_STAGE_CONTINUE="$WORK/stage-continue" > "$WORK/log-stage-$mutation" 2>&1 &
+  run_smoke --exec ok NOW_SMOKE_STAGE_READY="$WORK/stage-ready" NOW_SMOKE_STAGE_CONTINUE="$WORK/stage-continue" > "$WORK/log-stage-$mutation" 2>&1 &
   MUTATION_PID=$!
   wait_for_file "$WORK/stage-ready" "staging handoff never arrived"
   STAGED_MUTATION_APP="$(cat "$WORK/stage-ready")"
@@ -396,6 +406,7 @@ for mutation in signature version; do
   set +e
   wait "$MUTATION_PID"
   RC=$?
+  MUTATION_PID=""
   set -e
   [[ $RC -eq 2 ]] || fail "post-stage $mutation: expected REFUSED, got $RC"
   grep -q 'SMOKE: REFUSED install-time validation:' "$WORK/log-stage-$mutation" || fail "post-stage $mutation bypassed validation"

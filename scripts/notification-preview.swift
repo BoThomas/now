@@ -162,18 +162,26 @@ final class SetupAppSmoke {
                 delegate.notificationInteraction()
                 require(!settingsVisible(), "late notification undoes only competing reopen window")
                 if CommandLine.arguments.contains("--activation-smoke") {
+                    // Focus requires a real desktop. Allow normal scheduling jitter
+                    // without relaxing the final keyboard-focus/policy assertions.
+                    @MainActor func waitUntil(_ condition: @MainActor () -> Bool) async {
+                        let deadline = ProcessInfo.processInfo.systemUptime + 2
+                        while !condition() && ProcessInfo.processInfo.systemUptime < deadline {
+                            try? await Task.sleep(nanoseconds: 25_000_000)
+                        }
+                    }
                     for window in NSApp.windows where window.isVisible { window.close() }
                     NSApp.deactivate()
-                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    await waitUntil { !NSApp.isActive }
                     require(!NSApp.isActive, "activation fixture starts in the background")
                     var preview = AppSettings(); preview.soundEnabled = false
                     delegate.alertController.presentPreview(settings: preview)
-                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    await waitUntil { NSApp.isActive && NSApp.keyWindow is AlertPanel }
                     require(delegate.alertController.isOpen && NSApp.isActive, "timer-style reminder activates the app")
                     require(NSApp.keyWindow is AlertPanel, "reminder panel owns keyboard focus")
                     require(NSApp.activationPolicy() == .regular, "reminder owns app menu policy")
                     delegate.alertController.close()
-                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    await waitUntil { NSApp.activationPolicy() == .accessory }
                     require(NSApp.activationPolicy() == .accessory, "closing reminder restores accessory policy")
                     print("ACTIVATION SMOKE OK — background reminder takes keyboard focus and restores policy")
                 }

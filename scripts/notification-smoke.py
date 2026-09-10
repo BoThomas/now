@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Production notification routing and async transport with synthetic calendars.
-No Notification Center access, Calendar queries, live preferences, or fullscreen UI.
+No Calendar queries or live preferences. --gui uses real Notification Center;
+--activation-smoke / --all-smokes require an interactive, unlocked macOS desktop
+and briefly present a synthetic fullscreen reminder to verify keyboard focus.
 """
 import pathlib
 import plistlib
@@ -10,6 +12,15 @@ import uuid
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def replace_once(source, old, new):
+    count = source.count(old)
+    if count != 1:
+        raise RuntimeError(f"Smoke fixture expected exactly one {old!r}; found {count}")
+    return source.replace(old, new, 1)
+
+
 with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
     directory = pathlib.Path(name)
     contents = directory / "NotificationSmoke.app" / "Contents"
@@ -19,19 +30,19 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
         "CFBundleIdentifier": identifier, "CFBundleExecutable": "notification-smoke", "CFBundlePackageType": "APPL", "CFBundleVersion": "1", "CFBundleShortVersionString": "1.0.0", "CFBundleName": "now Notification Preview", "CFBundleDisplayName": "now Notification Preview", "LSUIElement": True
     }))
     app = directory / "App.swift"
-    app_text = (ROOT / "Sources/App.swift").read_text().replace("@main\nenum NowApp", "enum NowApp", 1)
-    app_text = app_text.replace("private lazy var setupAssistant", "lazy var setupAssistant")
-    app_text = app_text.replace("private var setupWindow", "var setupWindow")
-    app_text = app_text.replace("private func finishInitialSetup", "func finishInitialSetup")
+    app_text = replace_once((ROOT / "Sources/App.swift").read_text(), "@main\nenum NowApp", "enum NowApp")
+    app_text = replace_once(app_text, "private lazy var setupAssistant", "lazy var setupAssistant")
+    app_text = replace_once(app_text, "private var setupWindow", "var setupWindow")
+    app_text = replace_once(app_text, "private func finishInitialSetup", "func finishInitialSetup")
     if "--startup-smoke" in sys.argv or "--activation-smoke" in sys.argv or "--all-smokes" in sys.argv:
-        app_text = app_text.replace("let transport = SystemNotificationTransport()", "let transport = FakeNotifications()")
+        app_text = replace_once(app_text, "let transport = SystemNotificationTransport()", "let transport = FakeNotifications()")
     app.write_text(app_text)
     store = directory / "AppStore.swift"
     text = (ROOT / "Sources/AppStore.swift").read_text()
-    text = text.replace('legacyDomain = "local.tboch.now"', 'legacyDomain = "' + identifier + '.legacy"')
+    text = replace_once(text, 'legacyDomain = "local.tboch.now"', 'legacyDomain = "' + identifier + '.legacy"')
     for method in ["tick", "commitEvents", "finishRefresh", "merge", "appBecameActive", "beginFullRefresh", "retryMeetingDetection"]:
-        text = text.replace("private func " + method + "(", "func " + method + "(")
-    text = text.replace("@Published private(set) var isRefreshing", "@Published var isRefreshing")
+        text = replace_once(text, "private func " + method + "(", "func " + method + "(")
+    text = replace_once(text, "@Published private(set) var isRefreshing", "@Published var isRefreshing")
     # Make native fetch a no-op only in this disposable test compilation.
     start = text.index("    func fetchNativeEvents() {")
     end = text.index("    private func scheduleNativeStoreRefresh()", start)
@@ -39,12 +50,12 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
     store.write_text(text)
     updater = directory / "Updater.swift"
     update_text = (ROOT / "Sources/Updater.swift").read_text()
-    update_text = update_text.replace("private func applyDecision(", "func applyDecision(")
-    update_text = update_text.replace("@Published private(set) var stagedVersion", "@Published var stagedVersion")
-    update_text = update_text.replace("private(set) var state = UpdateState()", "var state = UpdateState()")
+    update_text = replace_once(update_text, "private func applyDecision(", "func applyDecision(")
+    update_text = replace_once(update_text, "@Published private(set) var stagedVersion", "@Published var stagedVersion")
+    update_text = replace_once(update_text, "private(set) var state = UpdateState()", "var state = UpdateState()")
     for name in ["stagedRoot", "installAttempt"]:
-        update_text = update_text.replace("private var " + name, "var " + name)
-    update_text = update_text.replace("private func installHelperExited", "func installHelperExited")
+        update_text = replace_once(update_text, "private var " + name, "var " + name)
+    update_text = replace_once(update_text, "private func installHelperExited", "func installHelperExited")
     # Exercise production decision/notification paths without network or archives.
     start = update_text.index("    private func beginStaging(")
     end = update_text.index("    func retryPreparation()", start)

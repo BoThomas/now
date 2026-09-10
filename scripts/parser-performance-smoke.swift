@@ -18,16 +18,17 @@ enum AppStore { static let soundNames = ["Hero"] }
         subscription.id = UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!
         let description = String(repeating: "x", count: 8900) + " https://zoom.us/j/123456789"
         let recurring = (0..<500).map { i in
-            "BEGIN:VEVENT\nUID:master-\(i)\nDTSTART:\(stamp(60))\nDURATION:PT30M\nRRULE:FREQ=DAILY;COUNT=14\nSUMMARY:Recurring\nDESCRIPTION:\(description)\nEND:VEVENT\n"
+            "BEGIN:VEVENT\nUID:master-\(i)\nDTSTART:\(stamp(60))\nDURATION:PT30M\nRRULE:FREQ=DAILY;COUNT=14\nSUMMARY:Recurring\nLOCATION:Room \(i)\nDESCRIPTION:\(description)\nEND:VEVENT\n"
         }.joined()
-        var dates = "BEGIN:VEVENT\nUID:overridden\nDTSTART:\(stamp(60))\nDURATION:PT30M\nSUMMARY:Master\nDESCRIPTION:https://zoom.us/j/123456789\n"
+        var dates = "BEGIN:VEVENT\nUID:overridden\nDTSTART:\(stamp(60))\nDURATION:PT30M\nSUMMARY:Master\nLOCATION:Master room\nDESCRIPTION:https://zoom.us/j/123456789\n"
         for batch in 0..<10 {
             dates += "RDATE:" + (1...500).map { stamp((batch * 500 + $0) * 60) }.joined(separator: ",") + "\n"
         }
         dates += "END:VEVENT\n"
         for i in 1...2500 {
             let link = i.isMultiple(of: 2) ? "https://meet.google.com/abc-defg-hij" : ""
-            dates += "BEGIN:VEVENT\nUID:overridden\nRECURRENCE-ID:\(stamp(i * 60))\nDTSTART:\(stamp(600))\nSUMMARY:Override \(i)\nDESCRIPTION:\(link)\nEND:VEVENT\n"
+            let location = i.isMultiple(of: 2) ? "Override room" : ""
+            dates += "BEGIN:VEVENT\nUID:overridden\nRECURRENCE-ID:\(stamp(i * 60))\nDTSTART:\(stamp(600))\nSUMMARY:Override \(i)\nLOCATION:\(location)\nDESCRIPTION:\(link)\nEND:VEVENT\n"
         }
         for (name, body, expected) in [("long recurring descriptions", recurring, 7000), ("coincident overrides", dates, 5000)] {
             let began = ProcessInfo.processInfo.systemUptime
@@ -42,8 +43,17 @@ enum AppStore { static let soundNames = ["Hero"] }
                 }
             }
             let elapsed = ProcessInfo.processInfo.systemUptime - began
-            let canonical = result.events.map { "\($0.id)|\($0.title)|\($0.start.timeIntervalSince1970)|\($0.end.timeIntervalSince1970)|\($0.link?.absoluteString ?? "")" }.sorted().joined(separator: "\n")
-            let digest = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
+            // JSON preserves field boundaries, nil versus empty text, and embedded
+            // delimiters/newlines. Compare all stored event fields, including the
+            // location/notes inheritance that occurrence-content caching affects.
+            let fields: [[String?]] = result.events.sorted { $0.id < $1.id }.map {
+                [$0.id, $0.uid, $0.notificationIdentity, $0.title,
+                 String($0.start.timeIntervalSince1970), String($0.end.timeIntervalSince1970),
+                 $0.location, $0.notes, $0.link?.absoluteString, $0.calendarID.uuidString,
+                 $0.calendarName, String($0.colorIndex), $0.colorHex, String($0.isMuted)]
+            }
+            let canonical = try! JSONEncoder().encode(fields)
+            let digest = SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
             print("\(name): \(result.events.count) events, \(String(format: "%.3f", elapsed))s; digest \(digest)")
         }
     }

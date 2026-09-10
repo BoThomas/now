@@ -44,6 +44,26 @@ extension NotificationSmoke {
         PersistenceStatus.shared.reviewed(key)
         require(!StoredPreferences.needsReview(key) && defaults.array(forKey: StoredPreferences.recoveryKey(key)) != nil, "review acknowledgement keeps recovery bytes")
 
+        let rotationKey = "test.recovery-rotation"
+        let failures = (0..<6).map { Data("{damaged-\($0)".utf8) }
+        let expectedCopies = [[0], [0, 1], [0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 5]]
+        for (index, payload) in failures.enumerated() {
+            defaults.set(payload, forKey: rotationKey)
+            _ = StoredPreferences.load(Persisted.self, key: rotationKey, label: "Test rotation")
+            let expected = expectedCopies[index].map { failures[$0] }
+            require(defaults.array(forKey: StoredPreferences.recoveryKey(rotationKey)) as? [Data] == expected,
+                    "recovery \(index + 1) retains the original and at most two latest distinct failures")
+            _ = StoredPreferences.load(Persisted.self, key: rotationKey, label: "Test rotation")
+            require(defaults.array(forKey: StoredPreferences.recoveryKey(rotationKey)) as? [Data] == expected,
+                    "rereading recovery \(index + 1) does not duplicate or rotate copies")
+        }
+        PersistenceStatus.shared.reviewed(rotationKey)
+        defaults.set(failures[0], forKey: rotationKey)
+        _ = StoredPreferences.load(Persisted.self, key: rotationKey, label: "Test rotation")
+        require(defaults.array(forKey: StoredPreferences.recoveryKey(rotationKey)) as? [Data] == [failures[0], failures[4], failures[5]],
+                "repeated original damage preserves the newest recovery copies")
+        require(StoredPreferences.needsReview(rotationKey), "damage after acknowledgement reopens the recovery notice")
+
         defaults.removePersistentDomain(forName: domain)
         let lossy = Data("{\"subscriptions\":[{\"name\":\"Good\",\"url\":\"https://example.invalid\"},{\"name\":false}],\"settings\":{\"leadSeconds\":\"bad\",\"soundEnabled\":false}}".utf8)
         defaults.set(lossy, forKey: key)

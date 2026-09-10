@@ -46,6 +46,12 @@ struct NotificationSmoke {
         RunLoop.main.run(until: Date().addingTimeInterval(1.1))
     }
     @MainActor static func main() async {
+        // Check both domains before any fixture can read, seed, or clear preferences.
+        guard let domain = Bundle.main.bundleIdentifier,
+              domain.hasPrefix("com.thomasboch.now.notification-smoke."),
+              AppStore.legacyDomain == domain + ".legacy" else {
+            fatalError("Notification smoke requires isolated current and legacy preference domains")
+        }
         func require(_ condition: @autoclosure () -> Bool, _ label: String) {
             if !condition() { print("FAIL: \(label)"); exit(1) }
         }
