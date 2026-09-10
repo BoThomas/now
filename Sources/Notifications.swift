@@ -100,12 +100,18 @@ struct ReminderLedger: Codable, Equatable {
         var end: Date
         var snooze: Date?
         var misses = 0
+        /// Older ledgers did not retain the scheduled start.
+        var start: Date?
     }
     var entries: [String: Entry] = [:]
     mutating func record(_ event: MeetingEvent, snooze: Date? = nil) {
-        entries[NotificationLogic.eventKey(event)] = Entry(calendarID: event.calendarID, end: event.end, snooze: snooze)
+        entries[NotificationLogic.eventKey(event)] = Entry(calendarID: event.calendarID, end: event.end, snooze: snooze, start: event.start)
     }
-    mutating func reconcile(events: [MeetingEvent], enabled: Set<UUID>, observed: Set<UUID>, now: Date) {
+    @discardableResult
+    mutating func reconcile(events: [MeetingEvent], enabled: Set<UUID>, observed: Set<UUID>, now: Date,
+                            rearmOnReschedule: Set<String> = [], previousEvents: [MeetingEvent] = []) -> Set<String> {
+        var rearmedIDs: Set<String> = []
+        let previousByKey = Dictionary(previousEvents.map { (NotificationLogic.eventKey($0), $0) }, uniquingKeysWith: { first, _ in first })
         // Upgrade old occurrence-ID entries only when that exact occurrence is present.
         let legacyCounts = Dictionary(grouping: events, by: \.legacyID).mapValues(\.count)
         // Once an old key matches multiple occurrences, it cannot safely be
@@ -117,7 +123,23 @@ struct ReminderLedger: Codable, Equatable {
         }
         let live = Dictionary(events.map { (NotificationLogic.eventKey($0), $0) }, uniquingKeysWith: { first, _ in first })
         for (key, var entry) in entries {
-            if let event = live[key] { entry.end = event.end; entry.misses = 0 }
+            if let event = live[key] {
+                // Notification receipts own their edit lifecycle; fullscreen reminders
+                // can re-arm at a new start. Explicit snoozes retain their chosen deadline.
+                let previousStart = entry.start ?? previousByKey[key]?.start
+                if rearmOnReschedule.contains(key), entry.snooze == nil,
+                   let previousStart, previousStart != event.start {
+                    entries.removeValue(forKey: key)
+                    rearmedIDs.insert(event.id)
+                    // Forget the old in-memory ID too, even if the new reminder
+                    // has not fired before another edit moves back to that start.
+                    if let previous = previousByKey[key] { rearmedIDs.insert(previous.id) }
+                    continue
+                }
+                entry.start = event.start
+                entry.end = event.end
+                entry.misses = 0
+            }
             else if observed.contains(entry.calendarID) { entry.misses += 1 }
             guard enabled.contains(entry.calendarID), entry.end > now else { entries.removeValue(forKey: key); continue }
             if entry.misses >= 2 { entries.removeValue(forKey: key) }
@@ -126,6 +148,7 @@ struct ReminderLedger: Codable, Equatable {
         if entries.count > 20_000 {
             entries = Dictionary(uniqueKeysWithValues: entries.sorted { $0.value.end > $1.value.end }.prefix(20_000).map { ($0.key, $0.value) })
         }
+        return rearmedIDs
     }
     mutating func invalidate(_ calendars: Set<UUID>) { entries = entries.filter { !calendars.contains($0.value.calendarID) } }
 }

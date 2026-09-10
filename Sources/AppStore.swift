@@ -961,14 +961,20 @@ final class AppStore: ObservableObject {
         let sorted = Self.normalizedEvents(newEvents)
         let enabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id) + nativeCalendars.filter(\.isEnabled).map(\.id))
         let retainedIDs = reminderSnapshots.retainedIDs(current: sorted, observedCalendarIDs: observedCalendarIDs, enabledCalendarIDs: enabledIDs)
-        reminderLedger.reconcile(events: sorted, enabled: enabledIDs, observed: observedCalendarIDs, now: now())
+        // Stable notification identities survive edits. They must not make a
+        // previously shown fullscreen reminder suppress a newly scheduled start.
+        let notificationKeys = Set(notifications?.receipts.values.flatMap(\.keys) ?? [])
+        let rearmableKeys = settings.reminderDelivery == .fullscreen
+            ? Set(sorted.map(NotificationLogic.eventKey)).subtracting(notificationKeys) : []
+        let rearmedIDs = reminderLedger.reconcile(events: sorted, enabled: enabledIDs, observed: observedCalendarIDs, now: now(),
+                                                  rearmOnReschedule: rearmableKeys, previousEvents: events)
         let persistedIDs = Set(sorted.filter { reminderLedger.entries[NotificationLogic.eventKey($0)] != nil }.map(\.id))
         let pruned = Self.prunedBookkeeping(alerted: alerted, snoozed: snoozed, retainedIDs: retainedIDs)
         // Single funnel for EVERY event-list change — rule edits, ICS refreshes
         // (a title edit keeps the same id and can flip muted→unmuted mid-window),
         // and native rebuilds all pass through here, so the unmute ratchet lives
         // here and nowhere else.
-        let ratcheted = Self.ratchetSilence(previous: events, fallbackMutedByID: recentMutedByID, current: sorted, alerted: pruned.alerted, snoozed: pruned.snoozed, leadSeconds: settings.leadSeconds, now: now())
+        let ratcheted = Self.ratchetSilence(previous: events, fallbackMutedByID: recentMutedByID, current: sorted, alerted: pruned.alerted.subtracting(rearmedIDs), snoozed: pruned.snoozed.filter { !rearmedIDs.contains($0.key) }, leadSeconds: settings.leadSeconds, now: now())
         alerted = ratcheted.alerted.union(persistedIDs)
         snoozed = ratcheted.snoozed
         for event in sorted {

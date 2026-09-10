@@ -319,13 +319,28 @@ enum SelfTest {
         c.expect(Fmt.duration(93_600) == "26h 0m" && Fmt.mmss(93_600) == "26h 00m", "long event formatting preserved")
         let reminderStart = Date(timeIntervalSinceReferenceDate: 0)
         for (elapsed, expected): (TimeInterval, String) in [
-            (-1, "Starts In 0:01"), (0, "Starts Now"), (1, "Starts Now"), (9.999, "Starts Now"),
-            (10, "Starts Now · Ends In 14:50"), (60, "Starts Now · Ends In 14:00"), (900, "Finished")
+            (-1, "Starts In 0:01"), (0, "Starts Now"), (1, "Starts Now"), (10, "Starts Now"),
+            (29.999, "Starts Now"), (30, "Starts Now · Ends In 14:30"),
+            (59.999, "Starts Now · Ends In 14:00"), (60, "Started 1 min ago · Ends In 14:00"),
+            (119.999, "Started 1 min ago · Ends In 13:00"), (120, "Started 2 min ago · Ends In 13:00"),
+            (300, "Started 5 min ago · Ends In 10:00"), (900, "Finished"), (901, "Finished")
         ] {
             c.expect(Fmt.reminderStatus(start: reminderStart, end: reminderStart.addingTimeInterval(900),
                                         now: reminderStart.addingTimeInterval(elapsed)) == expected,
-                     "reminder start grace at \(elapsed) seconds")
+                     "fullscreen reminder wording at \(elapsed) seconds")
         }
+        for (elapsed, expected): (TimeInterval, String) in [
+            (-1, "Starts In 0:01"), (0, "Starts Now"), (30, "Starts Now"), (59.999, "Starts Now"),
+            (60, "Started 1 min ago"), (119.999, "Started 1 min ago"), (120, "Started 2 min ago"),
+            (300, "Started 5 min ago"), (900, "Finished")
+        ] {
+            c.expect(Fmt.reminderStatus(start: reminderStart, end: reminderStart.addingTimeInterval(900),
+                                        now: reminderStart.addingTimeInterval(elapsed), includeEndCountdown: false) == expected,
+                     "compact reminder wording at \(elapsed) seconds")
+        }
+        c.expect(Fmt.reminderStatus(start: reminderStart, end: reminderStart.addingTimeInterval(7200),
+                                   now: reminderStart.addingTimeInterval(3660)) == "Started 1h 1m ago · Ends In 59:00",
+                 "late reminders keep long elapsed times readable")
         c.expect(Fmt.reminderStatus(start: reminderStart, end: reminderStart.addingTimeInterval(5),
                                    now: reminderStart.addingTimeInterval(5)) == "Finished",
                  "ended short reminder takes precedence over start grace")

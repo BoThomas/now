@@ -808,6 +808,9 @@ struct SingleEventView: View {
             Text(statusText)
                 .font(.system(size: 40, weight: .bold, design: .monospaced))
                 .foregroundStyle(readableAccent)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.6)
             HStack(spacing: 20) {
                 Label(timeRangeText, systemImage: "clock")
                 Label(Fmt.duration(event.end.timeIntervalSince(event.start)), systemImage: "hourglass")
@@ -876,7 +879,7 @@ struct MultiEventView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Text("\(events.count) EVENTS STARTING")
+            Text("\(events.count) MEETING REMINDERS")
                 .font(.system(size: 15, weight: .bold))
                 .tracking(3)
                 .foregroundStyle(.white.opacity(0.6))
@@ -932,9 +935,7 @@ struct MultiEventView: View {
     }
 
     private func status(_ event: MeetingEvent) -> String {
-        if now < event.start { return "starts in \(Fmt.mmss(event.start.timeIntervalSince(now)))" }
-        if now < event.end { return "now" }
-        return "finished"
+        Fmt.reminderStatus(start: event.start, end: event.end, now: now, includeEndCountdown: false).lowercased()
     }
 }
 

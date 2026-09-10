@@ -55,6 +55,85 @@ extension NotificationSmoke {
         func require(_ value: @autoclosure () -> Bool, _ message: String) {
             guard value() else { print("FAIL lifecycle: " + message); exit(1) }
         }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            f.store.settings.reminderDelivery = .fullscreen
+            var shown: [String] = []
+            f.store.onAlert = { shown += $0.map(\.id) }
+            let original = f.event("rescheduled-fullscreen")
+            f.commit([original]); await f.tick()
+            require(shown == [original.id], "original fullscreen reminder fires")
+            let moved = f.event("rescheduled-fullscreen", start: 600, end: 2400)
+            f.commit([moved]); await f.tick()
+            require(shown == [original.id], "rescheduled reminder waits for its new lead window")
+            f.clock = moved.start.addingTimeInterval(-TimeInterval(f.store.settings.leadSeconds))
+            await f.tick()
+            require(shown == [original.id, moved.id], "rescheduled fullscreen reminder fires at its new lead window")
+            await f.tick()
+            require(shown.count == 2, "rescheduled fullscreen reminder fires only once")
+            f.commit([original]); await f.tick()
+            require(shown == [original.id, moved.id, original.id], "moving back to a retained start re-arms its old agenda ID")
+            f.commit([f.event("rescheduled-fullscreen", title: "Renamed", end: 2100)]); await f.tick()
+            require(shown.count == 3, "title and end edits do not re-arm fullscreen reminders")
+            let deadline = f.clock.addingTimeInterval(600)
+            f.store.snooze([original.id: deadline])
+            let snoozedMove = f.event("rescheduled-fullscreen", start: 900, end: 2700)
+            f.commit([snoozedMove]); await f.tick()
+            require(shown.count == 3, "fullscreen reschedule preserves an explicit snooze")
+            f.clock = deadline; await f.tick()
+            require(shown.last == snoozedMove.id && shown.count == 4, "moved fullscreen snooze fires at its chosen deadline")
+        }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            f.store.settings.reminderDelivery = .fullscreen
+            var shown: [String] = []
+            f.store.onAlert = { shown += $0.map(\.id) }
+            let original = f.event("rescheduled-back-before-due")
+            f.commit([original]); await f.tick()
+            f.commit([f.event("rescheduled-back-before-due", start: 600, end: 2400)]); await f.tick()
+            f.commit([original]); await f.tick()
+            require(shown == [original.id, original.id], "moving back before the new lead window does not revive stale handled memory")
+        }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            f.store.settings.reminderDelivery = .fullscreen
+            let original = f.event("rescheduled-after-restart")
+            f.commit([original]); await f.tick()
+            let restarted = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent(UUID().uuidString)))
+            restarted.now = { f.clock }
+            var shown: [String] = []
+            restarted.onAlert = { shown += $0.map(\.id) }
+            await restarted.restoreCachedEvents()
+            let moved = f.event("rescheduled-after-restart", start: 600, end: 2400)
+            restarted.commitEvents([moved], observedCalendarIDs: [f.source.id])
+            restarted.tick()
+            require(shown.isEmpty, "rescheduled reminder after restart waits for its new lead window")
+            f.clock = moved.start.addingTimeInterval(-TimeInterval(restarted.settings.leadSeconds))
+            restarted.tick()
+            require(shown == [moved.id], "saved scheduled start re-arms fullscreen after restart")
+        }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            f.store.settings.reminderDelivery = .fullscreen
+            f.store.settings.catchUpDelivery = .notification
+            var shown = 0
+            f.store.onAlert = { shown += $0.count }
+            f.commit([f.event("rescheduled-with-notification", start: -120)])
+            f.store.beginNotificationCatchUp()
+            let request = f.store.beginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
+            f.store.finishRefresh(fetched: [f.source, f.second], requestID: request); await settle()
+            require(f.transport.submissions.count == 1, "fullscreen mode can own an accepted catch-up notification")
+            let moved = f.event("rescheduled-with-notification", start: 600, end: 2400)
+            f.commit([moved]); await f.tick()
+            f.clock = moved.start.addingTimeInterval(-TimeInterval(f.store.settings.leadSeconds))
+            await f.tick()
+            require(shown == 0 && f.transport.submissions.count == 2 && !f.transport.submissions.last!.sound,
+                    "accepted notification keeps its silent edit lifecycle when default delivery is fullscreen")
+        }
         for action in ["join", UNNotificationDefaultActionIdentifier] {
             let f = LifecycleFixture(root: root); defer { f.cleanup() }
             await f.prepare()

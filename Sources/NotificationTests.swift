@@ -221,6 +221,23 @@ extension SelfTest {
         c.expect(original.count == 1 && moved.count == 1, "notification identity: standalone fixture parsed")
         if let first = original.first, let second = moved.first {
             c.expect(first.id != second.id && NotificationLogic.eventKey(first) == NotificationLogic.eventKey(second), "notification identity: time edits preserve notification identity only")
+            let stableKey = NotificationLogic.eventKey(first)
+            var fullscreen = ReminderLedger()
+            fullscreen.record(first)
+            fullscreen = try! JSONDecoder().decode(ReminderLedger.self, from: JSONEncoder().encode(fullscreen))
+            let rearmed = fullscreen.reconcile(events: [second], enabled: [sub.id], observed: [sub.id], now: anchor,
+                                               rearmOnReschedule: [stableKey])
+            c.expect(rearmed == [second.id] && fullscreen.entries.isEmpty, "fullscreen ledger: saved start detects reschedule after restart")
+            var legacyFullscreen = ReminderLedger()
+            legacyFullscreen.entries[stableKey] = ReminderLedger.Entry(calendarID: sub.id, end: first.end)
+            legacyFullscreen = try! JSONDecoder().decode(ReminderLedger.self, from: JSONEncoder().encode(legacyFullscreen))
+            c.expect(legacyFullscreen.reconcile(events: [second], enabled: [sub.id], observed: [sub.id], now: anchor,
+                                               rearmOnReschedule: [stableKey], previousEvents: [first]) == [first.id, second.id],
+                     "fullscreen ledger: legacy history can detect live reschedules")
+            legacyFullscreen.entries[stableKey] = ReminderLedger.Entry(calendarID: sub.id, end: first.end)
+            c.expect(legacyFullscreen.reconcile(events: [first], enabled: [sub.id], observed: [], now: anchor,
+                                               rearmOnReschedule: [stableKey]).isEmpty && legacyFullscreen.entries[stableKey]?.start == first.start,
+                     "fullscreen ledger: legacy startup baselines the start without repeating handled reminders")
             var saved = ReminderLedger()
             saved.entries[NotificationLogic.key(first.id)] = ReminderLedger.Entry(calendarID: sub.id, end: first.end, snooze: anchor.addingTimeInterval(60))
             saved.reconcile(events: [first], enabled: [sub.id], observed: [], now: anchor)

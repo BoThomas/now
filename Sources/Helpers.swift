@@ -194,12 +194,15 @@ enum Fmt {
         now >= start && now < end && now.timeIntervalSince(start) < 10
     }
 
-    /// Keep the start instant readable before introducing a second countdown.
-    static func reminderStatus(start: Date, end: Date, now: Date) -> String {
+    /// Fullscreen reminders use the scheduled start, including after snooze or late delivery.
+    /// Compact cards share the wording but omit the remaining-time countdown.
+    static func reminderStatus(start: Date, end: Date, now: Date, includeEndCountdown: Bool = true) -> String {
         if now < start { return "Starts In \(mmss(start.timeIntervalSince(now)))" }
         guard now < end else { return "Finished" }
-        if isStartingNow(start: start, end: end, now: now) { return "Starts Now" }
-        return "Starts Now · Ends In \(mmss(end.timeIntervalSince(now)))"
+        let elapsed = now.timeIntervalSince(start)
+        let status = elapsed < 60 ? "Starts Now" : "Started \(duration(elapsed)) ago"
+        guard includeEndCountdown && elapsed >= 30 else { return status }
+        return "\(status) · Ends In \(mmss(end.timeIntervalSince(now)))"
     }
 
     static func duration(_ interval: TimeInterval) -> String {
