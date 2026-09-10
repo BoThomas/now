@@ -142,6 +142,61 @@ final class SetupAppSmoke {
                     require(delegate.store.settings.leadSeconds == 45, "real AppDelegate retains setup settings")
                 }
                 @MainActor func settingsVisible() -> Bool { NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible } }
+                if existingProfile {
+                    // Let startup feature-window activation settle before holding
+                    // the menu open; it can otherwise dismiss a tracking menu.
+                    for window in NSApp.windows where window.isVisible { window.close() }
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    var reopenedDuringAgenda = false
+                    var reopenedAfterAgenda = false
+                    var duringTimer: Timer?
+                    let beginObserver = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { notification in
+                        MainActor.assumeIsolated {
+                            guard let menu = notification.object as? NSMenu, menu.delegate is MenuBarController else { return }
+                            duringTimer = AppStore.commonTimer(withTimeInterval: 1.2, repeats: false) { _ in
+                                MainActor.assumeIsolated {
+                                    reopenedDuringAgenda = true
+                                    _ = delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false)
+                                    menu.cancelTracking()
+                                }
+                            }
+                        }
+                    }
+                    let endObserver = NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { notification in
+                        MainActor.assumeIsolated {
+                            guard let menu = notification.object as? NSMenu, menu.delegate is MenuBarController else { return }
+                            duringTimer?.invalidate()
+                            // Foreground actions can deliver their reopen after
+                            // menu tracking and the notification callback return.
+                            _ = AppStore.commonTimer(withTimeInterval: 0.05, repeats: false) { _ in
+                                MainActor.assumeIsolated {
+                                    reopenedAfterAgenda = true
+                                    _ = delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false)
+                                }
+                            }
+                        }
+                    }
+                    let date = Date()
+                    let calendarID = UUID()
+                    let meetings = [0, 1].map { index in
+                        MeetingEvent(uid: "agenda-smoke-\(index)", title: "Synthetic meeting \(index + 1)",
+                            start: date.addingTimeInterval(120), end: date.addingTimeInterval(1800),
+                            location: nil, notes: nil, link: nil, calendarID: calendarID, calendarName: "Synthetic", colorIndex: index)
+                    }
+                    delegate.store.commitEvents(meetings)
+                    let group = ReminderNotification(id: "now.meeting.agenda-smoke", keys: meetings.map(NotificationLogic.eventKey),
+                        fingerprints: ["first", "second"], expires: date.addingTimeInterval(1800), catchUp: false,
+                        title: "", body: "", category: "", sound: false)
+                    delegate.notificationInteraction()
+                    delegate.store.notifications?.onResponse?(group, "choose")
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    NotificationCenter.default.removeObserver(beginObserver)
+                    NotificationCenter.default.removeObserver(endObserver)
+                    require(reopenedDuringAgenda, "group agenda stays open past the original one-second notification guard")
+                    require(reopenedAfterAgenda, "notification reopen arrives after agenda dismissal")
+                    require(!settingsVisible(), "notification agenda dismissal must not open Settings")
+                    delegate.store.commitEvents([])
+                }
                 delegate.openSettings()
                 require(settingsVisible(), "Settings remains available on explicit request")
                 delegate.notificationInteraction()

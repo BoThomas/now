@@ -40,7 +40,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var wakeObserver: Any?
     private var pendingReopen: DispatchWorkItem?
     private var notificationInteractionUntil = Date.distantPast
+    private var notificationAgendaDepth = 0
     private var reopenOpenedSettingsAt: Date?
+
+    private var notificationReopenSuppressed: Bool {
+        notificationAgendaDepth > 0 || Date() < notificationInteractionUntil
+    }
 
     func notificationInteraction() {
         notificationInteractionUntil = Date().addingTimeInterval(1)
@@ -52,6 +57,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindow?.close()
         }
         reopenOpenedSettingsAt = nil
+    }
+
+    private func openNotificationAgenda() {
+        notificationAgendaDepth += 1
+        notificationInteraction()
+        defer {
+            notificationAgendaDepth -= 1
+            // AppKit can deliver the foreground action's reopen only after
+            // menu tracking returns and the notification callback completes.
+            notificationInteraction()
+        }
+        menuBarController?.openAgenda()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -66,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.connectNotifications(notifications)
         store.featureGuides = FeatureGuideController()
         store.openNotificationMeetings = { [weak self] events in self?.menuBarController?.showMeetingDetails(events) }
-        store.openNotificationAgenda = { [weak self] in self?.menuBarController?.openAgenda() }
+        store.openNotificationAgenda = { [weak self] in self?.openNotificationAgenda() }
         store.openNotificationSyncSettings = { [weak self] in self?.openSettings() }
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.type == .keyDown,
@@ -189,10 +206,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// to surface, making that double-click appear broken (especially when the
     /// status item is hidden in a crowded menu bar).
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        guard Date() >= notificationInteractionUntil else { return true }
+        guard !notificationReopenSuppressed else { return true }
         pendingReopen?.cancel()
         let request = DispatchWorkItem { [weak self] in
-            guard let self, Date() >= self.notificationInteractionUntil else { return }
+            guard let self, !self.notificationReopenSuppressed else { return }
             if self.settingsWindow?.isVisible != true { self.reopenOpenedSettingsAt = Date() }
             self.openSettings()
         }
