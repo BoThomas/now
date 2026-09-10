@@ -1,4 +1,24 @@
 # Changelog
+## [2.0.0] - 2026-09-10
+
+### Added
+- Notifications as an alternative to fullscreen reminders.
+- Notifications for ongoing meetings, sync problems, and updates.
+- Offline reminders from previously synced ICS calendars.
+- Guided setup and introductions to new features.
+### Improved
+- Clearer timing for late and snoozed reminders.
+- Silent notification updates when meeting details change.
+- Clearer permission controls and better reminder previews.
+- More frequent update checks and optional update notifications.
+- Faster calendar parsing and better settings recovery.
+### Fixed
+- Remind again when meetings are rescheduled.
+- More reliable notification delivery and meeting detection.
+- Prevent duplicate notifications for the same meeting.
+### Security
+- Stronger update verification and rollback protection.
+
 ## [1.10.0] - 2026-09-08
 
 ### Added
@@ -152,3 +172,4 @@
 [1.8.0]: https://github.com/BoThomas/now/compare/v1.7.0...v1.8.0
 [1.9.0]: https://github.com/BoThomas/now/compare/v1.8.0...v1.9.0
 [1.10.0]: https://github.com/BoThomas/now/compare/v1.9.0...v1.10.0
+[2.0.0]: https://github.com/BoThomas/now/compare/v1.10.0...v2.0.0
