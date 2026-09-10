@@ -23,7 +23,7 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
     app_text = app_text.replace("private lazy var setupAssistant", "lazy var setupAssistant")
     app_text = app_text.replace("private var setupWindow", "var setupWindow")
     app_text = app_text.replace("private func finishInitialSetup", "func finishInitialSetup")
-    if "--startup-smoke" in sys.argv:
+    if "--startup-smoke" in sys.argv or "--activation-smoke" in sys.argv or "--all-smokes" in sys.argv:
         app_text = app_text.replace("let transport = SystemNotificationTransport()", "let transport = FakeNotifications()")
     app.write_text(app_text)
     store = directory / "AppStore.swift"
@@ -55,20 +55,37 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
     sources = [str(p) for p in sorted((ROOT / "Sources").glob("*.swift")) if p.name not in ["App.swift", "AppStore.swift", "Updater.swift"]]
     subprocess.run(["swiftc", "-parse-as-library", "-swift-version", "5", "-sdk", sdk,
                     "-target", "arm64-apple-macos13.0", "-module-cache-path", str(directory / "modules"),
-                    *sources, str(app), str(store), str(updater), str(ROOT / "scripts/notification-smoke.swift"), str(ROOT / "scripts/notification-preview.swift"), str(ROOT / "scripts/notification-lifecycle-smoke.swift"),
+                    *sources, str(app), str(store), str(updater), str(ROOT / "scripts/notification-smoke.swift"), str(ROOT / "scripts/notification-preview.swift"), str(ROOT / "scripts/notification-lifecycle-smoke.swift"), str(ROOT / "scripts/preference-recovery-smoke.swift"),
                     "-o", str(executable)], check=True)
     gui = "--gui" in sys.argv
-    if gui:
+    if gui or "--activation-smoke" in sys.argv or "--all-smokes" in sys.argv:
         subprocess.run(["codesign", "--force", "--sign", "A505B08900C56A28709479297A049525A2A187C6", str(contents.parent)], check=True)
         subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", "-f", str(contents.parent)], check=True)
         print("Isolated notification preview: " + str(contents.parent), flush=True)
     try:
-        if "--startup-smoke" in sys.argv:
+        def run(mode=None, activation=False):
+            subprocess.run(["defaults", "delete", identifier], capture_output=True)
+            args = [str(executable), str(directory)] + ([mode] if mode else [])
+            if activation:
+                args.append("--activation-smoke")
+            subprocess.run(args, check=True, timeout=1800 if gui else 60)
+        if "--all-smokes" in sys.argv:
+            run("--recovery-smoke")
+            run()
             for mode in ["--startup-new", "--startup-existing", "--startup-legacy"]:
-                subprocess.run(["defaults", "delete", identifier], capture_output=True)
-                subprocess.run([str(executable), str(directory), mode], check=True, timeout=15)
+                run(mode)
+            run("--startup-existing", activation=True)
+        elif "--activation-smoke" in sys.argv:
+            run("--startup-existing", activation=True)
+        elif "--startup-smoke" in sys.argv:
+            for mode in ["--startup-new", "--startup-existing", "--startup-legacy"]:
+                run(mode)
         else:
-            subprocess.run([str(executable), str(directory)] + (["--gui"] if gui else []), check=True, timeout=1800 if gui else 60)
+            if not gui:
+                run("--recovery-smoke")
+            run("--gui" if gui else None)
     finally:
+        if gui or "--activation-smoke" in sys.argv or "--all-smokes" in sys.argv:
+            subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", "-u", str(contents.parent)], capture_output=True)
         subprocess.run(["defaults", "delete", identifier], capture_output=True)
         subprocess.run(["defaults", "delete", identifier + ".legacy"], capture_output=True)

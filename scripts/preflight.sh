@@ -14,11 +14,11 @@ else
 fi
 [[ -x "$APP_PATH/Contents/MacOS/now" ]] || { print -u2 "Missing built app: $APP_PATH"; exit 1; }
 "$APP_PATH/Contents/MacOS/now" --selftest
-python3 scripts/notification-smoke.py
-python3 scripts/notification-smoke.py --startup-smoke
+python3 scripts/notification-smoke.py --all-smokes
 python3 scripts/reminder-state-smoke.py
 python3 scripts/calendar-cache-smoke.py
 python3 scripts/calendar-fetch-smoke.py
 python3 scripts/feed-workload-smoke.py
+python3 scripts/parser-performance-smoke.py
 ./scripts/update-smoke.sh --app "$APP_PATH"
 print "RELEASE PREFLIGHT OK"

@@ -226,7 +226,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return fields.map { "\($0.utf8.count):\($0)" }.joined()
         }.joined(separator: "|")
         let checked = store.lastChecked?.timeIntervalSinceReferenceDate ?? 0
-        return "\(store.loginItemState)|\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.calendarSyncProblemTitle ?? "")|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)|\(store.notificationProblemTitle ?? "")"
+        let persistence = PersistenceStatus.shared.issues.keys.sorted().joined(separator: "|")
+        return "\(persistence)|\(store.loginItemState)|\(store.isPaused)|\(day)|\(eventStates)|\(store.isRefreshing)|\(checked)|\(store.errors.count)|\(store.calendarSyncProblemTitle ?? "")|\(store.settings.menuMeetingLimit)|\(store.emptyAgendaText)|\(store.notificationProblemTitle ?? "")"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -240,6 +241,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let until = store.pausedUntil == Date.distantFuture ? "indefinitely" : "until \(Fmt.time.string(from: store.pausedUntil ?? now))"
             menu.addItem(withTitle: "Reminders paused \(until)", action: nil, keyEquivalent: "")
             menu.addItem(withTitle: "Resume Now", action: #selector(resumeAction), keyEquivalent: "").target = self
+            menu.addItem(.separator())
+        }
+        if !PersistenceStatus.shared.issues.isEmpty {
+            let item = NSMenuItem(title: "Saved data needs attention", action: #selector(settingsAction), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
             menu.addItem(.separator())
         }
         if let problem = store.notificationProblemTitle {
@@ -538,7 +545,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Status-menu selection does not necessarily activate an accessory app.
         // Make the details popover key so its controls are immediately live and
         // it does not require a throwaway first click merely to activate.
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.activate()
         popover.contentViewController?.view.window?.makeKey()
     }
 

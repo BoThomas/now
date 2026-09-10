@@ -158,21 +158,26 @@ final class AppStore: ObservableObject {
     }()
 
     init(eventCache: CalendarEventCache = CalendarEventCache(), initialState: Persisted? = nil, meetingActivitySource: MeetingActivitySource? = nil) {
-        hadSavedProfile = initialState != nil || UserDefaults.standard.data(forKey: Self.storageKey) != nil
-            || UserDefaults(suiteName: Self.legacyDomain)?.data(forKey: Self.storageKey) != nil
+        hadSavedProfile = initialState != nil || UserDefaults.standard.object(forKey: Self.storageKey) != nil
+            || UserDefaults(suiteName: Self.legacyDomain)?.object(forKey: Self.storageKey) != nil
         let state = initialState ?? Self.loadState()
         self.eventCache = eventCache
         self.meetingActivitySource = meetingActivitySource ?? MeetingActivitySource()
-        cacheLoadTask = Task { await eventCache.load(subscriptions: state.subscriptions) }
-        eventCache.retain(Set(state.subscriptions.filter(\.isEnabled).map(\.id)))
+        let profileNeedsReview = initialState == nil && StoredPreferences.needsReview(Self.storageKey)
+        cacheLoadTask = Task { await eventCache.load(subscriptions: state.subscriptions, retireInvalidSnapshots: !profileNeedsReview) }
+        // A recovered profile may omit damaged sources; keep their offline files
+        // until the user has reviewed recovery, including on subsequent launches.
+        if !profileNeedsReview {
+            eventCache.retain(Set(state.subscriptions.filter(\.isEnabled).map(\.id)))
+        }
         subscriptions = state.subscriptions
         settings = state.settings
         nativeCalendars = state.nativeCalendars
         pausedUntil = state.pausedUntil
-        if initialState == nil, let data = UserDefaults.standard.data(forKey: ledgerKey), data.count <= 8_000_000,
-           let saved = try? JSONDecoder().decode(ReminderLedger.self, from: data) { reminderLedger = saved }
-        if initialState == nil, let data = UserDefaults.standard.data(forKey: syncLedgerKey), data.count <= 1_000_000,
-           let saved = try? JSONDecoder().decode(SyncNotificationTracker.self, from: data) { syncNotificationTracker = saved }
+        if initialState == nil {
+            reminderLedger = StoredPreferences.load(ReminderLedger.self, key: ledgerKey, label: "Reminder history", maxBytes: 8_000_000) ?? ReminderLedger()
+            syncNotificationTracker = StoredPreferences.load(SyncNotificationTracker.self, key: syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000) ?? SyncNotificationTracker()
+        }
         previousNotificationSettings = settings
         previousEnabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
         knownNativeCalendarIDs = Set(nativeCalendars.map(\.id))
@@ -739,10 +744,6 @@ final class AppStore: ObservableObject {
         NSSound(named: NSSound.Name(settings.soundName))?.play()
     }
 
-    func setMeetingSuppressionEnabled(_ enabled: Bool) {
-        setInMeetingDelivery(enabled ? .suppress : .normal)
-    }
-
     func setInMeetingDelivery(_ mode: InMeetingDelivery) {
         let enabled = mode != .normal
         meetingEnableGeneration += 1
@@ -1213,10 +1214,11 @@ final class AppStore: ObservableObject {
                 if priorVisible.remove(oldKey) != nil { priorVisible.insert(key) }
                 keys.append(key)
                 // Migrate fingerprint format without claiming a meeting changed.
-                let same = fingerprint == notificationFingerprints[key]
+                let currentFingerprint = notificationFingerprints[key] ?? NotificationLogic.fingerprint(event)
+                let same = fingerprint == currentFingerprint
                     || fingerprint == NotificationLogic.priorAgendaFingerprint(event)
                     || (original.fingerprintVersion == nil && fingerprint == NotificationLogic.legacyFingerprint(event))
-                fingerprints.append(same ? notificationFingerprints[key]! : fingerprint)
+                fingerprints.append(same ? currentFingerprint : fingerprint)
                 changed = changed || !same
                 current.append(event)
                 expiration = max(expiration, event.end)
@@ -1245,7 +1247,7 @@ final class AppStore: ObservableObject {
                 item.hidden = true; item.replacementReason = reason
                 return .hide(item)
             }
-            var replacement = meetingNotification(current, catchUp: item.catchUp, at: now(), reason: reason)
+            guard var replacement = meetingNotification(current, catchUp: item.catchUp, at: now(), reason: reason) else { return .remove }
             // Preserve missing members so their later return can restore them too.
             let latest = Dictionary(uniqueKeysWithValues: zip(replacement.keys, replacement.fingerprints))
             replacement.keys = keys
@@ -1259,14 +1261,15 @@ final class AppStore: ObservableObject {
         return .keep(item)
     }
 
-    private func meetingNotification(_ incoming: [MeetingEvent], catchUp: Bool, at date: Date, reason: String? = nil) -> ReminderNotification {
+    private func meetingNotification(_ incoming: [MeetingEvent], catchUp: Bool, at date: Date, reason: String? = nil) -> ReminderNotification? {
+        guard let expiration = incoming.map(\.end).max() else { return nil }
         let sorted = incoming.sorted { $0.id < $1.id }
         let keys = sorted.map(NotificationLogic.eventKey)
         let text = NotificationLogic.content(events: sorted, privateDetails: settings.hideNotificationDetails, catchUp: catchUp, now: date)
         let options = AlertController.snoozeOptions(events: sorted, now: date, customSeconds: settings.snoozeSeconds)
         let canSnooze = AlertController.primarySnoozePlan(options: options, defaultSeconds: settings.snoozeSeconds) != nil
         return ReminderNotification(id: "now.meeting." + NotificationLogic.key(keys.joined()), keys: keys,
-            fingerprints: sorted.map(NotificationLogic.fingerprint), expires: sorted.map(\.end).max()!, catchUp: catchUp,
+            fingerprints: sorted.map(NotificationLogic.fingerprint), expires: expiration, catchUp: catchUp,
             title: reason ?? text.title, body: reason == nil ? text.body : text.title + "\n" + text.body,
             category: !catchUp && sorted.count > 1 ? SystemNotificationTransport.chooseMeetingCategory
                 : SystemNotificationTransport.category(join: sorted.count == 1 && sorted[0].link != nil, snooze: canSnooze),
@@ -1275,7 +1278,8 @@ final class AppStore: ObservableObject {
     }
 
     private func offerNotification(_ incoming: [MeetingEvent], catchUp: Bool, at date: Date) {
-        notifications?.offer(meetingNotification(incoming, catchUp: catchUp, at: date), now: date)
+        guard let item = meetingNotification(incoming, catchUp: catchUp, at: date) else { return }
+        notifications?.offer(item, now: date)
     }
 
     /// Persist an explicit acknowledgement or accepted reminder delivery.
@@ -1300,9 +1304,7 @@ final class AppStore: ObservableObject {
     }
 
     private func persistReminderLedger() {
-        if let data = try? JSONEncoder().encode(reminderLedger), data != UserDefaults.standard.data(forKey: ledgerKey) {
-            UserDefaults.standard.set(data, forKey: ledgerKey)
-        }
+        StoredPreferences.save(reminderLedger, key: ledgerKey, label: "Reminder history", maxBytes: 8_000_000)
     }
 
     private func drainNotificationResponses() {
@@ -1361,9 +1363,7 @@ final class AppStore: ObservableObject {
     }
 
     private func persistSyncNotificationTracker() {
-        if let data = try? JSONEncoder().encode(syncNotificationTracker), data != UserDefaults.standard.data(forKey: syncLedgerKey) {
-            UserDefaults.standard.set(data, forKey: syncLedgerKey)
-        }
+        StoredPreferences.save(syncNotificationTracker, key: syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000)
     }
 
     var notificationProblemTitle: String? {
@@ -1543,24 +1543,23 @@ final class AppStore: ObservableObject {
     }
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(Persisted(subscriptions: subscriptions, settings: settings, nativeCalendars: nativeCalendars, pausedUntil: pausedUntil)) {
-            UserDefaults.standard.set(data, forKey: Self.storageKey)
-        }
+        StoredPreferences.save(Persisted(subscriptions: subscriptions, settings: settings, nativeCalendars: nativeCalendars, pausedUntil: pausedUntil),
+                               key: Self.storageKey, label: "Calendars and settings")
     }
 
     static func loadState() -> Persisted {
-        if let data = UserDefaults.standard.data(forKey: storageKey),
-           let state = try? JSONDecoder().decode(Persisted.self, from: data) {
-            return state
+        // Legacy migration only applies when the current key is absent. A
+        // damaged current profile must never revive an unrelated older profile.
+        if UserDefaults.standard.object(forKey: storageKey) != nil {
+            return StoredPreferences.load(Persisted.self, key: storageKey, label: "Calendars and settings") ?? Persisted()
         }
-        if let legacy = UserDefaults(suiteName: legacyDomain),
-           let data = legacy.data(forKey: storageKey),
-           let state = try? JSONDecoder().decode(Persisted.self, from: data) {
-            UserDefaults.standard.set(data, forKey: storageKey)
-            return state
+        if let legacy = UserDefaults(suiteName: legacyDomain), let original = legacy.object(forKey: storageKey) {
+            UserDefaults.standard.set(original, forKey: storageKey)
+            return StoredPreferences.load(Persisted.self, key: storageKey, label: "Calendars and settings") ?? Persisted()
         }
-        return Persisted(subscriptions: [], settings: AppSettings())
+        return Persisted()
     }
+
 }
 
 /// Calendar subscriptions may start on HTTP only after explicit user consent.

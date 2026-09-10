@@ -1290,6 +1290,20 @@ struct ICSBuildResult {
 }
 
 enum ICSBuilder {
+    /// One resolved revision shares its detected link across materialized dates.
+    /// Overrides get their own content, so moved/changed links never reuse the master.
+    private final class OccurrenceContent {
+        let event: ParsedEvent
+        lazy var link: URL? = LinkExtractor.link(from: event)
+        init(_ event: ParsedEvent) { self.event = event }
+    }
+    private struct Occurrence {
+        let start: Date
+        let anchor: Date?
+        let content: OccurrenceContent
+        var event: ParsedEvent { content.event }
+    }
+
     static let maxEventsPerFeed = 10_000
     static let maxFeedRecurrenceBudget = 500_000
 
@@ -1311,7 +1325,7 @@ enum ICSBuilder {
         for uid in groups.keys.sorted() {
             let events = groups[uid]!
             let master = latestRevision(of: events.filter { $0.recurrenceIDProperty == nil && $0.dtStart != nil })
-            var occurrences: [(start: Date, anchor: Date?, event: ParsedEvent)] = []
+            var occurrences: [Date: Occurrence] = [:]
             if let originalMaster = master {
                 var m = originalMaster
                 if !m.isAllDay {
@@ -1331,6 +1345,7 @@ enum ICSBuilder {
                     warnings.append("Unsupported RRULE \"\(m.unsupportedRRULEText!)\" — “\(m.title)” shows only its first occurrence")
                 }
                 guard m.status != "CANCELLED" else { continue }
+                let content = OccurrenceContent(m)
                 if m.rrule != nil, !m.isAllDay {
                     let initialBudget = min(feedBudget, RRULEExpander.maxIterationsPerEvent)
                     var eventBudget = initialBudget
@@ -1345,9 +1360,9 @@ enum ICSBuilder {
                         let message = "Calendar not updated: recurrence processing reached the \(scope) limit of \(limit) calculation steps while checking “\(title)”. This feed contains \(parsed.events.count) event records and \(recurringSeries) recurring series. We used \(used) steps, including \(historicalSteps) checking dates before the current window. COUNT rules require counting from their original start on each refresh. Reduce old recurring history or use a smaller calendar export. Previously loaded meetings are kept if available; new changes could not be checked."
                         return ICSBuildResult(error: message)
                     }
-                    for date in expansion.dates { occurrences.append((date, date, m)) }
+                    for date in expansion.dates { occurrences[date] = Occurrence(start: date, anchor: date, content: content) }
                 } else if !m.isAllDay, let start = m.dtStart, start >= windowStart, start <= windowEnd, !m.exdates.contains(start) {
-                    occurrences.append((start, (!m.rdateProperties.isEmpty || m.unsupportedRRULEText != nil) ? start : nil, m))
+                    occurrences[start] = Occurrence(start: start, anchor: (!m.rdateProperties.isEmpty || m.unsupportedRRULEText != nil) ? start : nil, content: content)
                 }
                 // RDATE: extra occurrence dates beyond the rule.
                 if !m.isAllDay {
@@ -1358,9 +1373,8 @@ enum ICSBuilder {
                     if resolvedRDates.count > maxEventsPerFeed {
                         return ICSBuildResult(error: occurrenceLimitError(records: parsed.events.count, detail: "more than \(maxEventsPerFeed) distinct additional dates inside the six-hour lookback and next 14 days"))
                     }
-                    var occurrenceStarts = Set(occurrences.map(\.start))
-                    for rdate in resolvedRDates where occurrenceStarts.insert(rdate).inserted {
-                        occurrences.append((rdate, rdate, m))
+                    for rdate in resolvedRDates where occurrences[rdate] == nil {
+                        occurrences[rdate] = Occurrence(start: rdate, anchor: rdate, content: content)
                     }
                 }
             }
@@ -1378,16 +1392,15 @@ enum ICSBuilder {
                 }
                 guard let rid = Self.resolvedRecurrenceID(of: override, masterTz: master?.tz, dateFormatters: dateFormatters) else { continue }
                 guard seenRids.insert(rid).inserted else { continue } // duplicate revision
-                if let index = occurrences.firstIndex(where: { ($0.anchor ?? $0.start) == rid }) {
-                    occurrences.remove(at: index)
-                }
+                occurrences.removeValue(forKey: rid)
                 guard override.status != "CANCELLED" else { continue }
                 guard !override.isAllDay else { continue }
                 let start = override.dtStart ?? rid
                 guard start >= windowStart, start <= windowEnd else { continue }
-                occurrences.append((start, rid, Self.inheriting(override, from: master)))
+                occurrences[rid] = Occurrence(start: start, anchor: rid, content: OccurrenceContent(Self.inheriting(override, from: master)))
             }
-            for occurrence in occurrences {
+            for anchor in occurrences.keys.sorted() {
+                guard let occurrence = occurrences[anchor] else { continue }
                 let eventKey = "\(occurrence.event.uid)|\((occurrence.anchor ?? occurrence.start).timeIntervalSince1970)"
                 guard seenEventKeys.insert(eventKey).inserted else { continue }
                 guard result.count < maxEventsPerFeed else {
@@ -1401,7 +1414,7 @@ enum ICSBuilder {
                     end: end,
                     location: occurrence.event.location,
                     notes: occurrence.event.description,
-                    link: LinkExtractor.link(from: occurrence.event),
+                    link: occurrence.content.link,
                     calendarID: subscription.id,
                     calendarName: subscription.name,
                     colorIndex: subscription.colorIndex,

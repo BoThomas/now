@@ -139,7 +139,9 @@ struct SyncNotificationTracker: Codable {
         firstFailure = firstFailure.filter { failed.contains($0.key) }
         notified.formIntersection(failed)
         for id in failed where firstFailure[id] == nil { firstFailure[id] = now }
-        return Set(failed.filter { !notified.contains($0) && now.timeIntervalSince(firstFailure[$0]!) >= 300 })
+        return Set(firstFailure.compactMap { id, start in
+            !notified.contains(id) && now.timeIntervalSince(start) >= 300 ? id : nil
+        })
     }
 }
 
@@ -293,8 +295,7 @@ final class ReminderNotificationController: ObservableObject {
     init(transport: NotificationTransport, defaults: UserDefaults = .standard) {
         self.transport = transport
         self.defaults = defaults
-        if let data = defaults.data(forKey: storageKey), data.count <= 8_000_000,
-           let saved = try? JSONDecoder().decode([String: ReminderNotification].self, from: data) {
+        if let saved = StoredPreferences.load([String: ReminderNotification].self, key: storageKey, label: "Delivered reminder history", defaults: defaults, maxBytes: 8_000_000) {
             receipts = saved.filter { id, item in
                 id == item.id && id.hasPrefix("now.") && item.keys.count <= 20_000
                     && Set(item.keys).count == item.keys.count
@@ -569,6 +570,6 @@ final class ReminderNotificationController: ObservableObject {
         let sanitized = receipts.mapValues { item -> ReminderNotification in
             var copy = item; copy.title = ""; copy.body = ""; return copy
         }
-        if let data = try? JSONEncoder().encode(sanitized) { defaults.set(data, forKey: storageKey) }
+        StoredPreferences.save(sanitized, key: storageKey, label: "Delivered reminder history", defaults: defaults, maxBytes: 8_000_000)
     }
 }

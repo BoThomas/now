@@ -82,7 +82,7 @@ final class AlertController: ObservableObject {
         // (Dock icon + our menu bar show for the alert's duration) and back on close.
         policyDidChange?()
         panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.activate(forReminder: true)
         installMonitor()
         if playSound {
             store?.playSound()

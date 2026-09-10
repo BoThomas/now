@@ -63,16 +63,17 @@ struct UpdateView: View {
                 Image(systemName: "checkmark.seal")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                Text(staged ? "Signature verified · ready to install" : "Preparing the update…")
+                Text(controller.isVerifyingInstall ? "Verifying update…" : (staged ? "Signature verified · ready to install" : "Preparing the update…"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Button("Skip This Version") { controller.skipVersion(manifest.version) }
+                .disabled(controller.isVerifyingInstall)
                 .font(.system(size: 12))
                 .help("Stop automatic offers for this version. Check for Updates can show it again.")
             footer(
                 primaryTitle: "Install & Relaunch",
-                primaryEnabled: staged,
+                primaryEnabled: staged && !controller.isVerifyingInstall,
                 primaryAction: { controller.install() },
                 cancelTitle: "Later"
             )

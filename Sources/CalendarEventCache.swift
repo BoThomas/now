@@ -98,15 +98,22 @@ final class CalendarEventCache: @unchecked Sendable {
     }
 
     private func file(_ id: UUID) -> URL { directory.appendingPathComponent(id.uuidString + ".json") }
+    private func recoveryFile(_ id: UUID) -> URL { directory.appendingPathComponent(id.uuidString + ".recovery.json") }
 
-    func load(subscriptions: [CalendarSubscription]) async -> CalendarCacheLoad {
+    private func sourceID(_ url: URL) -> UUID? {
+        let name = url.deletingPathExtension().lastPathComponent
+        let raw = name.hasSuffix(".recovery") ? String(name.dropLast(9)) : name
+        guard let id = UUID(uuidString: raw), id.uuidString == raw else { return nil }
+        return id
+    }
+
+    func load(subscriptions: [CalendarSubscription], retireInvalidSnapshots: Bool = true) async -> CalendarCacheLoad {
         await withCheckedContinuation { continuation in
             queue.async {
                 var result = CalendarCacheLoad()
                 var total = 0
                 for subscription in subscriptions.filter(\.isEnabled).sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
                     let url = self.file(subscription.id)
-                    guard FileManager.default.fileExists(atPath: url.path) else { continue }
                     do {
                         let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
                         guard values.isRegularFile == true, values.isSymbolicLink != true,
@@ -122,8 +129,15 @@ final class CalendarEventCache: @unchecked Sendable {
                         guard snapshot.isValid, snapshot.matches(subscription) else { throw CacheError.invalid }
                         result.snapshots[subscription.id] = snapshot
                     } catch {
+                        let failure = error as NSError
+                        if (failure.domain == NSCocoaErrorDomain && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(failure.code))
+                            || (failure.domain == NSPOSIXErrorDomain && failure.code == Int(ENOENT)) { continue }
                         result.issues[subscription.id] = "Saved calendar data could not be loaded. Refresh to restore offline availability."
-                        try? FileManager.default.removeItem(at: url)
+                        // A read/metadata/permission failure doesn't prove corruption.
+                        // Leave those files available for a later attempt.
+                        if retireInvalidSnapshots && (error is DecodingError || error is CacheError) {
+                            try? FileManager.default.removeItem(at: url)
+                        }
                     }
                 }
                 continuation.resume(returning: result)
@@ -133,6 +147,10 @@ final class CalendarEventCache: @unchecked Sendable {
 
     func save(_ snapshot: CalendarCacheSnapshot, completion: @escaping @Sendable (String?) -> Void) {
         queue.async {
+            let destination = self.file(snapshot.calendarID)
+            let recovery = self.recoveryFile(snapshot.calendarID)
+            let temporary = self.directory.appendingPathComponent(".write-" + UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: temporary) }
             do {
                 guard snapshot.isValid,
                       snapshot.meetings.reduce(1024 + (snapshot.warning?.utf8.count ?? 0) * 6, { $0 + $1.estimatedBytes }) <= Self.maxSnapshotBytes
@@ -141,29 +159,45 @@ final class CalendarEventCache: @unchecked Sendable {
                 guard data.count <= Self.maxSnapshotBytes else { throw CacheError.invalid }
                 try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
                 try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: self.directory.path)
-                let otherSize = try self.cacheFiles().filter { $0 != self.file(snapshot.calendarID) }.reduce(0) {
+                let otherSize = try self.cacheFiles().filter { self.sourceID($0) != snapshot.calendarID }.reduce(0) {
                     $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
                 }
                 guard data.count <= Self.maxTotalBytes - otherSize else { throw CacheError.invalid }
-                try data.write(to: self.file(snapshot.calendarID), options: [.atomic])
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: self.file(snapshot.calendarID).path)
+                // Apply permissions before the atomic replacement. A metadata
+                // failure must not discard a successfully replaced live snapshot.
+                try data.write(to: temporary, options: [.atomic])
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+                guard rename(temporary.path, destination.path) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+                try? FileManager.default.removeItem(at: recovery)
                 completion(nil)
             } catch {
-                // A successful new feed must not leave an older disk snapshot behind.
-                try? FileManager.default.removeItem(at: self.file(snapshot.calendarID))
+                // A newer accepted feed can remove meetings. Preserve the old
+                // bytes for recovery, but never automatically restore that obsolete
+                // agenda. One recovery copy per source stays within the disk budget.
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    if rename(destination.path, recovery.path) != 0 {
+                        // If quarantine is impossible, still retire obsolete data.
+                        try? FileManager.default.removeItem(at: destination)
+                    }
+                }
                 completion("Calendar synced, but its offline copy could not be saved. It may be unavailable after restarting.")
             }
         }
     }
 
     func remove(_ ids: Set<UUID>) {
-        queue.async { for id in ids { try? FileManager.default.removeItem(at: self.file(id)) } }
+        queue.async {
+            for id in ids {
+                try? FileManager.default.removeItem(at: self.file(id))
+                try? FileManager.default.removeItem(at: self.recoveryFile(id))
+            }
+        }
     }
 
     func retain(_ ids: Set<UUID>) {
         queue.async {
             for url in (try? self.cacheFiles()) ?? [] {
-                if let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent), !ids.contains(id) {
+                if let id = self.sourceID(url), !ids.contains(id) {
                     try? FileManager.default.removeItem(at: url)
                 }
             }
@@ -182,7 +216,7 @@ final class CalendarEventCache: @unchecked Sendable {
 
     private func cacheFiles() throws -> [URL] {
         try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey]).filter {
-            $0.pathExtension == "json" && UUID(uuidString: $0.deletingPathExtension().lastPathComponent)?.uuidString == $0.deletingPathExtension().lastPathComponent
+            $0.pathExtension == "json" && self.sourceID($0) != nil
         }
     }
 

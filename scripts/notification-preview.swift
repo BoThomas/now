@@ -161,6 +161,22 @@ final class SetupAppSmoke {
                 require(settingsVisible(), "ordinary Finder reopen still opens Settings")
                 delegate.notificationInteraction()
                 require(!settingsVisible(), "late notification undoes only competing reopen window")
+                if CommandLine.arguments.contains("--activation-smoke") {
+                    for window in NSApp.windows where window.isVisible { window.close() }
+                    NSApp.deactivate()
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    require(!NSApp.isActive, "activation fixture starts in the background")
+                    var preview = AppSettings(); preview.soundEnabled = false
+                    delegate.alertController.presentPreview(settings: preview)
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    require(delegate.alertController.isOpen && NSApp.isActive, "timer-style reminder activates the app")
+                    require(NSApp.keyWindow is AlertPanel, "reminder panel owns keyboard focus")
+                    require(NSApp.activationPolicy() == .regular, "reminder owns app menu policy")
+                    delegate.alertController.close()
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    require(NSApp.activationPolicy() == .accessory, "closing reminder restores accessory policy")
+                    print("ACTIVATION SMOKE OK — background reminder takes keyboard focus and restores policy")
+                }
                 print("SETUP APP SMOKE OK — " + (legacyProfile ? "legacy profile migration bypass" : (existingProfile ? "existing profile bypass" : "fresh launch, close/reopen, completion to Settings")))
                 exit(0)
             }

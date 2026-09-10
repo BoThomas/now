@@ -70,6 +70,8 @@ Saved data covers the original fetch window (up to 14 days ahead); it cannot kno
 
 Copies live in `~/Library/Application Support/com.thomasboch.now/CalendarCache-v1/`, with owner-only file permissions. They contain meeting details and Join links; feed URLs are represented by a fingerprint. Disabling, removing, or changing a calendar URL clears its saved copy. Storage is bounded to 16 MB per calendar and 64 MB total; storage failures are surfaced without discarding the live agenda. Handled reminders and exact snooze deadlines survive restart; ended meetings never re-alert.
 
+If a saved profile or reminder history is damaged, `now` keeps recovery copies and restores a valid backup when available. A “Saved data needs attention” notice appears in the menu and Settings. Review your calendars and preferences before marking it Reviewed; the preserved data is kept afterward. Temporary cache read errors keep the offline file. If a newer calendar sync cannot be saved, the older copy is set aside for recovery rather than automatically restoring an obsolete agenda.
+
 ## Building from source
 
 Requires Xcode Command Line Tools with a macOS 15 or later SDK (the build uses the active SDK reported by `xcrun`; override with `SDK_PATH` if needed).

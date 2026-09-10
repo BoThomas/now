@@ -11,10 +11,6 @@ enum Palette {
         let normalized = ((index % count) + count) % count
         return nsColors[normalized]
     }
-    static func color(_ index: Int) -> Color {
-        Color(nsColor: nsColor(index))
-    }
-
     static func hex(for index: Int) -> String {
         hexString(from: nsColor(index))
     }
@@ -165,6 +161,10 @@ enum Palette {
 }
 
 enum Fmt {
+    static func reminderTiming(_ seconds: Int) -> String {
+        seconds == 0 ? "Just in time" : "\(leadTime(seconds)) before"
+    }
+
     static let time: DateFormatter = {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
@@ -294,5 +294,18 @@ enum Fmt {
             return lines.prefix(maxLines).joined(separator: "\n") + " …"
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+/// Activation policy and window ordering remain owned by AppDelegate and the
+/// presenting window. Keep the platform API choice consistent at every call site.
+@MainActor
+enum AppActivation {
+    static func activate(forReminder: Bool = false) {
+        // The cooperative API doesn't take keyboard focus for a background,
+        // timer-fired reminder on macOS 26. Preserve the tested legacy request
+        // there; ordinary user-initiated window activation uses the modern API.
+        if #available(macOS 14.0, *), !forReminder { NSApp.activate() }
+        else { NSApp.activate(ignoringOtherApps: true) }
     }
 }

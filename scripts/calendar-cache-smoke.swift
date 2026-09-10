@@ -165,9 +165,17 @@ final class OfflineProtocol: URLProtocol {
         let path = cache.directory.appendingPathComponent(a.id.uuidString + ".json")
         let mode = try FileManager.default.attributesOfItem(atPath: path.path)[.posixPermissions] as? Int
         try require(mode == 0o600, "cache files are readable only by their owner")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path.path)
+        let unreadable = await cache.load(subscriptions: [a])
+        try require(unreadable.issues[a.id] != nil && FileManager.default.fileExists(atPath: path.path), "transient read permission error preserves snapshot")
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+        try require((await cache.load(subscriptions: [a])).snapshots[a.id] != nil, "snapshot loads after permission recovery")
         let oversized = CalendarCacheSnapshot(subscription: a, events: [], fetchedAt: date, warning: String(repeating: "x", count: 3_000_000))
         try require(await save(oversized, to: cache) != nil, "oversized snapshot fails visibly")
         try require((await cache.load(subscriptions: [a])).snapshots[a.id] == nil, "failed replacement cannot resurrect older snapshot")
+        let recoveryPath = cache.directory.appendingPathComponent(a.id.uuidString + ".recovery.json")
+        try require(FileManager.default.fileExists(atPath: recoveryPath.path), "failed replacement keeps an isolated recovery copy")
+        try require((try JSONDecoder().decode(CalendarCacheSnapshot.self, from: Data(contentsOf: recoveryPath))).isValid, "recovery copy retains valid original bytes")
         // Aggregate limit: exact fit succeeds, one extra byte fails only this source.
         let aggregate = CalendarEventCache(directory: cache.directory.appendingPathComponent("aggregate"))
         try FileManager.default.createDirectory(at: aggregate.directory, withIntermediateDirectories: true)

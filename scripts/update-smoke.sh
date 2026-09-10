@@ -197,6 +197,7 @@ run_smoke() {
   env -u NOW_SMOKE_REPORT -u NOW_SMOKE_FAILURE_REPORT -u NOW_SMOKE_HOME \
       -u NOW_SMOKE_POLL_TIMEOUT -u NOW_SMOKE_HEALTH_TIMEOUT -u NOW_SMOKE_HELPER_FAULT -u NOW_SMOKE_HELPER_DONE \
       -u NOW_SMOKE_ARCHIVE_LIMIT -u NOW_SMOKE_EXTRACTED_LIMIT -u NOW_SMOKE_SKIP_QUIT \
+      -u NOW_SMOKE_STAGE_READY -u NOW_SMOKE_STAGE_CONTINUE \
       NOW_UPDATE_API_BASE="http://127.0.0.1:$PORT/$segment/api" \
       NOW_UPDATE_REPO="BoThomas/now" \
       NOW_SMOKE_HOME="$WORK/home" \
@@ -376,4 +377,35 @@ wait_for_file "$WORK/helper-done13" "stale-error helper never completed"
 print "  OK — updated child launched without the stale failure environment"
 
 print ""
-print "UPDATE SMOKE OK — health-gated swap, signature/streaming gates, downgrade/404, rollback, stuck-quit, and stale-error-env verified"
+
+print "• Install-time validation: verified staging modified before install"
+for mutation in signature version; do
+  reset_install
+  rm -f "$WORK/stage-ready" "$WORK/stage-continue"
+  run_smoke ok NOW_SMOKE_STAGE_READY="$WORK/stage-ready" NOW_SMOKE_STAGE_CONTINUE="$WORK/stage-continue" > "$WORK/log-stage-$mutation" 2>&1 &
+  MUTATION_PID=$!
+  wait_for_file "$WORK/stage-ready" "staging handoff never arrived"
+  STAGED_MUTATION_APP="$(cat "$WORK/stage-ready")"
+  if [[ "$mutation" == signature ]]; then
+    codesign --force --deep --sign - "$STAGED_MUTATION_APP" >/dev/null 2>&1
+  else
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ORIG_VERSION" "$STAGED_MUTATION_APP/Contents/Info.plist"
+    codesign --force --deep --sign "$SIGNING_IDENTITY_SHA1" --entitlements now.entitlements "$STAGED_MUTATION_APP" >/dev/null 2>&1
+  fi
+  touch "$WORK/stage-continue"
+  set +e
+  wait "$MUTATION_PID"
+  RC=$?
+  set -e
+  [[ $RC -eq 2 ]] || fail "post-stage $mutation: expected REFUSED, got $RC"
+  grep -q 'SMOKE: REFUSED install-time validation:' "$WORK/log-stage-$mutation" || fail "post-stage $mutation bypassed validation"
+  if [[ "$mutation" == signature ]]; then
+    grep -q 'install-time validation: update is not signed with a trusted identity' "$WORK/log-stage-$mutation" || fail "post-stage signature refused for wrong reason"
+  else
+    grep -q 'install-time validation: staged version' "$WORK/log-stage-$mutation" || fail "post-stage trusted version refused for wrong reason"
+  fi
+  [[ "$(version_of "$WORK/now.app")" == "$ORIG_VERSION" ]] || fail "post-stage $mutation modified install"
+  print "  OK — post-stage $mutation refused before swap"
+done
+
+print "UPDATE SMOKE OK — health-gated swap, staging/install signature and version gates, streaming limits, rollback, stuck-quit, stale-error-env"

@@ -54,6 +54,7 @@ struct NotificationSmoke {
         if CommandLine.arguments.contains("--startup-legacy") { SetupAppSmoke.run(existingProfile: true, legacyProfile: true); return }
         if CommandLine.arguments.contains("--startup-existing") { SetupAppSmoke.run(existingProfile: true); return }
         if CommandLine.arguments.contains("--gui") { NotificationPreview.run(root: root); return }
+        if CommandLine.arguments.contains("--recovery-smoke") { await preferenceRecoveryTests(root: root); return }
         var clock = Date()
         let transport = FakeNotifications()
         let controller = ReminderNotificationController(transport: transport)
@@ -367,6 +368,22 @@ struct NotificationSmoke {
             recovery.onTerminateForUpdate = { terminated = true }
             recovery.install()
             require(!terminated && recovery.stagedVersion == nil && recovery.state.pendingInstallVersion == nil, "missing staging re-prepares without starting an install or retaining marker")
+
+            let invalidRoot = root.appendingPathComponent("invalid-stage")
+            let executable = invalidRoot.appendingPathComponent("extracted/now.app/Contents/MacOS/now")
+            try! FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try! Data("unsigned executable".utf8).write(to: executable)
+            recovery.stagedRoot = invalidRoot; recovery.stagedVersion = release.version
+            recovery.install()
+            require(recovery.isVerifyingInstall, "install exposes verification progress")
+            recovery.dismissWindow()
+            await settle()
+            require(!terminated && !recovery.isVerifyingInstall && recovery.installAttempt == nil, "Later cancels install before verification can commit")
+            recovery.install()
+            for _ in 0..<100 where recovery.isVerifyingInstall { await settle() }
+            require(!terminated && recovery.preparationFailure != nil && recovery.stagedRoot == nil,
+                    "install rejects an existing unsigned staged executable with a retryable failure")
+            require(recovery.state.pendingInstallVersion == nil && recovery.installAttempt == nil, "failed verification never commits an install marker")
 
             let timeoutRoot = root.appendingPathComponent("helper-timeout")
             try! FileManager.default.createDirectory(at: timeoutRoot, withIntermediateDirectories: true)

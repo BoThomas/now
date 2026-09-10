@@ -32,7 +32,7 @@ struct CalendarSubscription: Codable, Identifiable, Equatable {
         isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
         // Per-entry failable: one malformed rule must never fail the whole
         // subscription record (which would evict it from persisted state).
-        titleFilters = TitleFilterRule.normalized((try? c.decode([FailableDecoded<TitleFilterRule>].self, forKey: .titleFilters).compactMap(\.value)) ?? [])
+        titleFilters = TitleFilterRule.normalized(c.recover([FailableDecoded<TitleFilterRule>].self, forKey: .titleFilters, decoder: decoder)?.compactMap(\.value) ?? [])
     }
 }
 
@@ -103,6 +103,8 @@ struct AppSettings: Codable, Equatable {
     }
 
     static let allowedRefreshMinutes = [5, 15, 30, 60]
+    static let leadPresets = [0, 10, 30, 60, 120, 300, 600, 900]
+    static func leadDurations(including seconds: Int) -> [Int] { Set(leadPresets + [seconds]).sorted() }
     static let leadSecondsRange = 0...7200
     static let allowedElapsedStartMinutes = [-1, 0, 5, 10, 15, 30, 60]
     static let snoozePresets = [60, 180, 300, 600]
@@ -129,44 +131,44 @@ struct AppSettings: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let lead = (try? c.decodeIfPresent(Int.self, forKey: .leadSeconds)) ?? 300
+        let lead = c.recover(Int.self, forKey: .leadSeconds, decoder: decoder) ?? 300
         leadSeconds = min(max(lead, Self.leadSecondsRange.lowerBound), Self.leadSecondsRange.upperBound)
-        let refresh = (try? c.decodeIfPresent(Int.self, forKey: .refreshMinutes)) ?? 15
+        let refresh = c.recover(Int.self, forKey: .refreshMinutes, decoder: decoder) ?? 15
         refreshMinutes = Self.nearest(refresh, in: Self.allowedRefreshMinutes, default: 15)
-        soundEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .soundEnabled)) ?? true
-        let sound = (try? c.decodeIfPresent(String.self, forKey: .soundName)) ?? "Hero"
+        soundEnabled = c.recover(Bool.self, forKey: .soundEnabled, decoder: decoder) ?? true
+        let sound = c.recover(String.self, forKey: .soundName, decoder: decoder) ?? "Hero"
         soundName = AppStore.soundNames.contains(sound) ? sound : "Hero"
-        showMenuBarCountdown = (try? c.decodeIfPresent(Bool.self, forKey: .showMenuBarCountdown)) ?? true
-        menuMeetingLimit = Self.normalizedMenuMeetingLimit((try? c.decodeIfPresent(Int.self, forKey: .menuMeetingLimit)) ?? 5)
-        launchAtLogin = (try? c.decodeIfPresent(Bool.self, forKey: .launchAtLogin)) ?? false
+        showMenuBarCountdown = c.recover(Bool.self, forKey: .showMenuBarCountdown, decoder: decoder) ?? true
+        menuMeetingLimit = Self.normalizedMenuMeetingLimit(c.recover(Int.self, forKey: .menuMeetingLimit, decoder: decoder) ?? 5)
+        launchAtLogin = c.recover(Bool.self, forKey: .launchAtLogin, decoder: decoder) ?? false
         // `lateMinutes` belonged to the former "Show started meetings"
         // visibility setting. Its semantics changed enough that carrying the
         // old value forward would be misleading, so an absent new key always
         // starts at the intentional 10-minute default.
-        let elapsed = (try? c.decodeIfPresent(Int.self, forKey: .elapsedStartMinutes)) ?? 10
+        let elapsed = c.recover(Int.self, forKey: .elapsedStartMinutes, decoder: decoder) ?? 10
         elapsedStartMinutes = Self.nearest(elapsed, in: Self.allowedElapsedStartMinutes, default: 10)
-        skipDeclined = (try? c.decodeIfPresent(Bool.self, forKey: .skipDeclined)) ?? true
+        skipDeclined = c.recover(Bool.self, forKey: .skipDeclined, decoder: decoder) ?? true
         // New and existing installs share the same default when no explicit
         // snooze choice is saved. At-start reminders cannot snooze to the past.
-        let snooze = (try? c.decodeIfPresent(Int.self, forKey: .snoozeSeconds)) ?? (leadSeconds > 0 ? 0 : 60)
+        let snooze = c.recover(Int.self, forKey: .snoozeSeconds, decoder: decoder) ?? (leadSeconds > 0 ? 0 : 60)
         if snooze == 0 && leadSeconds > 0 {
             snoozeSeconds = 0
         } else {
             snoozeSeconds = snooze > 0 ? min(snooze, Self.snoozeSecondsRange.upperBound) : 60
         }
-        automaticUpdateChecks = (try? c.decodeIfPresent(Bool.self, forKey: .automaticUpdateChecks)) ?? true
-        suppressRemindersDuringMeetings = (try? c.decodeIfPresent(Bool.self, forKey: .suppressRemindersDuringMeetings)) ?? false
-        includeBrowserMeetings = (try? c.decodeIfPresent(Bool.self, forKey: .includeBrowserMeetings)) ?? false
-        reminderDelivery = (try? c.decode(ReminderDelivery.self, forKey: .reminderDelivery)) ?? .fullscreen
-        notifyDuringMeetings = (try? c.decode(Bool.self, forKey: .notifyDuringMeetings)) ?? false
+        automaticUpdateChecks = c.recover(Bool.self, forKey: .automaticUpdateChecks, decoder: decoder) ?? true
+        suppressRemindersDuringMeetings = c.recover(Bool.self, forKey: .suppressRemindersDuringMeetings, decoder: decoder) ?? false
+        includeBrowserMeetings = c.recover(Bool.self, forKey: .includeBrowserMeetings, decoder: decoder) ?? false
+        reminderDelivery = c.recover(ReminderDelivery.self, forKey: .reminderDelivery, decoder: decoder) ?? .fullscreen
+        notifyDuringMeetings = c.recover(Bool.self, forKey: .notifyDuringMeetings, decoder: decoder) ?? false
         if notifyDuringMeetings { suppressRemindersDuringMeetings = false }
-        notifyOnCatchUp = (try? c.decode(Bool.self, forKey: .notifyOnCatchUp)) ?? false
-        skipMeetingsOnCatchUp = (try? c.decode(Bool.self, forKey: .skipMeetingsOnCatchUp)) ?? false
+        notifyOnCatchUp = c.recover(Bool.self, forKey: .notifyOnCatchUp, decoder: decoder) ?? false
+        skipMeetingsOnCatchUp = c.recover(Bool.self, forKey: .skipMeetingsOnCatchUp, decoder: decoder) ?? false
         if skipMeetingsOnCatchUp { notifyOnCatchUp = false }
-        hideNotificationDetails = (try? c.decode(Bool.self, forKey: .hideNotificationDetails)) ?? false
-        notifySyncErrors = (try? c.decode(Bool.self, forKey: .notifySyncErrors)) ?? false
-        notifyUpdates = (try? c.decode(Bool.self, forKey: .notifyUpdates)) ?? false
-        skippedUpdateVersion = (try? c.decodeIfPresent(String.self, forKey: .skippedUpdateVersion))
+        hideNotificationDetails = c.recover(Bool.self, forKey: .hideNotificationDetails, decoder: decoder) ?? false
+        notifySyncErrors = c.recover(Bool.self, forKey: .notifySyncErrors, decoder: decoder) ?? false
+        notifyUpdates = c.recover(Bool.self, forKey: .notifyUpdates, decoder: decoder) ?? false
+        skippedUpdateVersion = c.recover(String.self, forKey: .skippedUpdateVersion, decoder: decoder, allowNull: true)
     }
 }
 
@@ -203,7 +205,7 @@ struct NativeCalendar: Codable, Identifiable, Equatable {
         colorHex = try c.decodeIfPresent(String.self, forKey: .colorHex) ?? ""
         colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
         isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
-        titleFilters = TitleFilterRule.normalized((try? c.decode([FailableDecoded<TitleFilterRule>].self, forKey: .titleFilters).compactMap(\.value)) ?? [])
+        titleFilters = TitleFilterRule.normalized(c.recover([FailableDecoded<TitleFilterRule>].self, forKey: .titleFilters, decoder: decoder)?.compactMap(\.value) ?? [])
     }
 }
 
@@ -213,7 +215,8 @@ struct FailableDecoded<T: Decodable>: Decodable {
     let value: T?
 
     init(from decoder: Decoder) throws {
-        value = try? T(from: decoder)
+        do { value = try T(from: decoder) }
+        catch { PreferenceDecoding.note(decoder); value = nil }
     }
 }
 
@@ -234,13 +237,15 @@ struct Persisted: Codable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        subscriptions = (try? c.decode([FailableDecoded<CalendarSubscription>].self, forKey: .subscriptions).compactMap(\.value)) ?? []
-        settings = (try? c.decode(AppSettings.self, forKey: .settings)) ?? AppSettings()
-        nativeCalendars = (try? c.decode([FailableDecoded<NativeCalendar>].self, forKey: .nativeCalendars).compactMap(\.value)) ?? []
-        pausedUntil = try? c.decodeIfPresent(Date.self, forKey: .pausedUntil)
+        subscriptions = c.recover([FailableDecoded<CalendarSubscription>].self, forKey: .subscriptions, decoder: decoder)?.compactMap(\.value) ?? []
+        settings = c.recover(AppSettings.self, forKey: .settings, decoder: decoder) ?? AppSettings()
+        nativeCalendars = c.recover([FailableDecoded<NativeCalendar>].self, forKey: .nativeCalendars, decoder: decoder)?.compactMap(\.value) ?? []
+        pausedUntil = c.recover(Date.self, forKey: .pausedUntil, decoder: decoder, allowNull: true)
+        let originalCount = subscriptions.count + nativeCalendars.count
         var ids = Set<UUID>()
         subscriptions = subscriptions.filter { ids.insert($0.id).inserted }
         nativeCalendars = nativeCalendars.filter { ids.insert($0.id).inserted }
+        if subscriptions.count + nativeCalendars.count != originalCount { PreferenceDecoding.note(decoder) }
     }
 }
 

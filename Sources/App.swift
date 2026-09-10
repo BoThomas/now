@@ -267,7 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Cancel")
         // Sit above the .screenSaver-level reminder panel.
         alert.window.level = NSWindow.Level(NSWindow.Level.screenSaver.rawValue + 1)
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.activate()
         // The reminder's own key monitor (esc/return/s) must not eat keystrokes
         // while this dialog is up.
         alertController.modalAlertActive = true
@@ -292,7 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: closeTitle)
         alert.addButton(withTitle: "Cancel")
         alert.window.level = .floating
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.activate()
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             NSApp.terminate(nil)
@@ -320,7 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         setupWindow?.makeKeyAndOrderFront(nil)
         syncActivationPolicy()
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.activate()
     }
 
     private func finishInitialSetup() {
@@ -370,7 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // menu bar on screen. syncActivationPolicy also runs when the window closes
         // (windowWillClose) to hand the menu bar back.
         syncActivationPolicy()
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.activate()
     }
 
     /// The app is .regular (Dock icon + owns the menu bar) while Settings, the
@@ -422,7 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateWindow?.makeKeyAndOrderFront(nil)
         updateController.updateWindowDidShow()
         syncActivationPolicy()
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.activate()
     }
 
     /// A deferred request fires when the reminder alert closes.
@@ -812,6 +812,23 @@ enum NowApp {
             exit(4)
         }
         print("SMOKE: staged v\(update.manifest.version) at \(update.appURL.path)")
+        // Test-only handoff lets the smoke harness modify a *verified* bundle
+        // before the production install-time gate runs.
+        let stageEnv = ProcessInfo.processInfo.environment
+        if let ready = stageEnv["NOW_SMOKE_STAGE_READY"], let proceed = stageEnv["NOW_SMOKE_STAGE_CONTINUE"] {
+            do { try update.appURL.path.write(toFile: ready, atomically: true, encoding: .utf8) }
+            catch { print("SMOKE: ERROR stage handoff failed"); exit(4) }
+            let deadline = Date().addingTimeInterval(30)
+            while !FileManager.default.fileExists(atPath: proceed), Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            guard FileManager.default.fileExists(atPath: proceed) else { print("SMOKE: ERROR stage handoff timed out"); exit(4) }
+        }
+        if let problem = UpdateStaging.validationProblem(appURL: update.appURL, manifest: manifest) {
+            try? FileManager.default.removeItem(at: update.stagingRoot)
+            print("SMOKE: REFUSED install-time validation: \(problem)")
+            exit(2)
+        }
         if let problem = UpdateLogic.installLocationProblem(bundlePath) {
             print("SMOKE: REFUSED \(problem)")
             exit(2)

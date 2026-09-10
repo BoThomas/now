@@ -2764,6 +2764,9 @@ enum SelfTest {
         let artifactUUID = "12345678-1234-1234-1234-123456789ABC"
         c.expect(UpdateStaging.launchArtifact(named: ".now-update-\(artifactUUID)") == .staging(UUID(uuidString: artifactUUID)!), "canonical staging artifact matched")
         c.expect(UpdateStaging.launchArtifact(named: "now.app.old-\(artifactUUID)") == .backup(UUID(uuidString: artifactUUID)!), "canonical backup artifact matched")
+        c.expect(UpdateStaging.launchArtifact(named: "now.app.old-\(artifactUUID).failed") == .failed(UUID(uuidString: artifactUUID)!), "canonical failed artifact matched")
+        c.expect(UpdateStaging.launchArtifact(named: "now.app.old-\(artifactUUID).failed.extra") == nil, "failed artifact extra suffix ignored")
+        c.expect(UpdateStaging.launchArtifact(named: "now.app.old-\(artifactUUID.lowercased()).failed") == nil, "noncanonical failed artifact ignored")
         c.expect(UpdateStaging.launchArtifact(named: ".now-update-\(artifactUUID.lowercased())") == nil, "noncanonical lowercase UUID artifact ignored")
         c.expect(UpdateStaging.launchArtifact(named: ".now-update-\(artifactUUID)-extra") == nil, "UUID artifact suffix ignored")
         c.expect(UpdateStaging.launchArtifact(named: "now.app.old-not-a-uuid") == nil, "non-UUID backup ignored")

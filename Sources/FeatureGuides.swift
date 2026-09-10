@@ -74,7 +74,7 @@ final class FeatureGuideController: ObservableObject {
     init(defaults: UserDefaults = .standard, catalog: [FeatureGuideDefinition] = FeatureGuideCatalog.entries) {
         self.defaults = defaults
         self.catalog = catalog
-        state = defaults.data(forKey: Self.storageKey).flatMap { try? JSONDecoder().decode(FeatureGuideState.self, from: $0) } ?? FeatureGuideState()
+        state = StoredPreferences.load(FeatureGuideState.self, key: Self.storageKey, label: "Feature guide history", defaults: defaults) ?? FeatureGuideState()
     }
 
     func startupHealthAcknowledged(installedUpdate: Bool, existingProfile: Bool = false) {
@@ -93,7 +93,7 @@ final class FeatureGuideController: ObservableObject {
 
     func definitions(for ids: [String]) -> [FeatureGuideDefinition] { catalog.filter { ids.contains($0.id) } }
     private func save() {
-        if let data = try? JSONEncoder().encode(state) { defaults.set(data, forKey: Self.storageKey) }
+        StoredPreferences.save(state, key: Self.storageKey, label: "Feature guide history", defaults: defaults)
     }
 }
 

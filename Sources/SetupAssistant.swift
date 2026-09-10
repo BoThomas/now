@@ -93,7 +93,7 @@ final class SetupAssistantController: ObservableObject {
 
     init(isNewProfile: Bool, settings: AppSettings, defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        state = defaults.data(forKey: Self.storageKey).flatMap { try? JSONDecoder().decode(SetupAssistantState.self, from: $0) }
+        state = StoredPreferences.load(SetupAssistantState.self, key: Self.storageKey, label: "Setup choices", defaults: defaults)
             ?? SetupAssistantState(isNewProfile: isNewProfile, settings: settings, supportsMeetings: MeetingActivityProbe.platformPotentiallySupported)
         save()
     }
@@ -136,7 +136,7 @@ final class SetupAssistantController: ObservableObject {
         return true
     }
     private func save() {
-        if let data = try? JSONEncoder().encode(state) { defaults.set(data, forKey: Self.storageKey) }
+        StoredPreferences.save(state, key: Self.storageKey, label: "Setup choices", defaults: defaults)
     }
 }
 
@@ -249,8 +249,8 @@ struct SetupAssistantView: View {
             Picker("Remind me", selection: Binding(get: { assistant.draft.leadSeconds }, set: {
                 if $0 == -1 { customLead = true } else { assistant.draft.leadSeconds = $0 }
             })) {
-                ForEach(Array(Set([0, 10, 30, 60, 120, 300, 600, 900, assistant.draft.leadSeconds])).sorted(), id: \.self) { seconds in
-                    Text(seconds == 0 ? "Just in time" : "\(Fmt.leadTime(seconds)) before").tag(seconds)
+                ForEach(AppSettings.leadDurations(including: assistant.draft.leadSeconds), id: \.self) { seconds in
+                    Text(Fmt.reminderTiming(seconds)).tag(seconds)
                 }
                 Text("Custom…").tag(-1)
             }

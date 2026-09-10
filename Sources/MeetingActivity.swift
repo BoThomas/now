@@ -48,6 +48,12 @@ enum MeetingActivityProbeError: Error, Equatable {
 }
 
 enum MeetingActivityProbe {
+    nonisolated static func objectCount(byteCount: UInt32, allowEmpty: Bool = false) -> Int? {
+        let stride = MemoryLayout<AudioObjectID>.stride
+        guard (allowEmpty || byteCount > 0), Int(byteCount) % stride == 0 else { return nil }
+        return Int(byteCount) / stride
+    }
+
     nonisolated static var platformPotentiallySupported: Bool {
         if #available(macOS 14.0, *) { return true }
         return false
@@ -70,16 +76,23 @@ enum MeetingActivityProbe {
             return .failure(.processListUnreadable(sizeStatus))
         }
 
-        var objectIDs = [AudioObjectID](
-            repeating: 0,
-            count: Int(dataSize) / MemoryLayout<AudioObjectID>.stride)
-        let readStatus = objectIDs.withUnsafeMutableBytes { raw in
-            AudioObjectGetPropertyData(system, &address, 0, nil, &dataSize, raw.baseAddress!)
+        guard let count = objectCount(byteCount: dataSize) else {
+            return .failure(.processListUnreadable(kAudioHardwareBadPropertySizeError))
+        }
+        var objectIDs = [AudioObjectID](repeating: 0, count: count)
+        let capacity = dataSize
+        let readStatus = objectIDs.withUnsafeMutableBytes { raw -> OSStatus in
+            guard let base = raw.baseAddress, raw.count >= Int(dataSize) else { return kAudioHardwareBadPropertySizeError }
+            return AudioObjectGetPropertyData(system, &address, 0, nil, &dataSize, base)
         }
         guard readStatus == noErr else {
             return .failure(.processListUnreadable(readStatus))
         }
 
+        guard dataSize <= capacity, let returnedCount = objectCount(byteCount: dataSize, allowEmpty: true) else {
+            return .failure(.processListUnreadable(kAudioHardwareBadPropertySizeError))
+        }
+        objectIDs = Array(objectIDs.prefix(returnedCount))
         var readableInputStates = 0
         var owners: [MeetingAudioOwner] = []
         for objectID in objectIDs {

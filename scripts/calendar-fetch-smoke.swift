@@ -17,6 +17,37 @@ struct CalendarFetchSmoke {
         print("PASS: \(message)")
     }
 
+    static func updaterDownloads(base: String) async {
+        setenv("NOW_UPDATE_API_BASE", base, 1)
+        defer { unsetenv("NOW_UPDATE_API_BASE") }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("now-archive-test-" + UUID().uuidString)
+        try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cap: Int64 = 5_000_000
+        for path in ["exact", "over", "stream", "gzip", "error"] {
+            let destination = directory.appendingPathComponent(path)
+            do {
+                let size = try await UpdateStaging.download(request: URLRequest(url: URL(string: base + "/" + path)!), to: destination, maxBytes: cap)
+                require(path == "exact" && size == cap, "updater exact byte boundary accepted")
+            } catch let error as StageFailure {
+                require(path != "exact" && error.reason.contains(path == "error" ? "503" : "5 MB"), "updater \(path) rejected with expected error")
+                let size = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                require(size <= Int(cap), "updater \(path) never writes beyond cap")
+            } catch { require(false, "unexpected updater error: \(error)") }
+        }
+        for delay in [UInt64(0), 100_000_000] {
+            let task = Task {
+                try await UpdateStaging.download(request: URLRequest(url: URL(string: base + "/trickle")!), to: directory.appendingPathComponent("cancel"), maxBytes: cap)
+            }
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+            let began = Date(); task.cancel()
+            do { _ = try await task.value; require(false, "cancelled archive succeeded") }
+            catch { require(Date().timeIntervalSince(began) < 2, "updater cancellation completes promptly") }
+        }
+        let recovered = try? await UpdateStaging.download(request: URLRequest(url: URL(string: base + "/exact")!), to: directory.appendingPathComponent("recovered"), maxBytes: cap)
+        require(recovered == cap, "updater shared session remains usable after failures and cancellation")
+    }
+
     static func structureTests(base: String) async {
         var sub = CalendarSubscription(name: "HTTP structure", url: base + "/populated", colorIndex: 0)
         let populated = await AppStore.performFetch(requests: [FetchRequest(subscription: sub, requestID: 1)])
@@ -123,6 +154,7 @@ struct CalendarFetchSmoke {
         // Cancellation must free a slot and leave the shared session usable.
         let recovery = await AppStore.fetchData(base + "/fast")
         require(recovery.0 != nil && recovery.1 == nil, "healthy fetch succeeds after timeout")
+        await updaterDownloads(base: base)
         print("CALENDAR FETCH SMOKE OK")
     }
 }
