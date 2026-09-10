@@ -36,6 +36,7 @@ struct SetupAssistantState: Codable, Equatable {
             draft.inMeetingDelivery = supportsMeetings ? .notification : .normal
             draft.catchUpDelivery = .notification
             draft.notifyUpdates = settings.automaticUpdateChecks
+            draft.notifySyncErrors = true
         }
     }
 
@@ -47,6 +48,7 @@ struct SetupAssistantState: Codable, Equatable {
         result.catchUpDelivery = draft.catchUpDelivery
         result.hideNotificationDetails = draft.hideNotificationDetails
         result.notifyUpdates = draft.notifyUpdates
+        result.notifySyncErrors = draft.notifySyncErrors
         result.launchAtLogin = draft.launchAtLogin
         result.automaticUpdateChecks = draft.automaticUpdateChecks
         return result
@@ -57,6 +59,7 @@ struct SetupAssistantState: Codable, Equatable {
         if draft.inMeetingDelivery == .notification { draft.inMeetingDelivery = .normal }
         if draft.catchUpDelivery == .notification { draft.catchUpDelivery = .normal }
         draft.notifyUpdates = false
+        draft.notifySyncErrors = false
     }
 
     static func effective(_ draft: AppSettings, notificationsAllowed: Bool) -> AppSettings {
@@ -180,6 +183,10 @@ struct SetupAssistantView: View {
                 VStack(alignment: .leading, spacing: 18) { content }
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if assistant.state.step == .reminders && !notifications.permission.canSubmit {
+                Text("Some options are disabled because notifications aren’t enabled yet. Go back to enable them.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             if let problem = assistant.problem {
                 Text(problem).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
@@ -209,6 +216,8 @@ struct SetupAssistantView: View {
         case .welcome:
             Toggle("Start now at login", isOn: choice(\.launchAtLogin))
             Toggle("Check for updates automatically", isOn: choice(\.automaticUpdateChecks))
+            Text("Notifications can remind you about meetings and let you know about calendar sync problems and available updates.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 if notifications.permission.canSubmit {
                     Label("Notifications enabled", systemImage: "checkmark.circle.fill").foregroundStyle(.green)

@@ -810,6 +810,7 @@ final class AppStore: ObservableObject {
         updated.inMeetingDelivery = choices.duringMeetings ? .notification : (settings.inMeetingDelivery == .notification ? .normal : settings.inMeetingDelivery)
         updated.catchUpDelivery = choices.catchUp ? .notification : (settings.catchUpDelivery == .skip ? .skip : .normal)
         updated.notifyUpdates = choices.updates
+        updated.notifySyncErrors = choices.syncErrors
         applyInitialSetup(updated, owners: owners)
     }
 

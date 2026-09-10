@@ -5,15 +5,19 @@ extension SelfTest {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         var setup = SetupAssistantState(isNewProfile: true, settings: AppSettings(), supportsMeetings: true)
         c.expect(setup.draft.leadSeconds == 60 && setup.draft.snoozeSeconds == 0, "assistant: new-user timing defaults to one minute and just in time")
-        c.expect(!setup.completed && setup.step == .welcome && setup.draft.notifyDuringMeetings && setup.draft.notifyOnCatchUp && setup.draft.notifyUpdates, "assistant: new user starts with recommended notification draft")
-        c.expect(setup.draft.launchAtLogin == AppSettings().launchAtLogin && setup.draft.refreshMinutes == AppSettings().refreshMinutes && !setup.draft.notifySyncErrors, "assistant: general defaults untouched")
-        c.expect(SetupAssistantState(isNewProfile: false, settings: AppSettings(), supportsMeetings: true).completed, "assistant: existing empty profiles not mistaken for new installs")
+        c.expect(!setup.completed && setup.step == .welcome && setup.draft.notifyDuringMeetings && setup.draft.notifyOnCatchUp && setup.draft.notifyUpdates && setup.draft.notifySyncErrors, "assistant: new user starts with recommended notification draft, including sync problems")
+        c.expect(setup.draft.launchAtLogin == AppSettings().launchAtLogin && setup.draft.refreshMinutes == AppSettings().refreshMinutes, "assistant: general defaults untouched")
+        let existingSetup = SetupAssistantState(isNewProfile: false, settings: AppSettings(), supportsMeetings: true)
+        c.expect(existingSetup.completed && !existingSetup.draft.notifySyncErrors, "assistant: existing empty profiles retain their sync-notification choice and skip setup")
         setup.next(); c.expect(setup.step == .reminders, "assistant: welcome precedes reminder options")
         setup.next(); c.expect(setup.step == .ready && setup.steps.count == 3, "assistant: three-screen flow ends after combined reminders")
         setup.back(); c.expect(setup.step == .reminders, "assistant: back revisits combined reminder screen")
         let disabled = SetupAssistantState.effective(setup.draft, notificationsAllowed: false)
         c.expect(!disabled.usesNotifications && disabled.reminderDelivery == .fullscreen && disabled.inMeetingDelivery == .normal, "assistant: permission off disables every notification route")
         c.expect(SetupAssistantState.effective(setup.draft, notificationsAllowed: true) == setup.draft && setup.draft.notifyDuringMeetings, "assistant: later grant restores draft choices without losing them")
+        let allowedSettings = SetupAssistantState.applying(SetupAssistantState.effective(setup.draft, notificationsAllowed: true), to: AppSettings())
+        c.expect(allowedSettings.notifySyncErrors, "assistant: allowed new setup enables sync-problem notifications")
+        c.expect(!SetupAssistantState.applying(disabled, to: allowedSettings).notifySyncErrors, "assistant: denied setup clears sync-problem notifications even when current settings enabled them")
         let legacyDraft = #"{"completed":false,"step":"context","draft":{}}"#.data(using: .utf8)!
         c.expect((try? JSONDecoder().decode(SetupAssistantState.self, from: legacyDraft))?.step == .reminders, "assistant: old context step migrates to combined reminders")
         var current = AppSettings()
@@ -93,6 +97,17 @@ extension SelfTest {
         legacySuppression.inMeetingDelivery = .suppress
         c.expect(!NotificationSetupChoices(settings: legacySuppression, supportsMeetings: true).duringMeetings, "guide: preserve legacy suppression recommendation")
         c.expect(!NotificationSetupChoices(settings: AppSettings(), supportsMeetings: false).duringMeetings, "guide: unsupported meeting detection not recommended")
+        var syncOnly = NotificationSetupChoices(settings: AppSettings(), supportsMeetings: false)
+        c.expect(syncOnly.syncErrors, "guide: recommend sync-problem notifications to users configuring notifications for the first time")
+        syncOnly.catchUp = false; syncOnly.updates = false
+        c.expect(syncOnly.needsPermission, "guide: sync-problem notifications alone require permission")
+        syncOnly.syncErrors = false
+        c.expect(!syncOnly.needsPermission, "guide: no permission needed when every notification option is off")
+        var configuredNotifications = AppSettings()
+        configuredNotifications.reminderDelivery = .notification
+        c.expect(!NotificationSetupChoices(settings: configuredNotifications).syncErrors, "guide: keep sync-problem alerts off for existing notification users who have them off")
+        configuredNotifications.notifySyncErrors = true
+        c.expect(NotificationSetupChoices(settings: configuredNotifications).syncErrors, "guide: keep enabled sync-problem alerts selected")
         let legacyGuides = Data(#"{"encountered":["notification-setup-v1"],"pendingSettings":["notification-setup-v1"]}"#.utf8)
         var migratedGuides = try? JSONDecoder().decode(FeatureGuideState.self, from: legacyGuides)
         c.expect(migratedGuides?.acknowledge(catalog: catalog, installedUpdate: true).isEmpty == true,

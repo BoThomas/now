@@ -492,14 +492,23 @@ struct NotificationSmoke {
         require(!cancelled && resumed.pending && store.settings == unchanged, "assistant closing during validation cancels commit")
         let finished = await resumed.complete(store: store, permission: { true }, probe: { .success([]) })
         require(finished && !resumed.pending && store.settings.leadSeconds == 90, "assistant completes and applies selected reminder timing")
+        require(store.settings.notifySyncErrors, "assistant enables sync-problem notifications after confirmed permission, including resumed setup")
         let completedSetup = SetupAssistantController(isNewProfile: false, settings: store.settings, defaults: setupDefaults)
         require(!completedSetup.pending, "completed assistant never restarts on later launches")
         setupDefaults.removePersistentDomain(forName: setupDomain)
         let noPermission = SetupAssistantController(isNewProfile: true, settings: AppSettings(), defaults: setupDefaults)
         noPermission.next(); noPermission.next()
         let finishedWithoutPermission = await noPermission.complete(store: store, permission: { false }, probe: { fatalError("disabled notifications must not probe meeting detection") })
-        require(finishedWithoutPermission && !store.settings.usesNotifications && store.settings.reminderDelivery == .fullscreen,
+        require(finishedWithoutPermission && !store.settings.usesNotifications && !store.settings.notifySyncErrors && store.settings.reminderDelivery == .fullscreen,
                 "assistant can finish without enabling notifications, with all notification routes disabled")
+        var syncChoices = NotificationSetupChoices(settings: store.settings, supportsMeetings: false)
+        syncChoices.catchUp = false; syncChoices.updates = false
+        store.applyNotificationSetup(syncChoices, owners: nil)
+        require(store.settings.notifySyncErrors && !store.settings.notifyDuringMeetings && !store.settings.notifyOnCatchUp && !store.settings.notifyUpdates,
+                "update guide can apply sync-problem notifications as its only selected option")
+        syncChoices.syncErrors = false
+        store.applyNotificationSetup(syncChoices, owners: nil)
+        require(!store.settings.usesNotifications, "update guide applies an explicit choice to turn sync-problem notifications off")
         // Notification body clicks resolve live details for linked, linkless, and grouped meetings.
         var details: [MeetingEvent] = []
         var agendaOpened = false

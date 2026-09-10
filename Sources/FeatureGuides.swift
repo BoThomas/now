@@ -51,7 +51,8 @@ struct NotificationSetupChoices: Equatable {
     var duringMeetings: Bool
     var catchUp: Bool
     var updates: Bool
-    var needsPermission: Bool { duringMeetings || catchUp || updates }
+    var syncErrors: Bool
+    var needsPermission: Bool { duringMeetings || catchUp || updates || syncErrors }
 
     init(settings: AppSettings, supportsMeetings: Bool = MeetingActivityProbe.platformPotentiallySupported) {
         // Existing notification and suppression choices survive. Only unconfigured
@@ -59,6 +60,7 @@ struct NotificationSetupChoices: Equatable {
         duringMeetings = supportsMeetings && (settings.usesNotifications ? settings.notifyDuringMeetings : settings.inMeetingDelivery != .suppress)
         catchUp = settings.usesNotifications ? settings.notifyOnCatchUp : true
         updates = settings.automaticUpdateChecks
+        syncErrors = settings.usesNotifications ? settings.notifySyncErrors : true
     }
 }
 
@@ -126,11 +128,12 @@ struct FeatureGuideView: View {
                 switch guide.content {
                 case .notifications:
                     Text("New in this version: Notifications").font(.headline)
-                    Text("You can now receive meeting reminders and update alerts as macOS notifications. Choose when to use them below.")
+                    Text("Notifications can remind you about meetings and let you know about calendar sync problems and available updates. Choose which ones you want below.")
                         .font(.callout).foregroundStyle(.secondary)
                     Toggle("During another meeting", isOn: $choices.duringMeetings)
                         .disabled(!MeetingActivityProbe.platformPotentiallySupported || busy)
                     Toggle("Meetings in progress after launch or wake", isOn: $choices.catchUp).disabled(busy)
+                    Toggle("Calendar sync problems", isOn: $choices.syncErrors).disabled(busy)
                     Toggle("New updates available", isOn: $choices.updates).disabled(busy || !store.settings.automaticUpdateChecks)
                     if !store.settings.automaticUpdateChecks {
                         Text("Update notifications require automatic update checks, which are currently off.").font(.caption).foregroundStyle(.secondary)
