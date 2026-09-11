@@ -1,6 +1,6 @@
 # Current work target: build/test modernization and scanner cleanup
 
-Status: implementation and scanner review complete; final release preflight in progress.
+Status: complete; signed configurations, scanner review and final full release preflight passed.
 
 Branch: `feat/build-test-modernization`.
 
@@ -102,9 +102,9 @@ together.
       execution outside the agent sandbox for login-keychain access; no ad-hoc workaround.
 - [x] Both development and optimized release builds pass relevant tests; record artifact sizes and
       representative build timings without promising a particular improvement.
-- [ ] GUI launch and continued liveness pass, with no unexpected permission prompts. Use synthetic
+- [x] GUI launch and continued liveness pass, with no unexpected permission prompts. Use synthetic
       data and disposable app/preferences domains for integration tests.
-- [ ] The full release preflight passes against the final signed release artifact, including updater
+- [x] The full release preflight passes against the final signed release artifact, including updater
       smoke. It may temporarily quit/reopen a running now; preserve the harness's restoration logic.
 - [x] Analysis and analysis smoke tests pass with the new layout. Check full-report mode when
       editing baselined functions, since native SwiftLint baseline matching can hide growth in those
@@ -115,7 +115,7 @@ together.
 - [x] Run `npm ci`, `npm run format-docs`, and `npm run check-docs` after Markdown edits. Refresh
       affected wiki architecture explanations using the project AutoWiki skill when the architecture
       changes.
-- [ ] Finish with a clear report of the final target structure, commands, validation, remaining
+- [x] Finish with a clear report of the final target structure, commands, validation, remaining
       justified findings and limitations. Commit and push implementation progress on this branch.
 
 ## Boundaries and deferred work
@@ -207,10 +207,27 @@ returns ordinary standard preferences in shipping builds; only the updater fixtu
 required disposable suite. Its normal startup uses a synthetic empty profile with automatic updates
 and login registration disabled. The assertion and exact timeout/rollback expectations are retained.
 The focused updater suite now passes all 13 scenarios plus post-stage signature/version mutation
-checks. A fresh signed build and complete preflight are running with this correction.
+checks. A fresh signed build and complete preflight passed with this correction.
 
 Final analysis also covers the updater-runner configuration. The analysis smoke separately proves
 that shipping-only, selftest-only and updater-only compiler warnings fail, in addition to baseline
 matching and new-lint detection. One interactive menu-tracking assertion failed during a later
-preflight despite earlier successful runs; it is being rerun unchanged in isolation before the final
+preflight despite earlier successful runs; it passed unchanged in isolation and then in the final
 complete preflight. These GUI tests require an unlocked, undisturbed desktop.
+
+### Completion evidence
+
+Final full release preflight returned `RELEASE PREFLIGHT OK` on 2026-09-11 after the committed
+implementation. It included shipping signature/metadata/architecture/entitlement and fixture checks,
+production GUI liveness and diagnostics, debug and optimized selftests,
+notification/lifecycle/setup/ activation checks, reminder/menu/quit checks, cache restarts, feed
+streaming/cancellation/deadline checks, deterministic workloads, parser performance, and all updater
+installation/rollback/tampering checks. The shipping executable SHA-256 was unchanged across the
+test builds and complete preflight.
+
+Analysis passes with zero concurrency warnings in shipping, selftest and updater-runner
+configurations; all 16 retained lint findings are explicitly reviewed. Analysis smoke, shell syntax,
+Python compilation and Markdown formatting/checks pass. Both signed configurations were built.
+Implementation is organized into five coherent commits followed by this validation record. Work
+stays on `feat/build-test-modernization`; no merge, tag or release was performed. The remaining
+platform, live-service and interactive-GUI limitations above are deliberate and explicit.
