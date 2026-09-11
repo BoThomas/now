@@ -232,7 +232,7 @@ final class AlertController: ObservableObject {
         ] {
             displayObservers.append(center.addObserver(forName: name, object: object, queue: .main) { [weak self, weak panel] _ in
                 // Let AppKit finish moving the window before reading its destination.
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self, weak panel] in
                     MainActor.assumeIsolated {
                         guard let self, let panel, self.panel === panel else { return }
                         let screens = NSScreen.screens
@@ -993,7 +993,7 @@ struct SplitSegmentButtonStyle: ButtonStyle {
 }
 
 private struct SnoozeControlAnchor: PreferenceKey {
-    static var defaultValue: Anchor<CGRect>? = nil
+    static let defaultValue: Anchor<CGRect>? = nil
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
         value = nextValue() ?? value
     }

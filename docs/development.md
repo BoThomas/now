@@ -52,19 +52,19 @@ failures. `--report` makes findings informational but still fails on compiler/to
 and compiler-version information go under `.build/analysis/`, which app builds retain. Run analysis
 after building. Release preflight runs the default check, including with `--app`.
 
-The compiler checks `Sources/*.swift` and `Tests/NowTests/*.swift`, with
-`-strict-concurrency=complete` in Swift 5 mode for arm64/macOS 13. The initial baseline contains 13
-warnings from Apple Swift 6.3.3: shared preference defaults/formatter, concurrent closure captures,
-and actor-isolated settings helpers called by selftests. These are review items, not proof of 13
-runtime races. Matching uses file, diagnostic message, source-line text and occurrence count, so
-line-number shifts alone do not cause failures. Compiler/SDK upgrades or edits to a flagged line can
-require deliberate review. The current snapshot is written to
-`.build/analysis/concurrency-current.json`; it never overwrites the committed baseline.
+The compiler checks both shipping sources and the separate selftest configuration with
+`-strict-concurrency=complete` in Swift 5 mode for arm64/macOS 13. All 13 original warnings have
+been resolved; the concurrency baseline is empty. See the [finding review](../analysis/review.md)
+for ownership changes and retained lint rationales. Matching uses file, diagnostic message,
+source-line text and occurrence count, so line-number shifts alone do not cause failures.
+Compiler/SDK upgrades or edits to a flagged line can require deliberate review. The current snapshot
+is written to `.build/analysis/concurrency-current.json`; it never overwrites the committed
+baseline.
 
 SwiftLint checks complexity, function length, parameter count, nesting, force casts/tries, duplicate
 conditions and identical operands. The separate `Tests` directory is outside production lint scope;
 embedded test helpers in other files remain included. File/type length and formatting rules are
-deliberately absent. The initial 17 findings are mostly parser branching and long functions, with
+deliberately absent. The 16 retained findings are mostly parser branching and long functions, with
 two seven-parameter helpers. For example, strict RRULE parsing has complexity 37: its rejection
 branches protect correctness, so reducing that number alone is not a reason to rewrite it.
 

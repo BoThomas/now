@@ -1460,7 +1460,7 @@ final class UpdateController: ObservableObject {
             releasesURL: Links.releases.absoluteString,
             extraEnv: [:],
             onExit: { [weak self] status in
-                RunLoop.main.perform(inModes: [.common]) {
+                RunLoop.main.perform(inModes: [.common]) { [weak self] in
                     MainActor.assumeIsolated { self?.installHelperExited(attempt: attempt, status: status) }
                 }
             }

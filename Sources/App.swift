@@ -205,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.prepareForTermination { [weak self] in
             // terminateLater runs a modal loop; ordinary main-queue Tasks may
             // stall there. Deliver the reply in the common run-loop modes.
-            RunLoop.main.perform(inModes: [.common]) {
+            RunLoop.main.perform(inModes: [.common]) { [weak self] in
                 MainActor.assumeIsolated {
                     guard self?.terminationGate.finish(request) == true else { return }
                     sender.reply(toApplicationShouldTerminate: true)
@@ -730,20 +730,20 @@ enum NowApp {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         let semaphore = DispatchSemaphore(value: 0)
-        var data: Data?
-        var status: Int?
-        var fetchError: String?
         guard UpdateFetch.allows(url, apiBaseOverride: UpdateFetch.apiBaseOverride) else {
             print("DECISION error — update URL must use HTTPS")
             return
         }
         UpdateTransport.session.dataTask(with: request) { body, response, error in
-            data = body
-            status = (response as? HTTPURLResponse)?.statusCode
-            fetchError = error?.localizedDescription
+            reportUpdateResponse(data: body, status: (response as? HTTPURLResponse)?.statusCode,
+                                 fetchError: error?.localizedDescription)
             semaphore.signal()
         }.resume()
         semaphore.wait()
+    }
+
+    // The response remains owned by its completion; the waiting CLI shares no mutable results.
+    private static func reportUpdateResponse(data: Data?, status: Int?, fetchError: String?) {
         if let fetchError {
             print("HTTP error — \(fetchError)")
             return

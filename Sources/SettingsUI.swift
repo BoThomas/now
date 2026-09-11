@@ -608,7 +608,7 @@ private struct UnmuteRulePopover: View {
 }
 
 private struct UpcomingEventListWidthKey: PreferenceKey {
-    static var defaultValue: CGFloat = 600
+    static let defaultValue: CGFloat = 600
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
@@ -1061,7 +1061,7 @@ private struct SidebarRow: View {
 /// Reports each settings section's top edge within the scroll view, so the
 /// sidebar selection can follow manual scrolling.
 struct SectionTopKey: PreferenceKey {
-    static var defaultValue: [String: CGFloat] = [:]
+    static let defaultValue: [String: CGFloat] = [:]
 
     static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
         value.merge(nextValue(), uniquingKeysWith: { current, _ in current })
@@ -1356,14 +1356,14 @@ struct SettingsView: View {
     }
 
     /// The section whose header is nearest the reading line below the top edge.
-    static func activeSection(from tops: [String: CGFloat]) -> SettingsSection {
+    nonisolated static func activeSection(from tops: [String: CGFloat]) -> SettingsSection {
         let present = SettingsSection.allCases.filter { tops[$0.rawValue] != nil }
         return present.min {
             abs((tops[$0.rawValue] ?? 0) - 140) < abs((tops[$1.rawValue] ?? 0) - 140)
         } ?? .calendars
     }
 
-    static func activeSection(from tops: [String: CGFloat], viewportHeight: CGFloat, contentBottom: CGFloat?) -> SettingsSection {
+    nonisolated static func activeSection(from tops: [String: CGFloat], viewportHeight: CGFloat, contentBottom: CGFloat?) -> SettingsSection {
         // The final card cannot normally reach the top threshold. At the exact
         // bottom of the scroll view, select it rather than leaving General active.
         if let bottom = contentBottom,

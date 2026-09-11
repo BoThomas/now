@@ -1,6 +1,6 @@
 # Current work target: build/test modernization and scanner cleanup
 
-Status: phases 1–2 implemented and validated; scanner review and final preflight remain.
+Status: implementation and scanner review complete; final release preflight in progress.
 
 Branch: `feat/build-test-modernization`.
 
@@ -77,18 +77,18 @@ instructions when the implemented build actually changes.
 
 ## Phase 3: resolve scanner findings
 
-- [ ] Address concurrency warnings in small batches: immutable preference defaults, isolation of
+- [x] Address concurrency warnings in small batches: immutable preference defaults, isolation of
       pure settings helpers, shared formatter ownership, and nested callback captures/shared
       callback results. Inspect actual thread and lifetime guarantees; warnings are not
       automatically races.
-- [ ] Review all lint findings. Extract cohesive parser stages or responsibilities only where it
+- [x] Review all lint findings. Extract cohesive parser stages or responsibilities only where it
       improves understanding. Preserve strict rejection, recurrence identity and resource budgets.
       Complexity needed for correct validation may warrant a documented retained finding.
-- [ ] Remove resolved baseline entries and verify that new findings still fail. Never
+- [x] Remove resolved baseline entries and verify that new findings still fail. Never
       bulk-regenerate baselines, loosen thresholds, add blanket suppressions, or add unsafe
       concurrency annotations simply to obtain a pass. Path-only baseline migrations must be
       reviewable and preserve the original findings without silently accepting new ones.
-- [ ] Record each remaining finding with a concrete rationale. The target is resolved or
+- [x] Record each remaining finding with a concrete rationale. The target is resolved or
       deliberately justified findings, not mechanically achieving zero warnings through
       suppressions.
 
@@ -165,3 +165,13 @@ factory from growing the baselined startup function; its resolved length entry w
 Concurrency baseline edits only relocate the two selftest paths. Shipping builds omit unit fixtures
 and the updater smoke entry/body. Notification/lifecycle/recovery and reminder/menu/quit suites
 pass.
+
+### Stage 3 — scanner ownership fixes
+
+All 13 concurrency warnings are resolved: immutable preference defaults, nonisolated pure settings
+helpers, per-call relative formatter ownership, independent nested weak captures, and
+completion-owned update diagnostic output. Both shipping and selftest strict-concurrency
+configurations report zero. The concurrency baseline was pruned after verification, not regenerated.
+The 16 retained lint findings have individual rationales and coverage references in
+`analysis/review.md`; no thresholds or matching rules changed. Analysis smoke confirms new
+warnings/findings still fail.
