@@ -55,6 +55,8 @@ codesign --verify --deep --strict "$APP_PATH"
 APP_PATH="outputs/testing/release/now.app"
 
 WORK="$(mktemp -d "${TMPDIR}now update test.XXXXXX")"   # note the space — on purpose
+export NOW_TEST_PREFERENCES_DOMAIN="com.thomasboch.now.updater-smoke.$(uuidgen)"
+export NOW_TEST_CACHE_ROOT="$WORK/cache"
 SERVER_PID=""
 MUTATION_PID=""
 declare -a REOPEN_AFTER=()
@@ -68,6 +70,7 @@ cleanup() {
     wait "$MUTATION_PID" 2>/dev/null || true
   fi
   [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null || true
+  defaults delete "$NOW_TEST_PREFERENCES_DOMAIN" >/dev/null 2>&1 || true
   rm -rf "$WORK"
   # NB: never name this loop variable "path" — in zsh that array is tied to
   # $PATH, and assigning it would break every subsequent command lookup

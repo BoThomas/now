@@ -98,21 +98,21 @@ During the transition follow the current `AGENTS.md` commands. If commands chang
 compatibility wrappers until replacements are validated, then update all callers and instructions
 together.
 
-- [ ] Signed build and selftest/replacement test suite pass. On this machine the signed build needs
+- [x] Signed build and selftest/replacement test suite pass. On this machine the signed build needs
       execution outside the agent sandbox for login-keychain access; no ad-hoc workaround.
-- [ ] Both development and optimized release builds pass relevant tests; record artifact sizes and
+- [x] Both development and optimized release builds pass relevant tests; record artifact sizes and
       representative build timings without promising a particular improvement.
 - [ ] GUI launch and continued liveness pass, with no unexpected permission prompts. Use synthetic
       data and disposable app/preferences domains for integration tests.
 - [ ] The full release preflight passes against the final signed release artifact, including updater
       smoke. It may temporarily quit/reopen a running now; preserve the harness's restoration logic.
-- [ ] Analysis and analysis smoke tests pass with the new layout. Check full-report mode when
+- [x] Analysis and analysis smoke tests pass with the new layout. Check full-report mode when
       editing baselined functions, since native SwiftLint baseline matching can hide growth in those
       functions.
-- [ ] Verify the release artifact no longer includes the full unit-test runner/fixtures and that
+- [x] Verify the release artifact no longer includes the full unit-test runner/fixtures and that
       supported diagnostic commands still work. Check that test builds cannot replace release
       outputs.
-- [ ] Run `npm ci`, `npm run format-docs`, and `npm run check-docs` after Markdown edits. Refresh
+- [x] Run `npm ci`, `npm run format-docs`, and `npm run check-docs` after Markdown edits. Refresh
       affected wiki architecture explanations using the project AutoWiki skill when the architecture
       changes.
 - [ ] Finish with a clear report of the final target structure, commands, validation, remaining
@@ -128,10 +128,8 @@ CI/signing-secret setup as incidental work.
 
 ## Handoff
 
-The planning commit contains no implementation changes. Continue on this branch, update the
-checkboxes and decision notes as work proceeds, and keep build migration, test migration and scanner
-cleanup reviewable separately. This handoff is for later implementation; do not start that work as
-part of the planning task. Merging or releasing the resulting work requires a later request.
+Implementation stages are recorded below. Continue to use this branch; do not merge or release
+without a separate request. Final validation and any remaining limitations belong in this plan.
 
 ## Implementation evidence
 
@@ -175,3 +173,38 @@ configurations report zero. The concurrency baseline was pruned after verificati
 The 16 retained lint findings have individual rationales and coverage references in
 `analysis/review.md`; no thresholds or matching rules changed. Analysis smoke confirms new
 warnings/findings still fail.
+
+### Final artifact and regression checks
+
+The final release executable is 2,560,848 bytes (ZIP 2,000,298 bytes); debug is 9,908,000 bytes. The
+final incremental signed debug build took 5.37 seconds; release compilation after ownership changes
+took 17.06 seconds. These are local observations, not performance guarantees. Swift 5, arm64, the
+macOS 13 load command, bundle metadata, exact designated requirement, and entitlements are verified
+by the new artifact smoke. Test builds use separate output paths and scratch directories.
+
+Production parser and synthetic update-check diagnostics pass. A signed disposable copy remains live
+through the real GUI entry point for five seconds. Hosted optimized startup/activation tests cover
+setup migrations, background focus and policy restoration. The parser benchmark's historical stub
+was restricted to its standalone comparison after preflight exposed a duplicate AppStore; the
+SwiftPM and standalone builds now produce identical full-event digests for 7,000 recurring
+occurrences and 5,000 coincident overrides. No behavioral assertions or fixtures were removed.
+
+Remaining limitations: validation runs on macOS 26.6.2 with the 26.5 SDK, not a physical macOS 13
+host. Real Calendar permission prompts and live Notification Center delivery were not exercised.
+Updater fault tests use the separately signed optimized runner with production updater logic;
+shipping startup, signature and diagnostics are checked independently. Sixteen lint findings remain
+with concrete rationales in `analysis/review.md`. Per-call relative formatting adds an allocation;
+no runtime speed improvement is claimed. Full Xcode/XCTest adoption remains unnecessary for this
+Command Line Tools workflow.
+
+### Updater fixture isolation correction
+
+The first complete updater run exposed an old harness isolation gap: changing HOME did not reliably
+isolate UserDefaults. The new empty-native-calendar assertion stopped the health-timeout child when
+it encountered the installed profile. The runner now supplies a disposable preference suite and
+cache explicitly, under the unchanged pinned signing/bundle identity. `AppPreferences.standard`
+returns ordinary standard preferences in shipping builds; only the updater fixture selects its
+required disposable suite. Its normal startup uses a synthetic empty profile with automatic updates
+and login registration disabled. The assertion and exact timeout/rollback expectations are retained.
+The focused updater suite now passes all 13 scenarios plus post-stage signature/version mutation
+checks. A fresh signed build and complete preflight are running with this correction.

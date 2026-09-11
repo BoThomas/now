@@ -89,3 +89,9 @@ existing store/controller methods so settings edits participate in reconciliatio
 
 Before changing this area, read the relevant
 [engineering constraints and regression notes](engineering-notes.md).
+
+The signed updater fixture keeps the pinned bundle identity needed by signature validation, so it
+cannot isolate preferences by renaming the bundle. `AppPreferences.standard` uses ordinary standard
+preferences in shipping builds and a required disposable suite in updater-test compilation. The
+fixture also injects a temporary cache and empty profile into AppDelegate. Other hosted fixtures use
+their disposable bundle domains. See [test isolation](../docs/development.md#test-target-boundary).

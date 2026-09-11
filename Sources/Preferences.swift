@@ -2,6 +2,23 @@ import Foundation
 import Combine
 import OSLog
 
+/// Production persistence uses the standard domain. The signed updater fixture must
+/// keep its pinned bundle ID, so its compilation uses an explicit disposable suite.
+enum AppPreferences {
+    static var standard: UserDefaults {
+        #if NOW_UPDATER_TESTS
+        guard let domain = ProcessInfo.processInfo.environment["NOW_TEST_PREFERENCES_DOMAIN"],
+              domain.hasPrefix("com.thomasboch.now.updater-smoke."),
+              let defaults = UserDefaults(suiteName: domain) else {
+            preconditionFailure("Updater fixture requires disposable preferences")
+        }
+        return defaults
+        #else
+        return UserDefaults.standard
+        #endif
+    }
+}
+
 /// Attached to one decoder. Tolerant model decoding records damaged fields
 /// without turning a recoverable sibling into a failed profile.
 final class PreferenceDecoding: @unchecked Sendable {
@@ -37,11 +54,11 @@ final class PersistenceStatus: ObservableObject {
     func report(key: String, message: String, defaults: UserDefaults) {
         // Log only fixed labels/messages, never calendar URLs or raw decoding errors.
         Self.logger.error("\(message, privacy: .public)")
-        if defaults === UserDefaults.standard { issues[key] = message }
+        if defaults === AppPreferences.standard { issues[key] = message }
     }
 
     func reviewed(_ key: String) {
-        UserDefaults.standard.set(true, forKey: StoredPreferences.reviewedKey(key))
+        AppPreferences.standard.set(true, forKey: StoredPreferences.reviewedKey(key))
         issues.removeValue(forKey: key)
     }
 }
@@ -56,7 +73,7 @@ enum StoredPreferences {
     static func recoveryKey(_ key: String) -> String { key + ".recovery.v1" }
     static func reviewedKey(_ key: String) -> String { key + ".recovery-reviewed.v1" }
 
-    static func needsReview(_ key: String, defaults: UserDefaults = .standard) -> Bool {
+    static func needsReview(_ key: String, defaults: UserDefaults = AppPreferences.standard) -> Bool {
         defaults.object(forKey: recoveryKey(key)) != nil && !defaults.bool(forKey: reviewedKey(key))
     }
 
@@ -69,7 +86,7 @@ enum StoredPreferences {
     }
 
     static func load<T: Decodable>(_ type: T.Type, key: String, label: String,
-                                  defaults: UserDefaults = .standard, maxBytes: Int = 16_000_000) -> T? {
+                                  defaults: UserDefaults = AppPreferences.standard, maxBytes: Int = 16_000_000) -> T? {
         let notice = "\(label) needed recovery. Saved copies were kept; please review your settings and calendars."
         if needsReview(key, defaults: defaults) {
             PersistenceStatus.shared.report(key: key, message: notice, defaults: defaults)
@@ -99,7 +116,7 @@ enum StoredPreferences {
 
     @discardableResult
     static func save<T: Encodable>(_ value: T, key: String, label: String,
-                                   defaults: UserDefaults = .standard, maxBytes: Int = 16_000_000) -> Bool {
+                                   defaults: UserDefaults = AppPreferences.standard, maxBytes: Int = 16_000_000) -> Bool {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]

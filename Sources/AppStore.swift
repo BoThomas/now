@@ -165,7 +165,7 @@ final class AppStore: ObservableObject {
     }()
 
     init(eventCache: CalendarEventCache = CalendarEventCache(), initialState: Persisted? = nil, meetingActivitySource: MeetingActivitySource? = nil) {
-        hadSavedProfile = initialState != nil || UserDefaults.standard.object(forKey: Self.storageKey) != nil
+        hadSavedProfile = initialState != nil || AppPreferences.standard.object(forKey: Self.storageKey) != nil
             || UserDefaults(suiteName: Self.legacyDomain)?.object(forKey: Self.storageKey) != nil
         let state = initialState ?? Self.loadState()
         self.eventCache = eventCache
@@ -1569,11 +1569,11 @@ final class AppStore: ObservableObject {
     static func loadState() -> Persisted {
         // Legacy migration only applies when the current key is absent. A
         // damaged current profile must never revive an unrelated older profile.
-        if UserDefaults.standard.object(forKey: storageKey) != nil {
+        if AppPreferences.standard.object(forKey: storageKey) != nil {
             return StoredPreferences.load(Persisted.self, key: storageKey, label: "Calendars and settings") ?? Persisted()
         }
         if let legacy = UserDefaults(suiteName: legacyDomain), let original = legacy.object(forKey: storageKey) {
-            UserDefaults.standard.set(original, forKey: storageKey)
+            AppPreferences.standard.set(original, forKey: storageKey)
             return StoredPreferences.load(Persisted.self, key: storageKey, label: "Calendars and settings") ?? Persisted()
         }
         return Persisted()

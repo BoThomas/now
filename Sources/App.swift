@@ -514,7 +514,11 @@ extension AppDelegate: NSWindowDelegate {
 @main
 #endif
 enum NowApp {
+    #if NOW_UPDATER_TESTS
+    @MainActor static let appDelegate = UpdaterTestRunner.makeDelegate()
+    #else
     @MainActor static let appDelegate = AppDelegate()
+    #endif
 
     static func main() {
         let arguments = ProcessInfo.processInfo.arguments
