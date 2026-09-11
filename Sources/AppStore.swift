@@ -26,7 +26,11 @@ struct MenuBarFocus {
 final class AppStore: ObservableObject {
     nonisolated static let storageKey = "local.tboch.now.state.v1"
     let hadSavedProfile: Bool
+    #if NOW_TESTING
+    nonisolated static var legacyDomain: String { (Bundle.main.bundleIdentifier ?? "now-tests") + ".legacy" }
+    #else
     nonisolated static let legacyDomain = "local.tboch.now"
+    #endif
     nonisolated static let soundNames = ["Basso", "Blow", "Bottle", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"]
 
     @Published var subscriptions: [CalendarSubscription] {
@@ -151,6 +155,9 @@ final class AppStore: ObservableObject {
     nonisolated static let transportDelegate = CalendarTransportDelegate()
     nonisolated static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
+        #if NOW_CACHE_TESTS
+        config.protocolClasses = [OfflineProtocol.self]
+        #endif
         config.timeoutIntervalForRequest = 25
         config.timeoutIntervalForResource = 60
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -512,6 +519,10 @@ final class AppStore: ObservableObject {
     /// EventKit is a fast local query — fetch synchronously on the main actor (same
     /// replace-on-apply semantics as the ICS refresh) and rebuild the merged event list.
     func fetchNativeEvents() {
+        #if NOW_TESTING
+        precondition(nativeCalendars.isEmpty, "Hosted fixtures must use synthetic ICS calendars")
+        return
+        #else
         refreshNativeAuthorization()
         nativeCalendarInfos = nativeSource.availableCalendarInfos()
         let enabled = nativeCalendars.filter(\.isEnabled)
@@ -524,6 +535,7 @@ final class AppStore: ObservableObject {
         }
         nativeEvents = nativeSource.fetchEvents(calendars: enabled, skipDeclined: settings.skipDeclined, now: Date())
         rebuildEvents(observedCalendarIDs: Set(enabled.map(\.id)))
+        #endif
     }
 
     private func scheduleNativeStoreRefresh() {
@@ -1805,3 +1817,28 @@ struct ReminderSnapshotTracker {
         return retained
     }
 }
+
+#if NOW_TESTING
+// Test-only access to production transitions; absent from shipping compilation.
+extension AppStore {
+    var smokeFetchTracker: FetchTracker {
+        get { fetchTracker }
+        set { fetchTracker = newValue }
+    }
+    var smokeIsRefreshing: Bool {
+        get { isRefreshing }
+        set { isRefreshing = newValue }
+    }
+    var smokeLoginItemState: LoginItemState {
+        get { loginItemState }
+        set { loginItemState = newValue }
+    }
+    func smokeTick() { tick() }
+    func smokeCommitEvents(_ events: [MeetingEvent], observedCalendarIDs: Set<UUID> = []) { commitEvents(events, observedCalendarIDs: observedCalendarIDs) }
+    func smokeMerge(results: [FetchResult]) { merge(results: results) }
+    func smokeFinishRefresh(fetched: [CalendarSubscription], requestID: Int) { finishRefresh(fetched: fetched, requestID: requestID) }
+    func smokeAppBecameActive() { appBecameActive() }
+    func smokeBeginFullRefresh(subscriptionIDs: [UUID]) -> Int { beginFullRefresh(subscriptionIDs: subscriptionIDs) }
+    func smokeRetryMeetingDetection(force: Bool = false) { retryMeetingDetection(force: force) }
+}
+#endif

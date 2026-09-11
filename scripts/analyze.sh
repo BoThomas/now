@@ -35,7 +35,7 @@ swiftc --version > .build/analysis/toolchain.txt 2>&1
 print "Strict concurrency typecheck (Swift 5, arm64, macOS 13)…"
 if ! swiftc -typecheck -parse-as-library -swift-version 5 -strict-concurrency=complete \
   -sdk "$SDK_PATH" -target arm64-apple-macos13.0 \
-  -module-cache-path "$PWD/.build/analysis/ModuleCache" Sources/*.swift \
+  -module-cache-path "$PWD/.build/analysis/ModuleCache" -D NOW_TESTING -D NOW_SELFTEST_TESTS Sources/*.swift Tests/NowTests/*.swift \
   > .build/analysis/concurrency.log 2>&1; then
   cat .build/analysis/concurrency.log
   exit 1

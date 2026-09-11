@@ -68,10 +68,10 @@ final class NotificationPreview: NSObject, NSApplicationDelegate {
                 MeetingEvent(uid: "preview-\(index)", title: "Synthetic meeting \(index + 1)", start: date.addingTimeInterval(120), end: date.addingTimeInterval(1800),
                              location: nil, notes: nil, link: nil, calendarID: source.id, calendarName: source.name, colorIndex: index)
             }
-            store.commitEvents(events)
-            store.finishRefresh(fetched: [source], requestID: store.beginFullRefresh(subscriptionIDs: [source.id]))
+            store.smokeCommitEvents(events)
+            store.smokeFinishRefresh(fetched: [source], requestID: store.smokeBeginFullRefresh(subscriptionIDs: [source.id]))
             timer = AppStore.commonTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.store.tick() }
+                MainActor.assumeIsolated { self?.store.smokeTick() }
             }
         }
     }
@@ -123,22 +123,22 @@ final class SetupAppSmoke {
                 require(delegate.store.hadSavedProfile == existingProfile, "profile presence captured before migration")
                 if existingProfile {
                     require(!NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible }, "existing empty profile stays quiet")
-                    require(!delegate.setupAssistant.pending, "existing profile bypasses assistant")
+                    require(!delegate.smokeSetupAssistant.pending, "existing profile bypasses assistant")
                     require(NSApp.windows.contains { $0.title == "What’s New" && $0.isVisible }, "manual upgrade presents unseen features without install marker")
                 } else {
-                    require(delegate.setupWindow?.isVisible == true, "fresh launch displays assistant without sources")
+                    require(delegate.smokeSetupWindow?.isVisible == true, "fresh launch displays assistant without sources")
                     require(NSApp.activationPolicy() == .regular, "assistant owns app menus")
-                    delegate.setupAssistant.next()
-                    delegate.setupWindow?.close()
+                    delegate.smokeSetupAssistant.next()
+                    delegate.smokeSetupWindow?.close()
                     delegate.openSettings()
-                    require(delegate.setupWindow?.isVisible == true && delegate.setupAssistant.state.step == .reminders,
+                    require(delegate.smokeSetupWindow?.isVisible == true && delegate.smokeSetupAssistant.state.step == .reminders,
                             "close and reopen resumes same step")
-                    delegate.setupAssistant.draft.leadSeconds = 45
-                    delegate.setupAssistant.next()
-                    let completed = await delegate.setupAssistant.complete(store: delegate.store, permission: { false }, probe: { .success([]) })
+                    delegate.smokeSetupAssistant.draft.leadSeconds = 45
+                    delegate.smokeSetupAssistant.next()
+                    let completed = await delegate.smokeSetupAssistant.complete(store: delegate.store, permission: { false }, probe: { .success([]) })
                     require(completed, "fullscreen setup completes without permission")
-                    delegate.finishInitialSetup()
-                    require(delegate.setupWindow?.isVisible == false && NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible }, "finish opens source Settings and closes assistant")
+                    delegate.smokeFinishInitialSetup()
+                    require(delegate.smokeSetupWindow?.isVisible == false && NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible }, "finish opens source Settings and closes assistant")
                     require(delegate.store.settings.leadSeconds == 45, "real AppDelegate retains setup settings")
                 }
                 @MainActor func settingsVisible() -> Bool { NSApp.windows.contains { $0.title == "now · Settings" && $0.isVisible } }
@@ -183,7 +183,7 @@ final class SetupAppSmoke {
                             start: date.addingTimeInterval(120), end: date.addingTimeInterval(1800),
                             location: nil, notes: nil, link: nil, calendarID: calendarID, calendarName: "Synthetic", colorIndex: index)
                     }
-                    delegate.store.commitEvents(meetings)
+                    delegate.store.smokeCommitEvents(meetings)
                     let group = ReminderNotification(id: "now.meeting.agenda-smoke", keys: meetings.map(NotificationLogic.eventKey),
                         fingerprints: ["first", "second"], expires: date.addingTimeInterval(1800), catchUp: false,
                         title: "", body: "", category: "", sound: false)
@@ -195,7 +195,7 @@ final class SetupAppSmoke {
                     require(reopenedDuringAgenda, "group agenda stays open past the original one-second notification guard")
                     require(reopenedAfterAgenda, "notification reopen arrives after agenda dismissal")
                     require(!settingsVisible(), "notification agenda dismissal must not open Settings")
-                    delegate.store.commitEvents([])
+                    delegate.store.smokeCommitEvents([])
                 }
                 delegate.openSettings()
                 require(settingsVisible(), "Settings remains available on explicit request")

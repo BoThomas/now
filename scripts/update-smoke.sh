@@ -48,6 +48,12 @@ else
   APP_PATH="outputs/now.app"
 fi
 
+# Validate the supplied shipping artifact, then exercise the same updater code
+# with the explicit headless/fault runner. Test builds never replace release output.
+codesign --verify --deep --strict "$APP_PATH"
+./build-app.sh --require-identity --release --test-updater
+APP_PATH="outputs/testing/release/now.app"
+
 WORK="$(mktemp -d "${TMPDIR}now update test.XXXXXX")"   # note the space — on purpose
 SERVER_PID=""
 MUTATION_PID=""

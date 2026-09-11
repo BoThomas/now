@@ -719,3 +719,12 @@ private struct EventDetailsPopover: View {
         .frame(minWidth: 360, maxWidth: 360, minHeight: 240, maxHeight: 360)
     }
 }
+
+#if NOW_TESTING
+extension MenuBarController {
+    var smokeMenu: NSMenu { statusItem.menu! }
+    func smokeBeginTracking() { menuIsTracking = true }
+    func smokeEndTracking() { menuIsTracking = false }
+    func smokeRefreshMenu(at date: Date) { refreshOpenMenu(now: date) }
+}
+#endif

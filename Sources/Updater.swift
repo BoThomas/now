@@ -1325,6 +1325,10 @@ final class UpdateController: ObservableObject {
     // MARK: Staging
 
     private func beginStaging(_ manifest: UpdateManifest) {
+        #if NOW_NOTIFICATION_TESTS
+        // Notification fixtures exercise offer state; archive/install coverage uses updater smoke.
+        return
+        #else
         clearStaging()
         preparationFailure = nil
         let generation = stagingTracker.begin(version: manifest.version)
@@ -1358,6 +1362,7 @@ final class UpdateController: ObservableObject {
                 }
             }
         }
+        #endif
     }
 
     func retryPreparation() {
@@ -1514,3 +1519,27 @@ final class UpdateController: ObservableObject {
         StoredPreferences.save(state, key: Self.stateKey, label: "Update history")
     }
 }
+
+#if NOW_TESTING
+// Test-only access to production transitions; absent from shipping compilation.
+extension UpdateController {
+    var smokeStagedVersion: String? {
+        get { stagedVersion }
+        set { stagedVersion = newValue }
+    }
+    var smokeState: UpdateState {
+        get { state }
+        set { state = newValue }
+    }
+    var smokeStagedRoot: URL? {
+        get { stagedRoot }
+        set { stagedRoot = newValue }
+    }
+    var smokeInstallAttempt: UUID? {
+        get { installAttempt }
+        set { installAttempt = newValue }
+    }
+    func smokeApplyDecision(_ decision: UpdateDecision, userInitiated: Bool) { applyDecision(decision, userInitiated: userInitiated) }
+    func smokeInstallHelperExited(attempt: UUID, status: Int32) { installHelperExited(attempt: attempt, status: status) }
+}
+#endif

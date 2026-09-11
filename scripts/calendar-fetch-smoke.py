@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from harness import build
 """Local calendar ingestion smoke; compiles production sources without starting the app."""
 import argparse
 import datetime
@@ -114,16 +115,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 with tempfile.TemporaryDirectory(prefix="now-calendar-smoke-") as directory:
     directory = pathlib.Path(directory)
     # Preserve the real CLI helpers used by SelfTest, replacing only the entry point.
-    app = directory / "App.swift"
-    app.write_text((ROOT / "Sources/App.swift").read_text().replace("@main\nenum NowApp", "enum NowApp", 1))
-    sources = sorted(str(p) for p in (ROOT / "Sources").glob("*.swift") if p.name != "App.swift")
-    sdk = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
-    executable = directory / "calendar-fetch-smoke"
-    subprocess.run(["swiftc", "-parse-as-library", "-swift-version", "5", "-sdk", sdk,
-                    "-target", "arm64-apple-macos13.0", "-module-cache-path", str(directory / "modules"),
-                    *sources, str(app), str(ROOT / "scripts/calendar-fetch-smoke.swift"), "-o", str(executable),
-                    "-framework", "SwiftUI", "-framework", "AppKit", "-framework", "ServiceManagement",
-                    "-framework", "EventKit", "-framework", "CoreAudio"], check=True)
+    executable = directory / "fetch-smoke"
+    build("fetch", executable)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:

@@ -4,11 +4,11 @@
 
 ## Startup and ownership
 
-[NowApp.main](../Sources/App.swift) dispatches diagnostic and selftest arguments before starting
-`NSApplication`. Normal startup installs `AppDelegate`, starts as an accessory app, and enters the
-AppKit run loop. The delegate owns the store, alert controller, menu controller, and
-settings/setup/update windows. `applicationDidFinishLaunching` wires notification responses and
-delivery callbacks before calling `AppStore.start()` and `UpdateController.start()`.
+[NowApp.main](../Sources/App.swift) dispatches diagnostic arguments before starting `NSApplication`.
+Normal startup installs `AppDelegate`, starts as an accessory app, and enters the AppKit run loop.
+The delegate owns the store, alert controller, menu controller, and settings/setup/update windows.
+`applicationDidFinishLaunching` wires notification responses and delivery callbacks before calling
+`AppStore.start()` and `UpdateController.start()`.
 
 [AppStore](../Sources/AppStore.swift) is the main-actor state owner. It loads the saved profile and
 reminder history, starts a shared asynchronous ICS cache load, and re-encodes preferences to

@@ -16,10 +16,10 @@ also runs it. `./scripts/setup-analysis.sh` installs the pinned linter once, and
 analysis command exposes the existing backlog. See the
 [analysis workflow](../docs/development.md#code-analysis) for baseline review and limitations.
 
-[SelfTest.run](../Sources/SelfTest.swift) aggregates pure parser, recurrence, reminder,
-notification, settings, fetch/cache, bookkeeping, filter, and updater checks. It dispatches before
-normal app startup; keep new tests free of constructed EventKit stores or fullscreen panels. Extend
-the existing pure policy helpers when testing decisions.
+[SelfTest.run](../Tests/NowTests/SelfTest.swift) aggregates pure parser, recurrence, reminder,
+notification, settings, fetch/cache, bookkeeping, filter, and updater checks. Its own entry point
+never starts the normal app; keep new tests free of constructed EventKit stores or fullscreen
+panels. Extend the existing pure policy helpers when testing decisions.
 
 | Changed behavior                                                  | Focused checks beyond build/selftest                                                                                                                                                              |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

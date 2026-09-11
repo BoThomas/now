@@ -10,11 +10,6 @@ only_rules:
   - identical_operands
 included:
   - Sources
-excluded:
-  - Sources/SelfTest.swift
-  - Sources/SelfTestCache.swift
-  - Sources/SelfTestReadiness.swift
-  - Sources/NotificationTests.swift
 cyclomatic_complexity:
   warning: 15
   error: 30

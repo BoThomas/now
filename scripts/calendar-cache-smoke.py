@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from harness import build
 """Real process restarts with production cache, transport, AppStore and native menu.
 Only synthetic feeds, a temporary cache and a disposable preferences domain are used.
 """
@@ -44,27 +45,8 @@ with tempfile.TemporaryDirectory(prefix="now-cache-smoke-") as folder:
         "CFBundleIdentifier": "com.thomasboch.now.cache-smoke." + uuid.uuid4().hex,
         "CFBundleExecutable": "cache-smoke", "LSUIElement": True
     }))
-    app = directory / "App.swift"
-    app.write_text((ROOT / "Sources/App.swift").read_text().replace("@main\nenum NowApp", "enum NowApp", 1))
-    store = directory / "AppStore.swift"
-    text = (ROOT / "Sources/AppStore.swift").read_text().replace("private func tick()", "func tick()", 1)
-    text = text.replace("private func merge(results:", "func merge(results:", 1)
-    text = text.replace("private var fetchTracker", "var fetchTracker", 1)
-    text = text.replace("eventCache: CalendarEventCache = CalendarEventCache()", "eventCache: CalendarEventCache = CalendarEventCache(directory: URL(fileURLWithPath: " + json.dumps(str(directory / "cache")) + "))")
-    # Inject a URL loading failure, not a guessed error string or a network change.
-    text = text.replace("let config = URLSessionConfiguration.ephemeral", "let config = URLSessionConfiguration.ephemeral\n        config.protocolClasses = [OfflineProtocol.self]")
-    start = text.index("    func fetchNativeEvents() {")
-    end = text.index("    private func scheduleNativeStoreRefresh()", start)
-    text = text[:start] + "    func fetchNativeEvents() { precondition(nativeCalendars.isEmpty) }\n\n" + text[end:]
-    store.write_text(text)
-    sources = sorted(str(p) for p in (ROOT / "Sources").glob("*.swift") if p.name not in ["App.swift", "AppStore.swift"])
     executable = bundle / "MacOS/cache-smoke"
-    sdk = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
-    subprocess.run(["swiftc", "-parse-as-library", "-swift-version", "5", "-sdk", sdk,
-                    "-target", "arm64-apple-macos13.0", "-module-cache-path", str(directory / "modules"),
-                    *sources, str(app), str(store), str(ROOT / "scripts/calendar-cache-smoke.swift"),
-                    "-o", str(executable), "-framework", "SwiftUI", "-framework", "AppKit",
-                    "-framework", "ServiceManagement", "-framework", "EventKit", "-framework", "CoreAudio"], check=True)
+    build("cache", executable)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:

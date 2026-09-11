@@ -10,7 +10,7 @@ import sys
 def diagnostics(log):
     findings = []
     for line in log.splitlines():
-        match = re.match(r"^(Sources/[^:]+):(\d+):\d+: warning: (.*)$", line)
+        match = re.match(r"^((?:Sources|Tests)/[^:]+):(\d+):\d+: warning: (.*)$", line)
         if match:
             filename, number, message = match.groups()
             source = Path(filename).read_text().splitlines()[int(number) - 1].strip()

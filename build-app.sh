@@ -12,6 +12,7 @@ MODULE_CACHE="$(pwd)/.build/ModuleCache"
 REQUIRE_IDENTITY=false
 CONFIGURATION=release
 CLEAN=false
+UPDATER_TEST=false
 SIGNING_IDENTITY_SHA1="${NOW_SIGNING_IDENTITY_SHA1:-A505B08900C56A28709479297A049525A2A187C6}"
 
 [[ "$SIGNING_IDENTITY_SHA1" =~ '^[[:xdigit:]]{40}$' ]] || {
@@ -26,6 +27,7 @@ for arg in "$@"; do
     --debug) CONFIGURATION=debug ;;
     --release) CONFIGURATION=release ;;
     --clean) CLEAN=true ;;
+    --test-updater) UPDATER_TEST=true ;;
     *) echo "usage: ./build-app.sh [--require-identity] [--debug|--release] [--clean]" >&2; exit 1 ;;
   esac
 done
@@ -36,6 +38,15 @@ fi
 if [[ "$CONFIGURATION" == debug ]]; then
   APP="outputs/debug/${APP_NAME}.app"
 fi
+PRODUCT=now
+BUILD_OPTIONS=()
+unset NOW_TEST_SUITE
+if [[ "$UPDATER_TEST" == true ]]; then
+  APP="outputs/testing/${CONFIGURATION}/${APP_NAME}.app"
+  export NOW_TEST_SUITE=updater
+  PRODUCT=now-harness
+  BUILD_OPTIONS=(--scratch-path .build/tests/updater)
+fi
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" .build outputs
 
@@ -43,9 +54,9 @@ mkdir -p "$MODULE_CACHE"
 export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE"
 export SWIFT_MODULE_CACHE_PATH="$MODULE_CACHE"
 
-./scripts/swiftpm.sh build -c "$CONFIGURATION" --product now
-BIN_DIR=$(./scripts/swiftpm.sh build -c "$CONFIGURATION" --show-bin-path)
-cp "$BIN_DIR/now" "$APP/Contents/MacOS/$EXECUTABLE"
+./scripts/swiftpm.sh build "${BUILD_OPTIONS[@]}" -c "$CONFIGURATION" --product "$PRODUCT"
+BIN_DIR=$(./scripts/swiftpm.sh build "${BUILD_OPTIONS[@]}" -c "$CONFIGURATION" --show-bin-path)
+cp "$BIN_DIR/$PRODUCT" "$APP/Contents/MacOS/$EXECUTABLE"
 if [[ "$CONFIGURATION" == release ]]; then
   strip -x "$APP/Contents/MacOS/$EXECUTABLE"
 fi

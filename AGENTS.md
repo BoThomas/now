@@ -37,7 +37,7 @@ Always run the signed build and selftest after changes:
 
 ```bash
 ./build-app.sh --require-identity
-./outputs/now.app/Contents/MacOS/now --selftest
+./scripts/test.sh
 ```
 
 After Swift or analysis-tooling changes, also run `./scripts/analyze.sh` (one-time tool setup:

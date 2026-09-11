@@ -17,6 +17,8 @@ with tempfile.TemporaryDirectory(prefix="now-analysis-") as directory:
     shutil.copy2(ROOT / ".swiftlint.yml", project / ".swiftlint.yml")
     for baseline in ("concurrency", "swiftlint"):
         (project / "analysis" / f"{baseline}-baseline.json").write_text("[]\n")
+    (project / "Tests/NowTests").mkdir(parents=True)
+    (project / "Tests/NowTests/Fixture.swift").write_text("// Fixture discovery probe\n")
     environment = dict(os.environ, SWIFTLINT=os.environ.get(
         "SWIFTLINT", str(ROOT / ".tools/swiftlint/swiftlint")))
     source = project / "Sources/Probe.swift"

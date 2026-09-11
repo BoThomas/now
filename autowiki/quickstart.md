@@ -17,13 +17,13 @@ Run from the repository root:
 
 ```bash
 ./build-app.sh --require-identity
-./outputs/now.app/Contents/MacOS/now --selftest
+./scripts/test.sh
 ```
 
 On this development machine, the signed build must run outside the agent sandbox so it can access
 the login keychain; follow [the build instructions in AGENTS.md](../AGENTS.md). The outputs are
-`outputs/now.app` and `outputs/now.zip`. Selftest selects the CLI path before GUI startup and
-exercises more than parsing, including reminder, cache, settings, and updater decisions. See
+`outputs/now.app` and `outputs/now.zip`. The separate selftest executable exercises more than
+parsing, including reminder, cache, settings, and updater decisions. See
 [development and updates](development-and-updates.md) for focused checks and release constraints.
 
 ## Choose a path

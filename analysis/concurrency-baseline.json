@@ -40,12 +40,12 @@
     "source": "static let relativeFormatter: RelativeDateTimeFormatter = {"
   },
   {
-    "file": "Sources/SelfTest.swift",
+    "file": "Tests/NowTests/SelfTest.swift",
     "message": "call to main actor-isolated static method 'activeSection(from:)' in a synchronous nonisolated context [#ActorIsolatedCall]",
     "source": "c.expect(SettingsView.activeSection(from: sectionTops) == .general, \"scroll tracking selects General when it is nearest the reading line\")"
   },
   {
-    "file": "Sources/SelfTest.swift",
+    "file": "Tests/NowTests/SelfTest.swift",
     "message": "call to main actor-isolated static method 'activeSection(from:viewportHeight:contentBottom:)' in a synchronous nonisolated context [#ActorIsolatedCall]",
     "source": "c.expect(SettingsView.activeSection(from: sectionTops, viewportHeight: 720, contentBottom: 720) == .about, \"scroll tracking selects About at document bottom\")"
   },

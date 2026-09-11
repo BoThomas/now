@@ -1,6 +1,6 @@
 # Current work target: build/test modernization and scanner cleanup
 
-Status: phase 1 implemented; validating signed configurations before test migration.
+Status: phases 1–2 implemented and validated; scanner review and final preflight remain.
 
 Branch: `feat/build-test-modernization`.
 
@@ -59,19 +59,19 @@ instructions when the implemented build actually changes.
 
 ## Phase 2: separate tests without losing coverage
 
-- [ ] Move the full selftest suite into separate test targets/runners. Initially preserve every
+- [x] Move the full selftest suite into separate test targets/runners. Initially preserve every
       assertion and deterministic fixture; reorganize tests only after proving the migration works.
-- [ ] Ensure shipping builds exclude unit-test fixtures and developer-only runners. Decide
+- [x] Ensure shipping builds exclude unit-test fixtures and developer-only runners. Decide
       separately which operational diagnostics remain supported; do not remove useful diagnostics
       blindly.
-- [ ] Keep signed-app smoke coverage for startup, notification actions/focus and updater
+- [x] Keep signed-app smoke coverage for startup, notification actions/focus and updater
       installation and rollback. Where hooks are needed, design narrowly scoped test builds/runners
       and verify that shipping behavior is still exercised. Document any unavoidable test-build
       differences.
-- [ ] Replace temporary-source rewriting with minimal explicit dependency injection or supported
+- [x] Replace temporary-source rewriting with minimal explicit dependency injection or supported
       test access. Do not widen the public API or introduce production bypasses just to satisfy
       tests.
-- [ ] Update all harnesses, preflight, release integration, analysis source discovery/baseline
+- [x] Update all harnesses, preflight, release integration, analysis source discovery/baseline
       paths, documentation and agent instructions for the chosen layout. Pure tests must not
       initialize `AppStore`/`EKEventStore` or use live preferences/calendars.
 
@@ -153,3 +153,15 @@ release paths are retained. Initial analysis confirmed 13 concurrency warnings a
 Stage 1 checks: signed release build 58.51 s, signed incremental debug build 4.15 s; release
 executable 3,125,312 bytes, debug executable 10,728,480 bytes. Both full selftests pass. Default
 analysis accepts exactly the unchanged baseline. Documentation formatting/checks pass.
+
+### Stage 2 — separate runners and stable fixture access
+
+The XCTest trial failed because the installed Command Line Tools have no XCTest module. Selected an
+allow-listed SwiftPM executable runner per suite, compiling production sources without public APIs
+or Xcode. All original selftest files moved unchanged to `Tests/NowTests`; the runner passes. Hosted
+harnesses now use conditional same-file accessors instead of rewriting source. AppDelegate store
+injection isolates cache paths. Notification wiring moved to a cohesive method to keep the test
+factory from growing the baselined startup function; its resolved length entry was removed.
+Concurrency baseline edits only relocate the two selftest paths. Shipping builds omit unit fixtures
+and the updater smoke entry/body. Notification/lifecycle/recovery and reminder/menu/quit suites
+pass.
