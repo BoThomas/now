@@ -13,6 +13,7 @@ else
   exit 1
 fi
 [[ -x "$APP_PATH/Contents/MacOS/now" ]] || { print -u2 "Missing built app: $APP_PATH"; exit 1; }
+./scripts/analyze.sh
 "$APP_PATH/Contents/MacOS/now" --selftest
 python3 scripts/notification-smoke.py --all-smokes
 python3 scripts/reminder-state-smoke.py

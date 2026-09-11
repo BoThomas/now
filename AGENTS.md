@@ -39,6 +39,17 @@ Always run the signed build and selftest after changes:
 ./outputs/now.app/Contents/MacOS/now --selftest
 ```
 
+After Swift or analysis-tooling changes, also run `./scripts/analyze.sh` (one-time tool setup:
+`./scripts/setup-analysis.sh`). It checks strict concurrency in Swift 5 mode and a focused SwiftLint
+rule set against committed baselines. Inspect `./scripts/analyze.sh --report` when changing a
+flagged function; existing lint findings may remain suppressed as that function grows. Fix new
+findings or explain a justified exception. Do not regenerate baselines, loosen thresholds, add
+blanket suppressions, or add unsafe concurrency annotations just to pass. Remove resolved baseline
+entries when practical. Prefer coherent ownership and reusable business rules over mechanically
+splitting functions or deduplicating UI/test fixtures. See the
+[analysis workflow](docs/development.md#code-analysis) for scope and limitations. For
+analysis-tooling changes, also run `python3 scripts/analysis-smoke.py`.
+
 On this development machine, run the build outside the agent sandbox (`exec_command` with
 `sandbox_permissions: "require_escalated"`) so signing can access the login keychain. Run selftest
 normally. A sandbox-only identity lookup failure does not mean the certificate is absent. If the

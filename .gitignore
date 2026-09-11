@@ -12,3 +12,5 @@ docs/local/
 .env
 .env.*
 !.env.example
+
+.tools/

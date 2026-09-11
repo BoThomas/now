@@ -1,0 +1,30 @@
+# Deliberately omit formatting and file/type-size rules. Large files are review hints.
+only_rules:
+  - cyclomatic_complexity
+  - function_body_length
+  - function_parameter_count
+  - nesting
+  - force_cast
+  - force_try
+  - duplicate_conditions
+  - identical_operands
+included:
+  - Sources
+excluded:
+  - Sources/SelfTest.swift
+  - Sources/SelfTestCache.swift
+  - Sources/SelfTestReadiness.swift
+  - Sources/NotificationTests.swift
+cyclomatic_complexity:
+  warning: 15
+  error: 30
+function_body_length:
+  warning: 80
+  error: 150
+function_parameter_count:
+  warning: 6
+  error: 9
+nesting:
+  type_level: 2
+  function_level: 3
+baseline: analysis/swiftlint-baseline.json

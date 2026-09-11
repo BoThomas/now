@@ -1,0 +1,67 @@
+[
+  {
+    "file": "Sources/AlertUI.swift",
+    "message": "static property 'defaultValue' is not concurrency-safe because it is nonisolated global shared mutable state; this is an error in the Swift 6 language mode [#MutableGlobalVariable]",
+    "source": "static var defaultValue: Anchor<CGRect>? = nil"
+  },
+  {
+    "file": "Sources/AlertUI.swift",
+    "message": "reference to captured var 'self' in concurrently-executing code; this is an error in the Swift 6 language mode [#SendableClosureCaptures]",
+    "source": "guard let self, let panel, self.panel === panel else { return }"
+  },
+  {
+    "file": "Sources/AlertUI.swift",
+    "message": "reference to captured var 'panel' in concurrently-executing code; this is an error in the Swift 6 language mode [#SendableClosureCaptures]",
+    "source": "guard let self, let panel, self.panel === panel else { return }"
+  },
+  {
+    "file": "Sources/App.swift",
+    "message": "reference to captured var 'self' in concurrently-executing code; this is an error in the Swift 6 language mode [#SendableClosureCaptures]",
+    "source": "guard self?.terminationGate.finish(request) == true else { return }"
+  },
+  {
+    "file": "Sources/App.swift",
+    "message": "mutation of captured var 'data' in concurrently-executing code [#SendableClosureCaptures]",
+    "source": "data = body"
+  },
+  {
+    "file": "Sources/App.swift",
+    "message": "mutation of captured var 'status' in concurrently-executing code [#SendableClosureCaptures]",
+    "source": "status = (response as? HTTPURLResponse)?.statusCode"
+  },
+  {
+    "file": "Sources/App.swift",
+    "message": "mutation of captured var 'fetchError' in concurrently-executing code [#SendableClosureCaptures]",
+    "source": "fetchError = error?.localizedDescription"
+  },
+  {
+    "file": "Sources/Helpers.swift",
+    "message": "static property 'relativeFormatter' is not concurrency-safe because non-'Sendable' type 'RelativeDateTimeFormatter' may have shared mutable state; this is an error in the Swift 6 language mode [#MutableGlobalVariable]",
+    "source": "static let relativeFormatter: RelativeDateTimeFormatter = {"
+  },
+  {
+    "file": "Sources/SelfTest.swift",
+    "message": "call to main actor-isolated static method 'activeSection(from:)' in a synchronous nonisolated context [#ActorIsolatedCall]",
+    "source": "c.expect(SettingsView.activeSection(from: sectionTops) == .general, \"scroll tracking selects General when it is nearest the reading line\")"
+  },
+  {
+    "file": "Sources/SelfTest.swift",
+    "message": "call to main actor-isolated static method 'activeSection(from:viewportHeight:contentBottom:)' in a synchronous nonisolated context [#ActorIsolatedCall]",
+    "source": "c.expect(SettingsView.activeSection(from: sectionTops, viewportHeight: 720, contentBottom: 720) == .about, \"scroll tracking selects About at document bottom\")"
+  },
+  {
+    "file": "Sources/SettingsUI.swift",
+    "message": "static property 'defaultValue' is not concurrency-safe because it is nonisolated global shared mutable state; this is an error in the Swift 6 language mode [#MutableGlobalVariable]",
+    "source": "static var defaultValue: CGFloat = 600"
+  },
+  {
+    "file": "Sources/SettingsUI.swift",
+    "message": "static property 'defaultValue' is not concurrency-safe because it is nonisolated global shared mutable state; this is an error in the Swift 6 language mode [#MutableGlobalVariable]",
+    "source": "static var defaultValue: [String: CGFloat] = [:]"
+  },
+  {
+    "file": "Sources/Updater.swift",
+    "message": "reference to captured var 'self' in concurrently-executing code; this is an error in the Swift 6 language mode [#SendableClosureCaptures]",
+    "source": "MainActor.assumeIsolated { self?.installHelperExited(attempt: attempt, status: status) }"
+  }
+]
