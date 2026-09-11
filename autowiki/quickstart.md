@@ -8,9 +8,10 @@ engineering rulebook.
 
 ## Build and orient yourself
 
-The app uses plain Swift files, compiled together by [build-app.sh](../build-app.sh), rather than an
-Xcode project or Swift package. The build targets Apple Silicon and macOS 13 in Swift 5 language
-mode. See [development prerequisites](../docs/development.md) for SDK requirements.
+The app uses one SwiftPM executable target in [Package.swift](../Package.swift).
+[build-app.sh](../build-app.sh) assembles and signs the bundle. The build targets Apple Silicon and
+macOS 13 in Swift 5 language mode. See [development prerequisites](../docs/development.md) for SDK
+requirements.
 
 Run from the repository root:
 

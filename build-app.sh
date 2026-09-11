@@ -10,6 +10,8 @@ ICONSET=".build/AppIcon.iconset"
 SDK_PATH="${SDK_PATH:-$(xcrun --show-sdk-path)}"
 MODULE_CACHE="$(pwd)/.build/ModuleCache"
 REQUIRE_IDENTITY=false
+CONFIGURATION=release
+CLEAN=false
 SIGNING_IDENTITY_SHA1="${NOW_SIGNING_IDENTITY_SHA1:-A505B08900C56A28709479297A049525A2A187C6}"
 
 [[ "$SIGNING_IDENTITY_SHA1" =~ '^[[:xdigit:]]{40}$' ]] || {
@@ -21,21 +23,32 @@ SIGNING_IDENTITY_SHA1="${(U)SIGNING_IDENTITY_SHA1}"
 for arg in "$@"; do
   case "$arg" in
     --require-identity) REQUIRE_IDENTITY=true ;;
-    *) echo "usage: ./build-app.sh [--require-identity]" >&2; exit 1 ;;
+    --debug) CONFIGURATION=debug ;;
+    --release) CONFIGURATION=release ;;
+    --clean) CLEAN=true ;;
+    *) echo "usage: ./build-app.sh [--require-identity] [--debug|--release] [--clean]" >&2; exit 1 ;;
   esac
 done
 
-rm -rf "$APP" .build
+if [[ "$CLEAN" == true ]]; then
+  swift package clean
+fi
+if [[ "$CONFIGURATION" == debug ]]; then
+  APP="outputs/debug/${APP_NAME}.app"
+fi
+rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" .build outputs
 
 mkdir -p "$MODULE_CACHE"
 export CLANG_MODULE_CACHE_PATH="$MODULE_CACHE"
 export SWIFT_MODULE_CACHE_PATH="$MODULE_CACHE"
 
-swiftc -parse-as-library -swift-version 5 -sdk "$SDK_PATH" -target arm64-apple-macos13.0 Sources/*.swift \
-  -o "$APP/Contents/MacOS/$EXECUTABLE" \
-  -framework SwiftUI -framework AppKit -framework ServiceManagement -framework EventKit -framework CoreAudio
-strip -x "$APP/Contents/MacOS/$EXECUTABLE"
+./scripts/swiftpm.sh build -c "$CONFIGURATION" --product now
+BIN_DIR=$(./scripts/swiftpm.sh build -c "$CONFIGURATION" --show-bin-path)
+cp "$BIN_DIR/now" "$APP/Contents/MacOS/$EXECUTABLE"
+if [[ "$CONFIGURATION" == release ]]; then
+  strip -x "$APP/Contents/MacOS/$EXECUTABLE"
+fi
 
 swiftc -sdk "$SDK_PATH" -target arm64-apple-macos13.0 make-icon.swift -o .build/make-icon
 .build/make-icon "$ICONSET"
@@ -91,6 +104,6 @@ if [[ "$STABLE_SIGNATURE" == true ]]; then
     exit 1
   }
 fi
-ditto -c -k --sequesterRsrc --keepParent "$APP" "outputs/${APP_NAME}.zip"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "${APP%.app}.zip"
 
 echo "Built $APP"

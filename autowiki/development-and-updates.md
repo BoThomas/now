@@ -5,10 +5,10 @@
 ## Build and choose checks
 
 Follow [docs/development.md](../docs/development.md) for prerequisites and [AGENTS.md](../AGENTS.md)
-for the required signed build and selftest after changes. [build-app.sh](../build-app.sh) compiles
-`Sources/*.swift`, separately runs the root icon generator, assembles the bundle, signs and verifies
-it, then creates the ZIP. Keep `make-icon.swift` outside `Sources/` because it is a separate
-executable.
+for the required signed build and selftest after changes. [build-app.sh](../build-app.sh) builds the
+SwiftPM `NowApp` executable target, separately runs the root icon generator, assembles the bundle,
+signs and verifies it, then creates the ZIP. Keep `make-icon.swift` outside `Sources/` because it is
+a separate executable.
 
 After Swift or analysis-tooling changes, run `./scripts/analyze.sh` after the build. It compares
 strict-concurrency warnings and focused SwiftLint findings against committed baselines; preflight

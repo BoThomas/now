@@ -1,6 +1,6 @@
 # Current work target: build/test modernization and scanner cleanup
 
-Status: planned; implementation has not started.
+Status: phase 1 implemented; validating signed configurations before test migration.
 
 Branch: `feat/build-test-modernization`.
 
@@ -42,18 +42,18 @@ instructions when the implemented build actually changes.
 
 ## Phase 1: establish the build and test boundary
 
-- [ ] Record the current build/test commands, toolchain, app metadata, designated signing
+- [x] Record the current build/test commands, toolchain, app metadata, designated signing
       requirement, and baseline analysis output. Inspect all `--selftest`, smoke flags and test
       environment hooks.
-- [ ] Trial the smallest SwiftPM target layout; document the selected layout and any reason to
+- [x] Trial the smallest SwiftPM target layout; document the selected layout and any reason to
       choose Xcode instead. Keep this separate from behavioral cleanup.
-- [ ] Add explicit development and release configurations. Use optimized compilation deliberately
+- [x] Add explicit development and release configurations. Use optimized compilation deliberately
       for release, preserve incremental artifacts for development, and provide an explicit clean
       action. Verify optimized behavior rather than assuming equivalence.
-- [ ] Preserve the app bundle ID, executable name, minimum OS, architecture, entitlements, icon and
+- [x] Preserve the app bundle ID, executable name, minimum OS, architecture, entitlements, icon and
       other resources. Keep Swift 5 mode, macOS 13 and Apple Silicon compatibility. Keep the icon
       generator outside the application target.
-- [ ] Preserve exact stable signing, certificate verification, designated requirement and existing
+- [x] Preserve exact stable signing, certificate verification, designated requirement and existing
       staging/install/rollback/startup-health checks. Retain a single convenient build command and
       existing output paths where practical.
 
@@ -132,3 +132,24 @@ The planning commit contains no implementation changes. Continue on this branch,
 checkboxes and decision notes as work proceeds, and keep build migration, test migration and scanner
 cleanup reviewable separately. This handoff is for later implementation; do not start that work as
 part of the planning task. Merging or releasing the resulting work requires a later request.
+
+## Implementation evidence
+
+### Stage 1 — minimal SwiftPM build
+
+Selected one executable target, `NowApp`, with product `now`. The existing `@main` AppKit entry
+point builds unchanged with SwiftPM; no public API or extra production modules are needed. Apple
+Swift 6.3.3 compiles in Swift 5 mode, targeting arm64 and macOS 13. The initial debug trial
+completed in 31.09 seconds. Repository-local module/manifest caches avoid sandbox cache permission
+failures. The bundle remains `com.thomasboch.now`, version 2.0.0/build 106, with unchanged
+resources, entitlements, and certificate-root designated requirement
+`A505B08900C56A28709479297A049525A2A187C6`. The pre-migration executable measured 4,802,800 bytes.
+
+`build-app.sh --require-identity` defaults to SwiftPM release optimization; `--debug` writes to
+`outputs/debug/now.app`, and `--clean` explicitly clears SwiftPM compilation artifacts. Existing
+release paths are retained. Initial analysis confirmed 13 concurrency warnings and 17 lint findings
+(nine complexity, six length, two parameter count). No baseline changes in this stage.
+
+Stage 1 checks: signed release build 58.51 s, signed incremental debug build 4.15 s; release
+executable 3,125,312 bytes, debug executable 10,728,480 bytes. Both full selftests pass. Default
+analysis accepts exactly the unchanged baseline. Documentation formatting/checks pass.

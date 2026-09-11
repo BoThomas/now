@@ -54,5 +54,5 @@ else
     > .build/analysis/swiftlint.log || RESULT=1
 fi
 cat .build/analysis/swiftlint.log
-print "Analysis reports: .build/analysis/ (build-app.sh clears this directory)"
+print "Analysis reports: .build/analysis/"
 exit "$RESULT"

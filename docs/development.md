@@ -9,7 +9,11 @@ reported by `xcrun`; override with `SDK_PATH` if needed).
 ./build-app.sh
 ```
 
-Builds `outputs/now.app` and `outputs/now.zip`. macOS 13+, arm64.
+Builds optimized `outputs/now.app` and `outputs/now.zip` using SwiftPM, in Swift 5 mode for macOS
+13+, arm64. `--debug` builds an unoptimized development bundle and ZIP under `outputs/debug/`.
+`--release` is the default. Incremental compilation artifacts are retained; `--clean` explicitly
+clears SwiftPM build artifacts. Use `--require-identity` to require the stable signing identity.
+Bundling, resources, entitlements, and signature verification remain in the wrapper.
 
 ## Development tools
 
@@ -45,8 +49,8 @@ handled by the script. Python 3 and the active Swift compiler are also required;
 
 The default command fails on compiler errors, new compiler warnings, new SwiftLint findings, or tool
 failures. `--report` makes findings informational but still fails on compiler/tool errors. Reports
-and compiler-version information go under `.build/analysis/`, which the next app build clears. Run
-analysis after building. Release preflight runs the default check, including with `--app`.
+and compiler-version information go under `.build/analysis/`, which app builds retain. Run analysis
+after building. Release preflight runs the default check, including with `--app`.
 
 The compiler checks all `Sources/*.swift`, including selftests, with `-strict-concurrency=complete`
 in Swift 5 mode for arm64/macOS 13. The initial baseline contains 13 warnings from Apple Swift
