@@ -1,0 +1,11 @@
+{
+  "name": "now-docs",
+  "private": true,
+  "scripts": {
+    "format-docs": "prettier --write \"**/*.md\"",
+    "check-docs": "prettier --check \"**/*.md\""
+  },
+  "devDependencies": {
+    "prettier": "3.9.6"
+  }
+}
