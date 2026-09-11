@@ -1,0 +1,5 @@
+outputs/
+.build/
+docs/local/
+# Keep installed third-party skills identical to their published source.
+.agents/skills/

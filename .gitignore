@@ -1,5 +1,6 @@
 outputs/
 .build/
+node_modules/
 
 docs/local/
 .DS_Store

@@ -7,7 +7,8 @@
 
 Native macOS meeting reminders that live in your menu bar.
 
-Connect Apple Calendar or an iCal/ICS feed. Get a fullscreen reminder or macOS notification, then join your meeting with a click.
+Connect Apple Calendar or an iCal/ICS feed. Get a fullscreen reminder or macOS notification, then
+join your meeting with a click.
 
 ![now features: fullscreen reminders, macOS notifications, a menu bar countdown, Join and Snooze, Apple Calendar and ICS, and offline reminders](docs/images/collage.jpg)
 
@@ -19,13 +20,17 @@ Connect Apple Calendar or an iCal/ICS feed. Get a fullscreen reminder or macOS n
 
 **Apple Silicon · macOS 13 or later**
 
-Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/releases/latest), unzip, and move `now.app` to `/Applications`.
+Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/releases/latest),
+unzip, and move `now.app` to `/Applications`.
 
-> Release builds are signed but not notarized. If macOS blocks the first launch, use one of these options:
+> Release builds are signed but not notarized. If macOS blocks the first launch, use one of these
+> options:
 >
-> - **System Settings → Privacy & Security → Open Anyway** ([Apple’s instructions](https://support.apple.com/102445)).
+> - **System Settings → Privacy & Security → Open Anyway**
+>   ([Apple’s instructions](https://support.apple.com/102445)).
 > - Or, right-click `now.app` → **Open** → **Open** (if available on your macOS version).
-> - Or, run `xattr -dr com.apple.quarantine /Applications/now.app` in Terminal, then open the app again.
+> - Or, run `xattr -dr com.apple.quarantine /Applications/now.app` in Terminal, then open the app
+>   again.
 
 ## Get started
 
@@ -55,6 +60,7 @@ Launch at Login and automatic updates are optional. Upgrades keep your calendars
 
 ## Author & License
 
-[Thomas Boch](https://thomasboch.com) · [GitHub](https://github.com/BoThomas) · [MIT license](LICENSE)
+[Thomas Boch](https://thomasboch.com) · [GitHub](https://github.com/BoThomas) ·
+[MIT license](LICENSE)
 
 Inspired by [inyourface.app](https://inyourface.app).
