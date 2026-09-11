@@ -1,0 +1,257 @@
+[
+  {
+    "violation": {
+      "ruleIdentifier": "cyclomatic_complexity",
+      "ruleDescription": "Complexity of function bodies should be limited.",
+      "ruleName": "Cyclomatic Complexity",
+      "severity": "warning",
+      "location": {
+        "line": 482,
+        "file": "Sources/AlertUI.swift",
+        "character": 13
+      },
+      "reason": "Function should have complexity 15 or less; currently complexity is 23"
+    },
+    "text": "    private func installMonitor() {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "function_body_length",
+      "ruleDescription": "Function bodies should not span too many lines",
+      "ruleName": "Function Body Length",
+      "severity": "warning",
+      "location": {
+        "line": 74,
+        "file": "Sources/App.swift",
+        "character": 5
+      },
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 85 lines"
+    },
+    "text": "    func applicationDidFinishLaunching(_ notification: Notification) {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "cyclomatic_complexity",
+      "ruleDescription": "Complexity of function bodies should be limited.",
+      "ruleName": "Cyclomatic Complexity",
+      "severity": "warning",
+      "location": {
+        "line": 762,
+        "file": "Sources/App.swift",
+        "character": 24
+      },
+      "reason": "Function should have complexity 15 or less; currently complexity is 25"
+    },
+    "text": "    @MainActor private static func updateSmokeCLIBody(_ baseArgument: String?) {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "function_body_length",
+      "ruleDescription": "Function bodies should not span too many lines",
+      "ruleName": "Function Body Length",
+      "severity": "warning",
+      "location": {
+        "line": 762,
+        "file": "Sources/App.swift",
+        "character": 31
+      },
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 122 lines"
+    },
+    "text": "    @MainActor private static func updateSmokeCLIBody(_ baseArgument: String?) {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "cyclomatic_complexity",
+      "ruleDescription": "Complexity of function bodies should be limited.",
+      "ruleName": "Cyclomatic Complexity",
+      "severity": "warning",
+      "location": {
+        "line": 57,
+        "file": "Sources/ICS.swift",
+        "character": 5
+      },
+      "reason": "Function should have complexity 15 or less; currently complexity is 37"
+    },
+    "text": "    static func parse(_ text: String, eventTz: TimeZone?, dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> RRULE? {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "cyclomatic_complexity",
+      "ruleDescription": "Complexity of function bodies should be limited.",
+      "ruleName": "Cyclomatic Complexity",
+      "severity": "warning",
+      "location": {
+        "line": 270,
+        "file": "Sources/ICS.swift",
+        "character": 5
+      },
+      "reason": "Function should have complexity 15 or less; currently complexity is 21"
+    },
+    "text": "    static func parse(_ text: String, dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> ICSParseResult {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "cyclomatic_complexity",
+      "ruleDescription": "Complexity of function bodies should be limited.",
+      "ruleName": "Cyclomatic Complexity",
+      "severity": "warning",
+      "location": {
+        "line": 439,
+        "file": "Sources/ICS.swift",
+        "character": 5
+      },
+      "reason": "Function should have complexity 15 or less; currently complexity is 30"
+    },
+    "text": "    static func makeEvent(_ properties: [ICSProperty], warnings: inout [String], dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> ParsedEvent? {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "function_body_length",
+      "ruleDescription": "Function bodies should not span too many lines",
+      "ruleName": "Function Body Length",
+      "severity": "warning",
+      "location": {
+        "line": 439,
+        "file": "Sources/ICS.swift",
+        "character": 12
+      },
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 132 lines"
+    },
+    "text": "    static func makeEvent(_ properties: [ICSProperty], warnings: inout [String], dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> ParsedEvent? {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "cyclomatic_complexity",
+      "ruleDescription": "Complexity of function bodies should be limited.",
+      "ruleName": "Cyclomatic Complexity",
+      "severity": "warning",
+      "location": {
+        "line": 737,
+        "file": "Sources/ICS.swift",
+        "character": 5
+      },
+      "reason": "Function should have complexity 15 or less; currently complexity is 21"
+    },
+    "text": "    static func parseDuration(_ value: String) -> TimeInterval? {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "cyclomatic_complexity",
+      "ruleDescription": "Complexity of function bodies should be limited.",
+      "ruleName": "Cyclomatic Complexity",
+      "severity": "warning",
+      "location": {
+        "line": 859,
+        "file": "Sources/ICS.swift",
+        "character": 5
+      },
+      "reason": "Function should have complexity 15 or less; currently complexity is 19"
+    },
+    "text": "    static func expand(_ event: ParsedEvent, windowStart: Date, windowEnd: Date, budget: inout Int) -> Expansion {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "function_body_length",
+      "ruleDescription": "Function bodies should not span too many lines",
+      "ruleName": "Function Body Length",
+      "severity": "warning",
+      "location": {
+        "line": 859,
+        "file": "Sources/ICS.swift",
+        "character": 12
+      },
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 82 lines"
+    },
+    "text": "    static func expand(_ event: ParsedEvent, windowStart: Date, windowEnd: Date, budget: inout Int) -> Expansion {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "cyclomatic_complexity",
+      "ruleDescription": "Complexity of function bodies should be limited.",
+      "ruleName": "Cyclomatic Complexity",
+      "severity": "warning",
+      "location": {
+        "line": 1310,
+        "file": "Sources/ICS.swift",
+        "character": 5
+      },
+      "reason": "Function should have complexity 15 or less; currently complexity is 24"
+    },
+    "text": "    static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date) -> ICSBuildResult {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "function_body_length",
+      "ruleDescription": "Function bodies should not span too many lines",
+      "ruleName": "Function Body Length",
+      "severity": "warning",
+      "location": {
+        "line": 1310,
+        "file": "Sources/ICS.swift",
+        "character": 12
+      },
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 116 lines"
+    },
+    "text": "    static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date) -> ICSBuildResult {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "function_body_length",
+      "ruleDescription": "Function bodies should not span too many lines",
+      "ruleName": "Function Body Length",
+      "severity": "warning",
+      "location": {
+        "line": 233,
+        "file": "Sources/MenuBar.swift",
+        "character": 5
+      },
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 106 lines"
+    },
+    "text": "    func menuNeedsUpdate(_ menu: NSMenu) {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "function_parameter_count",
+      "ruleDescription": "Number of function parameters should be low.",
+      "ruleName": "Function Parameter Count",
+      "severity": "warning",
+      "location": {
+        "line": 175,
+        "file": "Sources/NativeCalendars.swift",
+        "character": 24
+      },
+      "reason": "Function should have 6 parameters or less: it currently has 7"
+    },
+    "text": "    nonisolated static func parsedEvent(uid: String, title: String, location: String?, notes: String?, url: String?, start: Date, end: Date) -> ParsedEvent {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "cyclomatic_complexity",
+      "ruleDescription": "Complexity of function bodies should be limited.",
+      "ruleName": "Cyclomatic Complexity",
+      "severity": "warning",
+      "location": {
+        "line": 487,
+        "file": "Sources/Notifications.swift",
+        "character": 5
+      },
+      "reason": "Function should have complexity 15 or less; currently complexity is 17"
+    },
+    "text": "    func reconcile() {"
+  },
+  {
+    "violation": {
+      "ruleIdentifier": "function_parameter_count",
+      "ruleDescription": "Number of function parameters should be low.",
+      "ruleName": "Function Parameter Count",
+      "severity": "warning",
+      "location": {
+        "line": 217,
+        "file": "Sources/SettingsUI.swift",
+        "character": 20
+      },
+      "reason": "Function should have 6 parameters or less: it currently has 7"
+    },
+    "text": "    private static func arcToCubics(from: CGPoint, to: CGPoint, rx: CGFloat, ry: CGFloat, rotationDegrees: CGFloat, largeArc: Bool, sweep: Bool) -> [(c1: CGPoint, c2: CGPoint, to: CGPoint)] {"
+  }
+]

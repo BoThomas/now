@@ -10,6 +10,12 @@ for the required signed build and selftest after changes. [build-app.sh](../buil
 it, then creates the ZIP. Keep `make-icon.swift` outside `Sources/` because it is a separate
 executable.
 
+After Swift or analysis-tooling changes, run `./scripts/analyze.sh` after the build. It compares
+strict-concurrency warnings and focused SwiftLint findings against committed baselines; preflight
+also runs it. `./scripts/setup-analysis.sh` installs the pinned linter once, and `--report` on the
+analysis command exposes the existing backlog. See the
+[analysis workflow](../docs/development.md#code-analysis) for baseline review and limitations.
+
 [SelfTest.run](../Sources/SelfTest.swift) aggregates pure parser, recurrence, reminder,
 notification, settings, fetch/cache, bookkeeping, filter, and updater checks. It dispatches before
 normal app startup; keep new tests free of constructed EventKit stores or fullscreen panels. Extend
