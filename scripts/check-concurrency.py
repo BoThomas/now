@@ -27,6 +27,8 @@ def counts(findings):
 def main():
     report = Path(".build/analysis")
     name = "concurrency-production" if "--production" in sys.argv else "concurrency"
+    if "--updater" in sys.argv:
+        name = "concurrency-updater"
     current = diagnostics((report / (name + ".log")).read_text())
     (report / (name + "-current.json")).write_text(json.dumps(current, indent=2) + "\n")
     baseline = json.loads(Path("analysis/concurrency-baseline.json").read_text())

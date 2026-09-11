@@ -19,6 +19,8 @@ with tempfile.TemporaryDirectory(prefix="now-analysis-") as directory:
         (project / "analysis" / f"{baseline}-baseline.json").write_text("[]\n")
     (project / "Tests/NowTests").mkdir(parents=True)
     (project / "Tests/NowTests/Fixture.swift").write_text("// Fixture discovery probe\n")
+    (project / "Tests/Updater").mkdir(parents=True)
+    (project / "Tests/Updater/Fixture.swift").write_text("// Updater fixture discovery probe\n")
     environment = dict(os.environ, SWIFTLINT=os.environ.get(
         "SWIFTLINT", str(ROOT / ".tools/swiftlint/swiftlint")))
     source = project / "Sources/Probe.swift"
@@ -35,6 +37,12 @@ with tempfile.TemporaryDirectory(prefix="now-analysis-") as directory:
 
     source.write_text("func value() -> Int { 1 }\n")
     run("clean source", True)
+    source.write_text("#if NOW_TESTING\nvar sharedValue = 0\n#endif\n")
+    run("test-only compiler warning", False, expected="1 new")
+    source.write_text("#if !NOW_TESTING\nvar sharedValue = 0\n#endif\n")
+    run("shipping-only compiler warning", False, expected="1 new")
+    source.write_text("#if NOW_UPDATER_TESTS\nvar sharedValue = 0\n#endif\n")
+    run("updater-only compiler warning", False, expected="1 new")
     source.write_text("var sharedValue = 0\n")
     run("new compiler warning", False, expected="1 new")
     snapshot = project / ".build/analysis/concurrency-current.json"

@@ -52,14 +52,14 @@ failures. `--report` makes findings informational but still fails on compiler/to
 and compiler-version information go under `.build/analysis/`, which app builds retain. Run analysis
 after building. Release preflight runs the default check, including with `--app`.
 
-The compiler checks both shipping sources and the separate selftest configuration with
-`-strict-concurrency=complete` in Swift 5 mode for arm64/macOS 13. All 13 original warnings have
-been resolved; the concurrency baseline is empty. See the [finding review](../analysis/review.md)
-for ownership changes and retained lint rationales. Matching uses file, diagnostic message,
-source-line text and occurrence count, so line-number shifts alone do not cause failures.
-Compiler/SDK upgrades or edits to a flagged line can require deliberate review. The current snapshot
-is written to `.build/analysis/concurrency-current.json`; it never overwrites the committed
-baseline.
+The compiler checks shipping sources, the selftest configuration and the signed-updater runner
+configuration with `-strict-concurrency=complete` in Swift 5 mode for arm64/macOS 13. All 13
+original warnings have been resolved; the concurrency baseline is empty. See the
+[finding review](../analysis/review.md) for ownership changes and retained lint rationales. Matching
+uses file, diagnostic message, source-line text and occurrence count, so line-number shifts alone do
+not cause failures. Compiler/SDK upgrades or edits to a flagged line can require deliberate review.
+The current snapshot is written to `.build/analysis/concurrency-current.json`; it never overwrites
+the committed baseline.
 
 SwiftLint checks complexity, function length, parameter count, nesting, force casts/tries, duplicate
 conditions and identical operands. The separate `Tests` directory is outside production lint scope;
@@ -116,3 +116,14 @@ signature/version/OS checks, swap and rollback use the production implementation
 replace release output. The helper script retains its explicit fault contract so tests exercise the
 same script; production install calls pass no fault environment and strip inherited smoke variables.
 Updater fault tests therefore exercise a test binary, not the byte-identical shipping binary.
+
+`python3 scripts/artifact-smoke.py outputs/now.app` verifies shipping metadata, the exact signing
+requirement and entitlements, arm64/macOS 13 load commands, fixture exclusion, and production parser
+and update-check diagnostics. It launches production code for five seconds in a signed disposable
+bundle with an empty profile. This checks startup liveness; it does not replace manual testing of
+Calendar permission prompts, real Notification Center delivery or older macOS versions.
+
+The pinned-ID updater fixture uses an explicit disposable preference suite and injected cache;
+changing HOME alone does not isolate macOS preferences. Interactive menu/focus checks require an
+unlocked, undisturbed desktop. The historical parser comparison still uses a standalone swiftc
+compile; its working variant is the optimized SwiftPM target.

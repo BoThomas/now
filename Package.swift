@@ -21,9 +21,9 @@ let product: Product
 if let suite {
     guard let fixtures = suites[suite] else { fatalError("Unknown NOW_TEST_SUITE: \(suite)") }
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-    let excluded = try! FileManager.default.contentsOfDirectory(atPath: root.path).filter {
+    let excluded = try FileManager.default.contentsOfDirectory(atPath: root.path).filter {
         !["Sources", "scripts", "Tests", "Package.swift"].contains($0) && !$0.hasPrefix(".")
-    } + (try! FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("scripts").path))
+    } + (try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("scripts").path))
         .map { "scripts/" + $0 }.filter { !fixtures.contains($0) }
         + (suite == "selftest" ? ["Tests/Updater"] : suite == "updater" ? ["Tests/NowTests"] : ["Tests"])
     target = .executableTarget(

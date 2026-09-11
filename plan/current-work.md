@@ -176,7 +176,7 @@ warnings/findings still fail.
 
 ### Final artifact and regression checks
 
-The final release executable is 2,560,848 bytes (ZIP 2,000,298 bytes); debug is 9,908,000 bytes. The
+The final release executable is 2,560,848 bytes (ZIP 2,000,300 bytes); debug is 9,908,784 bytes. The
 final incremental signed debug build took 5.37 seconds; release compilation after ownership changes
 took 17.06 seconds. These are local observations, not performance guarantees. Swift 5, arm64, the
 macOS 13 load command, bundle metadata, exact designated requirement, and entitlements are verified
@@ -208,3 +208,9 @@ required disposable suite. Its normal startup uses a synthetic empty profile wit
 and login registration disabled. The assertion and exact timeout/rollback expectations are retained.
 The focused updater suite now passes all 13 scenarios plus post-stage signature/version mutation
 checks. A fresh signed build and complete preflight are running with this correction.
+
+Final analysis also covers the updater-runner configuration. The analysis smoke separately proves
+that shipping-only, selftest-only and updater-only compiler warnings fail, in addition to baseline
+matching and new-lint detection. One interactive menu-tracking assertion failed during a later
+preflight despite earlier successful runs; it is being rerun unchanged in isolation before the final
+complete preflight. These GUI tests require an unlocked, undisturbed desktop.

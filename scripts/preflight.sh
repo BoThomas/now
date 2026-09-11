@@ -14,7 +14,8 @@ else
 fi
 [[ -x "$APP_PATH/Contents/MacOS/now" ]] || { print -u2 "Missing built app: $APP_PATH"; exit 1; }
 ./scripts/analyze.sh
-./scripts/test.sh
+python3 scripts/artifact-smoke.py "$APP_PATH"
+NOW_TEST_CONFIGURATION=debug ./scripts/test.sh
 NOW_TEST_CONFIGURATION=release ./scripts/test.sh
 export NOW_TEST_CONFIGURATION=release
 python3 scripts/notification-smoke.py --all-smokes

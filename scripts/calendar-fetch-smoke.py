@@ -114,7 +114,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 with tempfile.TemporaryDirectory(prefix="now-calendar-smoke-") as directory:
     directory = pathlib.Path(directory)
-    # Preserve the real CLI helpers used by SelfTest, replacing only the entry point.
     executable = directory / "fetch-smoke"
     build("fetch", executable)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)

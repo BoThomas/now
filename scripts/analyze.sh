@@ -48,9 +48,17 @@ if ! swiftc -typecheck -parse-as-library -swift-version 5 -strict-concurrency=co
   exit 1
 fi
 RESULT=0
+if ! swiftc -typecheck -parse-as-library -swift-version 5 -strict-concurrency=complete \
+  -sdk "$SDK_PATH" -target arm64-apple-macos13.0 \
+  -module-cache-path "$PWD/.build/analysis/ModuleCache" -D NOW_TESTING -D NOW_UPDATER_TESTS \
+  Sources/*.swift Tests/Updater/*.swift > .build/analysis/concurrency-updater.log 2>&1; then
+  cat .build/analysis/concurrency-updater.log
+  exit 1
+fi
 if [[ "$REPORT" == true ]]; then
   cat .build/analysis/concurrency.log
   python3 scripts/check-concurrency.py --production --report
+  python3 scripts/check-concurrency.py --updater --report
   python3 scripts/check-concurrency.py --report
   # An empty baseline exposes the entire backlog without changing the saved one.
   print '[]' > .build/analysis/empty-baseline.json
@@ -58,6 +66,7 @@ if [[ "$REPORT" == true ]]; then
     --baseline .build/analysis/empty-baseline.json > .build/analysis/swiftlint.log || RESULT=1
 else
   python3 scripts/check-concurrency.py --production || RESULT=1
+  python3 scripts/check-concurrency.py --updater || RESULT=1
   python3 scripts/check-concurrency.py || RESULT=1
   "$SWIFTLINT" lint --config .swiftlint.yml --no-cache --quiet --strict \
     > .build/analysis/swiftlint.log || RESULT=1

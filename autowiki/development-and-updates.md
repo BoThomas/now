@@ -12,7 +12,7 @@ a separate executable.
 
 After Swift or analysis-tooling changes, run `./scripts/analyze.sh` after the build. It compares
 strict-concurrency warnings and focused SwiftLint findings against committed baselines; preflight
-also runs it in both shipping and selftest configurations.
+also runs it in shipping, selftest and updater-runner configurations.
 [Reviewed findings](../analysis/review.md) records the resolved concurrency warnings and retained
 lint rationales. `./scripts/setup-analysis.sh` installs the pinned linter once, and `--report` on
 the analysis command exposes the existing backlog. See the
