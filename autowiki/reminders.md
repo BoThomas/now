@@ -11,11 +11,11 @@ due meetings. `dueForAlert` is a pure predicate: an unmuted, unhandled event is 
 end bound. Late launch or wake can therefore remind about an ongoing meeting; menu countdown limits
 do not shorten this delivery window.
 
-[NotificationLogic.route](../Sources/Notifications.swift) applies during-meeting policy first,
-catch-up policy second (except for explicit snoozes), then the normal fullscreen/notification
-choice. Suppression defers before start and marks handled at/after start. Unknown meeting activity
-follows normal routing. Notification permission is checked after routing and never converts a denied
-notification into fullscreen delivery.
+[NotificationLogic.route](../Sources/NowCore/Reminders/NotificationRouting.swift) applies
+during-meeting policy first, catch-up policy second (except for explicit snoozes), then the normal
+fullscreen/notification choice. Suppression defers before start and marks handled at/after start.
+Unknown meeting activity follows normal routing. Notification permission is checked after routing
+and never converts a denied notification into fullscreen delivery.
 
 Fullscreen groups are acknowledged before `onAlert` presents them. Notification groups are offered
 through `ReminderNotificationController`, and acknowledged only when transport accepts the request.
@@ -23,7 +23,9 @@ Acceptance does not prove the person saw the banner. Ordinary notifications grou
 same tick by exact start date; catch-up waits for the full refresh owned by the latest launch/wake
 before grouping ongoing meetings. See `CatchUpRefreshTracker`, `offerNotification`, and
 `connectNotifications` in [Notifications.swift](../Sources/Notifications.swift) and
-[AppStore.swift](../Sources/AppStore.swift).
+[AppStore.swift](../Sources/AppStore.swift). The core
+[refresh trackers](../Sources/NowCore/Reminders/RefreshObservation.swift) own pure
+source-observation decisions; the shell owns timers, delivery and persistence.
 
 ## Edits and transient omissions
 
@@ -33,18 +35,21 @@ unmuted after its lead window begins is marked handled and loses its snooze to a
 alert. [TitleFilterMatcher](../Sources/NowCore/TitleFilter.swift) supplies per-calendar exact or
 regex matching; filtered meetings remain in lists.
 
-`ReminderSnapshotTracker` and [ReminderLedger](../Sources/Notifications.swift) retain bookkeeping
-through one successful omission from the event's own calendar. Two such omissions retire it;
-unrelated commits and failed fetches do not count. This retention protects acknowledgement history,
-not visible event cards: a newly accepted snapshot can remove a card immediately. Explicit source
-invalidation and event expiry have their own cleanup paths in [AppStore](../Sources/AppStore.swift).
+`ReminderSnapshotTracker` and [ReminderLedger](../Sources/NowCore/Reminders/ReminderLedger.swift)
+retain bookkeeping through one successful omission from the event's own calendar. Two such omissions
+retire it; unrelated commits and failed fetches do not count. This retention protects
+acknowledgement history, not visible event cards: a newly accepted snapshot can remove a card
+immediately. Explicit source invalidation and event expiry have their own cleanup paths in
+[AppStore](../Sources/AppStore.swift).
 
 The ledger stores source-scoped hashed keys, end/start times, and snoozes without titles or URLs.
 With fullscreen delivery, a changed scheduled start can re-arm the reminder; an explicit snooze or
 accepted notification receipt retains ownership of its lifecycle. Notification occurrence keys
 preserve the original recurrence anchor, so moved siblings remain distinct. These identities must be
 kept consistent across [Models](../Sources/NowCore/Models.swift),
-[ICSBuilder](../Sources/ICS.swift), native mapping, and cache restoration.
+[ICSBuilder](../Sources/NowCore/Calendar/ICSBuilder.swift), native mapping, and cache restoration.
+Persisted hashing/fingerprint rules have one owner in
+[ReminderIdentity](../Sources/NowCore/Reminders/ReminderIdentity.swift).
 
 ## Notification actions and replacements
 
@@ -70,6 +75,14 @@ scheduling, or writing real bookkeeping. A shared snooze is offered only when it
 every active card's end; “just in time” requires every active event to be unstarted.
 `snoozeSchedule` revalidates at activation, and `primarySnoozePlan` resolves safe fallbacks as time
 changes.
+
+The alert controller delegates those pure decisions to
+[SnoozePolicy](../Sources/NowCore/Reminders/SnoozePolicy.swift). Its type aliases preserve the
+shell's existing API without a second algorithm.
+[ReminderTiming](../Sources/NowCore/Reminders/ReminderTiming.swift) owns due/Join eligibility, and
+[ReminderReconciliation](../Sources/NowCore/Reminders/ReminderReconciliation.swift) owns
+normalization, unmute and pruning. `AppStore.commitEvents` retains the live transaction ordering;
+accepted receipt replacement/submission state remains in the native notification controller.
 
 The borderless panel has an explicit key monitor, including a one-second guard against keystrokes in
 flight when it takes focus. Keep its keyboard and activation behavior together with

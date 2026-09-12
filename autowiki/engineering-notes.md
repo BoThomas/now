@@ -651,10 +651,11 @@ harness.
 
 ### Shared parser boundary
 
-`Sources/NowCore/ICS.swift` holds parsing, recurrence and link policy; `Sources/ICS.swift` holds
-macOS text discovery and feed materialization. Keep `NSDataDetector` in the shell and inject
-candidate URLs into shared link selection. Preserve URL priority, structured-conference handling and
-the lack of arbitrary-link fallback. Plain models and title filtering now live in `NowCore`.
+`Sources/NowCore/ICS.swift` holds parsing, recurrence and link policy;
+`Sources/NowCore/Calendar/ICSBuilder.swift` owns feed materialization. `Sources/ICS.swift` supplies
+macOS text discovery and palette adapters. Keep `NSDataDetector` in the shell and inject candidate
+URLs into shared link selection. Preserve URL priority, structured-conference handling and the lack
+of arbitrary-link fallback. Plain models and title filtering now live in `NowCore`.
 `Sources/Models.swift` preserves the macOS color accessors and convenience initializers. Decode
 macOS profiles/subscriptions through `AppModelCoding.decoder()`, including inside
 `StoredPreferences`: missing/null legacy colors need the current palette, while explicit empty
@@ -664,8 +665,29 @@ state. Unconfigured core decoding retains the unresolved empty-color sentinel; t
 replacement for macOS migration. The original recovery audit's lock-protected ownership and coding
 keys are preserved. Plain values use checked `Sendable` conformance across the module boundary.
 `NowCore` must not import the shell or compile fixture substitutions. `package` access exists only
-for actual app/harness consumers. The core runner does not establish full materialization, storage,
-notification or Windows compatibility; grow its coverage as those rules move.
+for actual app/harness consumers. The core runner verifies shared materialization and POSIX storage,
+but does not establish native text detection, notification-controller, GUI or Windows compatibility.
+
+### Portable policy and storage boundary
+
+Calendar materialization/merge, reminder identity/routing/timing/ledger/snooze rules and activity
+debouncing have focused owners in `NowCore`. Shell entrypoints delegate without duplicating policy.
+Keep `commitEvents` sequencing and accepted-notification submission/replacement ownership intact.
+Snooze scheduling receives normalized unique event IDs; source merge receives unique live source IDs
+from profile validation. The core has no timers or launch-time permission requests.
+
+`StableDigest` uses built-in CryptoKit on macOS and pinned Swift Crypto on Linux/Windows. Preserve
+UTF-8 bytes, UUID casing, newline/colon delimiters and lowercase hex; do not replace persisted keys
+with a platform hash or normalize URLs first. Independent golden hashes cover current/legacy keys.
+The dependency requires a Swift 6.1+ compiler, while app/core compile in Swift 5 mode.
+
+The serial POSIX cache implementation is shared under `NowCore/Storage` with an explicit directory;
+its existing queue-protected `@unchecked Sendable` conformance is retained, not broadened. Keep
+permissions-before-rename, queued save/remove order and failure quarantine together. Linux tests
+exercise private modes, corruption/recovery preservation, symlink rejection, failed accepted-empty
+writes and actual child-process cache/ledger restarts. These are not evidence of Windows filesystem
+support or macOS GUI/signing behavior. The Windows storage adapter and native text discovery still
+need platform work.
 
 ### Activation compatibility
 

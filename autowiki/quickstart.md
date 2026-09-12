@@ -10,11 +10,13 @@ engineering rulebook.
 
 The app's `NowApp` SwiftPM executable depends on the `NowCore` library in
 [Package.swift](../Package.swift). [Sources/NowCore](../Sources/NowCore/) contains parsed ICS
-values, parsing, recurrence expansion, meeting-link policy, plain application models, tolerant
-decoding and title filtering. Native presentation/default colors, feed materialization, live
-persistence and platform integration remain in the macOS shell. [build-app.sh](../build-app.sh)
-assembles and signs the bundle. The build targets Apple Silicon and macOS 13 in Swift 5 language
-mode. See [development prerequisites](../docs/development.md) for SDK requirements.
+values, parsing/materialization, plain models, filtering, cache policy and reminder decisions.
+Responsibilities are grouped under `Calendar/`, `Reminders/`, `Storage/`, `Activity/` and
+`Support/`. The serial POSIX cache adapter is shared by macOS/Linux with an injected directory.
+Native URL discovery, presentation, live preference/notification ownership and platform integration
+remain in the macOS shell. [build-app.sh](../build-app.sh) assembles and signs the bundle. The build
+targets Apple Silicon and macOS 13 in Swift 5 language mode. See
+[development prerequisites](../docs/development.md) for SDK requirements.
 
 Run from the repository root:
 

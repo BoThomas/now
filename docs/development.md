@@ -2,8 +2,8 @@
 
 [Back to the README](../README.md)
 
-Requires Xcode Command Line Tools with a macOS 15 or later SDK (the build uses the active SDK
-reported by `xcrun`; override with `SDK_PATH` if needed).
+Requires a Swift 6.1+ compiler and Xcode Command Line Tools with a macOS 15 or later SDK (the build
+uses the active SDK reported by `xcrun`; override with `SDK_PATH` if needed).
 
 ```bash
 ./build-app.sh
@@ -41,11 +41,15 @@ Install the pinned SwiftLint binary locally, then check for new findings:
 ./scripts/analyze.sh --report # include the existing backlog for review
 ```
 
-Setup downloads SwiftLint 0.65.1 from its official GitHub release and verifies the pinned SHA-256.
-The ignored `.tools/` installation survives app builds. Analysis never downloads tools, signs an
-app, requests permissions, or launches now. A missing/wrong tool version is an error. `SWIFTLINT`
-can point to another installation of the same version. Command Line Tools SourceKit discovery is
-handled by the script. Python 3 and the active Swift compiler are also required; npm is not.
+Setup downloads SwiftLint 0.65.1 from its official GitHub release and verifies the pinned SHA-256,
+selecting the macOS or Linux x86_64/arm64 archive. Linux release binaries require glibc 2.38 and
+newer libstdc++. On older Linux hosts, build the unmodified 0.65.1 tag from source with a compatible
+Swift compiler and place the version-checked executable in `.tools/swiftlint/swiftlint` (or set
+`SWIFTLINT`). This devbox uses that source-build route; no host libc upgrade was made. The ignored
+`.tools/` installation survives app builds. Analysis never downloads tools, signs an app, requests
+permissions, or launches now. A missing/wrong tool version is an error. `SWIFTLINT` can point to
+another installation of the same version. Command Line Tools SourceKit discovery is handled by the
+script. Python 3 and the active Swift compiler are also required; npm is not.
 
 The default command fails on compiler errors, new compiler warnings, new SwiftLint findings, or tool
 failures. `--report` makes findings informational but still fails on compiler/tool errors. Reports
@@ -140,21 +144,25 @@ fixture digests, including identities and presentation fields.
 ### Shared core and Linux checks
 
 `Sources/NowCore` contains parsed values, envelope/date parsing, recurrence expansion, meeting-link
-policy, plain app models, tolerant decoding and title filtering. `Sources/ICS.swift` retains macOS
-`NSDataDetector` discovery and feed materialization; `Sources/Models.swift` supplies native color
-accessors, default-color constructors and `AppModelCoding.decoder()`. Use that decoder for macOS
-profiles/subscriptions so legacy missing/null color fields use the system palette. Core callers can
-supply their own decoder-local color policy through `ModelDecoding.decoder(calendarColor:)`; a bare
-decoder retains an unresolved color as `""`. Live storage/recovery, reminder controllers and the
-complete app have not been ported.
+policy, full materialization/merge, plain models, tolerant decoding, filtering and reminder policy.
+`Sources/ICS.swift` retains macOS `NSDataDetector` and materialization adapter overloads;
+`Sources/Models.swift` supplies native color accessors, default-color constructors and
+`AppModelCoding.decoder()`. Use that decoder for macOS profiles/subscriptions so legacy missing/null
+color fields use the system palette. Core callers can supply their own decoder-local color policy
+through `ModelDecoding.decoder(calendarColor:)`; a bare decoder retains an unresolved color as `""`.
+Shared POSIX cache storage requires an injected directory. Live preference recovery, receipt
+delivery/replacement, timers and the complete app remain in the macOS shell.
 
-With a Swift 5.9-or-newer host toolchain and its system dependencies installed:
+With a Swift 6.1-or-newer host toolchain and its system dependencies installed:
 
 ```bash
 swift --version
 ./scripts/test-core.sh
 NOW_TEST_CONFIGURATION=release ./scripts/test-core.sh
 python3 scripts/analysis-smoke.py --compiler-only
+python3 scripts/module-boundary-smoke.py --parse
+./.tools/swiftlint/swiftlint lint --config .swiftlint.yml --no-cache --quiet --strict
+python3 scripts/analysis-smoke.py --lint-only
 ```
 
 The core script selects `NOW_TEST_SUITE=core` and builds `NowCoreTests` against `NowCore`, in Swift
@@ -162,10 +170,21 @@ The core script selects `NOW_TEST_SUITE=core` and builds `NowCoreTests` against 
 `xcrun`/arm64 wrapper, works without XCTest, and uses `.build/tests/core`. The synthetic fixtures
 cover envelopes, folding/limits, durations, timezone mapping, raw recurrence anchors, DST
 gap/overlap expansion, exact work budgets, link policy with injected candidates, saved-profile wire
-fields, tolerant recovery, color-policy isolation, filtering and agenda/notification identities.
-They do not access live preferences, calendars, network or UI. Linux compiler and system-library
-versions must be recorded with validation evidence; Linux success does not establish Windows support
-or macOS GUI/signing health. Full macOS validation still runs on the signing Mac.
+fields, tolerant recovery, color-policy isolation, filtering, stable hashes, merge generations,
+ledger omissions/reschedules and snooze decisions. POSIX storage fixtures exercise real
+child-process restarts, permissions, failed empty replacement/quarantine and corruption
+preservation. They do not access live preferences, calendars, network or UI. Linux compiler and
+system-library versions must be recorded with validation evidence; Linux success does not establish
+Windows support or macOS GUI/signing health. Full macOS validation still runs on the signing Mac.
+
+Swift Crypto 4.5.2 is pinned in `Package.swift`; transitive resolution is recorded in
+`Package.resolved`. macOS uses built-in CryptoKit, so the portable implementation is a conditional
+Linux/Windows dependency. The first resolution needs dependency access; fixtures themselves use no
+network. The dependency raises the compiler requirement to 6.1, not the app/core language mode to
+Swift 6. Core builds default to four parallel jobs to bound native dependency compilation; override
+with `NOW_BUILD_JOBS`. Module-boundary smoke verifies source ownership for every target; `--parse`
+adds syntax checks only, not a substitute for macOS SDK typechecking. The macOS SwiftPM wrapper now
+fails immediately if SDK discovery fails rather than attempting a wrong-host build.
 
 The macOS selftest also includes `Tests/NowTests/ModelBoundaryTests.swift`, checking native palette
 defaults (including extreme indices), nested legacy profile colors and optional event colors. The

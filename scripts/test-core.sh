@@ -8,5 +8,5 @@ case "$configuration" in
   *) printf '%s\n' 'NOW_TEST_CONFIGURATION must be debug or release' >&2; exit 2 ;;
 esac
 export NOW_TEST_SUITE=core
-swift run --scratch-path .build/tests/core -c "$configuration" \
+swift run --scratch-path .build/tests/core --jobs "${NOW_BUILD_JOBS:-4}" -c "$configuration" \
   -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors now-core-tests

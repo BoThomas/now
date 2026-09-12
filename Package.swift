@@ -16,7 +16,9 @@ let suites: [String: [String]] = [
     "parser": ["scripts/parser-performance-smoke.swift"]
 ]
 let suite = ProcessInfo.processInfo.environment["NOW_TEST_SUITE"]
-let core = Target.target(name: "NowCore", path: "Sources/NowCore")
+let core = Target.target(name: "NowCore", dependencies: [
+    .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux, .windows]))
+], path: "Sources/NowCore")
 let target: Target
 let product: Product
 if suite == "core" {
@@ -44,6 +46,7 @@ let package = Package(
     name: "now",
     platforms: [.macOS(.v13)],
     products: [product],
+    dependencies: [.package(url: "https://github.com/apple/swift-crypto.git", exact: "4.5.2")],
     targets: [core, target],
     swiftLanguageVersions: [.v5]
 )

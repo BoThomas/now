@@ -12,7 +12,14 @@ import NowCore
         }
     }
 
-    static func main() {
+    static func main() async {
+        #if os(macOS) || os(Linux)
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1].hasPrefix("--cache-") {
+            do { try await cacheChild(mode: CommandLine.arguments[1], directory: URL(fileURLWithPath: CommandLine.arguments[2])) }
+            catch { print("CACHE CHILD FAILED: \(error)"); exit(1) }
+            return
+        }
+        #endif
         var check = Check()
         envelopes(&check)
         datesAndOverrides(&check)
@@ -24,6 +31,16 @@ import NowCore
             try modelEncoding(&check)
             titleFilters(&check)
             meetingIdentity(&check)
+            try cachePolicy(&check)
+            #if os(macOS) || os(Linux)
+            try await cacheStorage(&check)
+            #endif
+            try ledgerLifecycle(&check)
+            reminderDecisions(&check)
+            observationOwnership(&check)
+            snoozeDecisions(&check)
+            materialization(&check)
+            calendarMerge(&check)
         } catch {
             check.expect(false, "model fixture failed to decode/encode: \(error)")
         }
@@ -31,7 +48,7 @@ import NowCore
             for failure in check.failures { print("FAIL: \(failure)") }
             exit(1)
         }
-        print("CORE TESTS OK — \(check.count) checks; parser, dates, recurrence, links, models, recovery, filters, identity")
+        print("CORE TESTS OK — \(check.count) checks; parsing/materialization, models, cache/restart, hashing, reminder/ledger/snooze policy")
     }
 
     static func calendar(_ body: String) -> String {

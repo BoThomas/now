@@ -7,5 +7,7 @@ export SWIFT_MODULE_CACHE_PATH="$CLANG_MODULE_CACHE_PATH"
 mkdir -p "$CLANG_MODULE_CACHE_PATH"
 COMMAND="$1"
 shift
+# Resolve before exec so SDK lookup failure cannot launch a wrong-host build.
+SDK_PATH="${SDK_PATH:-$(xcrun --show-sdk-path)}"
 exec swift "$COMMAND" --disable-sandbox --cache-path "$PWD/.build/swiftpm-cache" \
-  --arch arm64 -Xswiftc -sdk -Xswiftc "${SDK_PATH:-$(xcrun --show-sdk-path)}" "$@"
+  --arch arm64 -Xswiftc -sdk -Xswiftc "$SDK_PATH" "$@"

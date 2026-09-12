@@ -2,39 +2,8 @@ import Foundation
 import NowCore
 import AppKit
 import UserNotifications
-import CryptoKit
-
-/// Pure routing; permission never changes a discreet request into fullscreen.
-enum ReminderRoute: Equatable { case fullscreen, notification, catchUp, deferReminder, handled }
-enum NotificationLogic {
-    static func key(_ id: String) -> String {
-        SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined()
-    }
-
-    static func route(event: MeetingEvent, settings: AppSettings, activity: MeetingActivity,
-                      catchUp: Bool, snoozed: Bool, now: Date) -> ReminderRoute {
-        if case .meeting = activity {
-            switch settings.inMeetingDelivery {
-            case .suppress: return now >= event.start ? .handled : .deferReminder
-            case .notification: return .notification
-            case .normal: break
-            }
-        }
-        if catchUp && !snoozed {
-            switch settings.catchUpDelivery {
-            case .normal: break
-            case .notification: return .catchUp
-            case .skip: return .handled
-            }
-        }
-        return settings.reminderDelivery == .notification ? .notification : .fullscreen
-    }
-
-    static func sameStartGroups(_ events: [MeetingEvent]) -> [[MeetingEvent]] {
-        Dictionary(grouping: events, by: \.start).sorted { $0.key < $1.key }
-            .map { $0.value.sorted { $0.id < $1.id } }
-    }
-
+// Localized banner formatting remains with the macOS presentation layer.
+extension NotificationLogic {
     static func content(events: [MeetingEvent], privateDetails: Bool, catchUp: Bool, now: Date) -> (title: String, body: String) {
         let startingNow = !events.isEmpty && events.allSatisfy {
             Fmt.isStartingNow(start: $0.start, end: $0.end, now: now)
@@ -59,114 +28,6 @@ enum NotificationLogic {
         return (title, body)
     }
 
-    static func eventKey(_ event: MeetingEvent) -> String {
-        guard let identity = event.notificationIdentity else { return key(event.id) }
-        return key(event.calendarID.uuidString + ":" + identity)
-    }
-
-    static func legacyFingerprint(_ event: MeetingEvent) -> String {
-        key([event.legacyID, event.title, String(event.end.timeIntervalSince1970), event.link?.absoluteString ?? "", String(event.isMuted)].joined(separator: "\n"))
-    }
-
-    static func priorAgendaFingerprint(_ event: MeetingEvent) -> String {
-        key([event.legacyID, event.title, String(event.end.timeIntervalSince1970), event.link?.absoluteString ?? "", event.location ?? "", String(event.isMuted)].joined(separator: "\n"))
-    }
-
-    static func fingerprint(_ event: MeetingEvent) -> String {
-        key([event.id, event.title, String(event.end.timeIntervalSince1970), event.link?.absoluteString ?? "", event.location ?? "", String(event.isMuted)].joined(separator: "\n"))
-    }
-}
-
-/// Only a full batch started for the current launch/wake can finish catch-up.
-/// Targeted generations never participate; a repeated wake revokes the old owner.
-struct CatchUpRefreshTracker {
-    private(set) var pending = false
-    private var owner: Int?
-    mutating func begin() { pending = true; owner = nil }
-    mutating func started(_ requestID: Int) { if pending { owner = requestID } }
-    mutating func finish(_ requestID: Int) -> Bool {
-        guard pending, owner == requestID else { return false }
-        pending = false
-        owner = nil
-        return true
-    }
-}
-
-/// No titles, feed URLs, notes, or join links are stored in acknowledgement data.
-/// Keep absent records until expiry (or two successful source omissions), including
-/// while asynchronously restoring another calendar on launch.
-struct ReminderLedger: Codable, Equatable {
-    struct Entry: Codable, Equatable {
-        var calendarID: UUID
-        var end: Date
-        var snooze: Date?
-        var misses = 0
-        /// Older ledgers did not retain the scheduled start.
-        var start: Date?
-    }
-    var entries: [String: Entry] = [:]
-    mutating func record(_ event: MeetingEvent, snooze: Date? = nil) {
-        entries[NotificationLogic.eventKey(event)] = Entry(calendarID: event.calendarID, end: event.end, snooze: snooze, start: event.start)
-    }
-    @discardableResult
-    mutating func reconcile(events: [MeetingEvent], enabled: Set<UUID>, observed: Set<UUID>, now: Date,
-                            rearmOnReschedule: Set<String> = [], previousEvents: [MeetingEvent] = []) -> Set<String> {
-        var rearmedIDs: Set<String> = []
-        let previousByKey = Dictionary(previousEvents.map { (NotificationLogic.eventKey($0), $0) }, uniquingKeysWith: { first, _ in first })
-        // Upgrade old occurrence-ID entries only when that exact occurrence is present.
-        let legacyCounts = Dictionary(grouping: events, by: \.legacyID).mapValues(\.count)
-        // Once an old key matches multiple occurrences, it cannot safely be
-        // assigned later merely because one sibling disappears.
-        for (id, count) in legacyCounts where count > 1 { entries.removeValue(forKey: NotificationLogic.key(id)) }
-        for event in events where legacyCounts[event.legacyID] == 1 {
-            let old = NotificationLogic.key(event.legacyID), key = NotificationLogic.eventKey(event)
-            if old != key, let entry = entries.removeValue(forKey: old), entries[key] == nil { entries[key] = entry }
-        }
-        let live = Dictionary(events.map { (NotificationLogic.eventKey($0), $0) }, uniquingKeysWith: { first, _ in first })
-        for (key, var entry) in entries {
-            if let event = live[key] {
-                // Notification receipts own their edit lifecycle; fullscreen reminders
-                // can re-arm at a new start. Explicit snoozes retain their chosen deadline.
-                let previousStart = entry.start ?? previousByKey[key]?.start
-                if rearmOnReschedule.contains(key), entry.snooze == nil,
-                   let previousStart, previousStart != event.start {
-                    entries.removeValue(forKey: key)
-                    rearmedIDs.insert(event.id)
-                    // Forget the old in-memory ID too, even if the new reminder
-                    // has not fired before another edit moves back to that start.
-                    if let previous = previousByKey[key] { rearmedIDs.insert(previous.id) }
-                    continue
-                }
-                entry.start = event.start
-                entry.end = event.end
-                entry.misses = 0
-            }
-            else if observed.contains(entry.calendarID) { entry.misses += 1 }
-            guard enabled.contains(entry.calendarID), entry.end > now else { entries.removeValue(forKey: key); continue }
-            if entry.misses >= 2 { entries.removeValue(forKey: key) }
-            else { entries[key] = entry }
-        }
-        if entries.count > 20_000 {
-            entries = Dictionary(uniqueKeysWithValues: entries.sorted { $0.value.end > $1.value.end }.prefix(20_000).map { ($0.key, $0.value) })
-        }
-        return rearmedIDs
-    }
-    mutating func invalidate(_ calendars: Set<UUID>) { entries = entries.filter { !calendars.contains($0.value.calendarID) } }
-}
-
-/// One notification per continuous failure episode, after five minutes. Successful
-/// sources reset independently; unrelated successes cannot re-arm failing sources.
-struct SyncNotificationTracker: Codable {
-    var firstFailure: [UUID: Date] = [:]
-    var notified: Set<UUID> = []
-    mutating func candidates(failed: Set<UUID>, now: Date) -> Set<UUID> {
-        firstFailure = firstFailure.filter { failed.contains($0.key) }
-        notified.formIntersection(failed)
-        for id in failed where firstFailure[id] == nil { firstFailure[id] = now }
-        return Set(firstFailure.compactMap { id, start in
-            !notified.contains(id) && now.timeIntervalSince(start) >= 300 ? id : nil
-        })
-    }
 }
 
 struct NotificationPermission: Equatable {

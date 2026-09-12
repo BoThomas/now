@@ -9,6 +9,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPILER_ONLY = "--compiler-only" in sys.argv
+LINT_ONLY = "--lint-only" in sys.argv
+if COMPILER_ONLY and LINT_ONLY:
+    raise SystemExit("Choose --compiler-only or --lint-only, not both")
 
 with tempfile.TemporaryDirectory(prefix="now-analysis-") as directory:
     project = Path(directory)
@@ -31,6 +34,32 @@ with tempfile.TemporaryDirectory(prefix="now-analysis-") as directory:
     environment = dict(os.environ, SWIFTLINT=os.environ.get(
         "SWIFTLINT", str(ROOT / ".tools/swiftlint/swiftlint")))
     source = project / "Sources/Probe.swift"
+
+    if LINT_ONLY:
+        # Portable linter probes use the same pinned configuration and empty
+        # disposable baseline, without requiring an Apple SDK typecheck.
+        linter = environment["SWIFTLINT"]
+        assert subprocess.check_output([linter, "version"], text=True).strip() == "0.65.1"
+
+        def lint(label, succeeds, report=False):
+            result = subprocess.run([linter, "lint", "--config", ".swiftlint.yml", "--no-cache", "--quiet",
+                                     "--lenient" if report else "--strict"], cwd=project, env=environment,
+                                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            assert (result.returncode == 0) == succeeds, (label, result.stdout)
+            if label != "clean source":
+                assert "force_try" in result.stdout, (label, result.stdout)
+            print("PASS:", label)
+
+        source.write_text("func value() -> Int { 1 }\n")
+        lint("clean source", True)
+        source.write_text("func value() throws -> Int { 1 }\nfunc probe() -> Int { try! value() }\n")
+        lint("new shell lint finding", False)
+        lint("informational lint report", True, report=True)
+        source.write_text("func value() -> Int { 1 }\n")
+        core.write_text("func value() throws -> Int { 1 }\nfunc probe() -> Int { try! value() }\n")
+        lint("new core lint finding", False)
+        print("ANALYSIS LINT SMOKE OK (compiler/SDK gates not run)")
+        raise SystemExit(0)
 
     def run(label, succeeds, report=False, expected="", env=None):
         if COMPILER_ONLY:

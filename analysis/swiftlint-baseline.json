@@ -156,13 +156,13 @@
       "ruleName": "Cyclomatic Complexity",
       "severity": "warning",
       "location": {
-        "line": 42,
-        "file": "Sources/ICS.swift",
-        "character": 5
+        "line": 32,
+        "file": "Sources/NowCore/Calendar/ICSBuilder.swift",
+        "character": 13
       },
       "reason": "Function should have complexity 15 or less; currently complexity is 24"
     },
-    "text": "    static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date) -> ICSBuildResult {"
+    "text": "    package static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date, colorHex: String, detectLink: @escaping (ParsedEvent) -> URL?) -> ICSBuildResult {"
   },
   {
     "violation": {
@@ -171,13 +171,13 @@
       "ruleName": "Function Body Length",
       "severity": "warning",
       "location": {
-        "line": 42,
-        "file": "Sources/ICS.swift",
-        "character": 12
+        "line": 32,
+        "file": "Sources/NowCore/Calendar/ICSBuilder.swift",
+        "character": 20
       },
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 116 lines"
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 115 lines"
     },
-    "text": "    static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date) -> ICSBuildResult {"
+    "text": "    package static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date, colorHex: String, detectLink: @escaping (ParsedEvent) -> URL?) -> ICSBuildResult {"
   },
   {
     "violation": {

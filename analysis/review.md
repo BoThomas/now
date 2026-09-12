@@ -30,7 +30,7 @@ All 13 original warnings are resolved, and their individual baseline entries are
 | `ICSParser.makeEvent`                      | complexity 30; length 132 | The property dispatcher deliberately preserves field order, first-valid-link rules, unknown-zone rejection, deferred end/recurrence parsing and duration precedence. A mutable property accumulator would mostly relocate the same state. Zone, duration, link and override fixtures protect this boundary. |
 | `ICSParser.parseDuration`                  | complexity 21             | The compact state machine rejects duplicate/out-of-order components, mixed week/day forms and overflow. Extraction would scatter the grammar state across helpers. Duration/compliance fixtures cover those rejection branches.                                                                             |
 | `RRULEExpander.expand`                     | complexity 19; length 82  | Local `consider` owns budget, COUNT, UNTIL, anchor and DST-gap accounting for both traversal modes. Retaining one ownership scope makes budget exhaustion and exact occurrence counting auditable. DST/COUNT selftests and workload probes cover it.                                                        |
-| `ICSBuilder.meetings`                      | complexity 24; length 116 | This ordered materialization transaction shares a feed budget across sorted UIDs, resolves master/override revisions, and emits only a complete result. Broad parser redesign is deferred; recurrence identity, resource-limit and deterministic workload fixtures cover the coupling.                      |
+| `ICSBuilder.meetings`                      | complexity 24; length 115 | This ordered materialization transaction shares a feed budget across sorted UIDs, resolves master/override revisions, and emits only a complete result. Broad parser redesign is deferred; recurrence identity, resource-limit and deterministic workload fixtures cover the coupling.                      |
 | `ReminderNotificationController.reconcile` | complexity 17             | The ordered receipt pass distinguishes startup protection, in-flight submissions, diagnostic retries, hiding and replacement. Keeping these states together makes ownership and stale-action handling visible. Notification lifecycle fixtures cover cold starts, edits, retries and explicit actions.      |
 | `MenuBarController.menuNeedsUpdate`        | length 106                | Native menu construction reads as a single ordered agenda with controls and separators. Splitting static row construction solely for line count would obscure visible order. Hosted reminder/menu tests cover selection and tracking updates.                                                               |
 | `NativeCalendarSource.parsedEvent`         | 7 parameters              | Seven named plain values form the intentional EventKit-free boundary; wrapping them would introduce a second DTO with the same fields. Pure native mapping tests avoid constructing an EventKit store.                                                                                                      |
@@ -101,3 +101,37 @@ Plain model values and delivery/filter enums have checked `Sendable` conformance
 existing use across fetch and UI ownership boundaries explicit. Debug/release core checks pass
 complete strict concurrency with warnings treated as errors. This does not establish macOS actor
 checking for the native adapters.
+
+## Calendar, storage and reminder policy extraction
+
+The two existing `ICSBuilder.meetings` findings move to `Sources/NowCore/Calendar/ICSBuilder.swift`,
+with the exact new `package` signature in the baseline. Native palette resolution is now in the
+shell overload; materialization receives color/link adapters. The algorithm's ordering, budgets and
+override rules are retained. Pinned SwiftLint 0.65.1 on Linux confirms complexity 24 and length
+**115**, reduced from 116 by that moved color resolution. The existing baseline's reason/location is
+updated to reflect this reduction, not accept new debt. No baseline is regenerated, threshold
+changed, finding silently dropped or new exception accepted.
+
+New core files have focused ownership: `Calendar` for snapshots/materialization/merge and request
+generations; `Reminders` for identity, routing, ledger, observations, timing, reconciliation and
+snooze policy; `Activity` for values/debouncing; `Storage` for the serial POSIX adapter; `Support`
+for SHA-256. Controllers retain lifecycle ordering and delegate pure decisions through compatibility
+entrypoints. Existing larger parser/controller files are not consolidated into a new core
+controller.
+
+`package` visibility is added only to the moved values/initializers/operations consumed by the shell
+and fixtures. Private traversal, snapshot filename and disk-queue details remain private/internal.
+`ICSBuildResult`, snapshots, fetch/merge values, ledger, activity and snooze values use checked
+`Sendable` conformances. `CalendarEventCache` retains its original queue-protected unchecked
+conformance; no new unsafe conformance or mutable global configuration is introduced. Link discovery
+is a synchronous, build-local callback retained only by lazy occurrence content.
+
+Linux debug/release runs exercise 217 checks with complete concurrency and warnings-as-errors,
+including real cache/ledger process restarts. Portable compiler probes and all ten target ownership
+and syntax checks pass. Pinned SwiftLint strict mode passes; an unfiltered report confirms the same
+16 reviewed findings and four portable lint probes pass. The Linux release binary requires glibc
+2.38 and newer libstdc++; this Debian 12 host instead built the unmodified 0.65.1 source tag
+(`6aba03e3d8302b33f106e0f922210f35ca4b52cf`) with Swift 6.3.3. Tool code and dependencies remain
+outside the repository; the resulting version-checked binary is in ignored `.tools/swiftlint`. Full
+macOS SDK analysis, GUI/selftests, native detector equivalence and signed updater gates remain
+outstanding; Linux results do not waive them.

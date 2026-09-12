@@ -1,7 +1,8 @@
 # Current work target: cross-platform groundwork via core extraction
 
-Status: parser groundwork committed/pushed; models/filtering slice implemented and Linux-validated.
-macOS acceptance gates remain pending before merge or release.
+Status: shared calendar/cache/reminder policy and POSIX storage are implemented and Linux-validated.
+Native integration, macOS acceptance and platform shell decisions remain before merge/release or a
+shipping port.
 
 Branch: `feat/cross-platform-core`. Starting point: build/test modernization merged through PR #16,
 merge commit `d01dbd786159bc63b088dfc1254c880d088eccd9`.
@@ -94,18 +95,22 @@ the macOS UI, and a general platform-service abstraction without a concrete cons
 
 - [x] Extract plain application models, filters and decoding policy after resolving native color and
       sound defaults without changing persisted output or recovery behavior on macOS.
-- [ ] Choose a maintained portable SHA-256 strategy (for example Swift Crypto) before moving cache
+- [x] Choose a maintained portable SHA-256 strategy (for example Swift Crypto) before moving cache
       and reminder keys. Preserve exact bytes, lowercase hex encoding, identity prefixes and legacy
       aliases; test against known saved-state fixtures. Never substitute Swift `Hasher`.
-- [ ] Move cache snapshot/coverage/recovery decisions while leaving platform directory selection and
-      filesystem operations in adapters where needed. Verify permission, atomic replacement and
-      failed-empty-save no-resurrection behavior on each supported filesystem/platform.
-- [ ] Move `NotificationLogic` routing/identity, `ReminderLedger`, catch-up/omission tracking,
+- [x] Move cache snapshot/coverage/recovery decisions and the serial POSIX adapter with required
+      directory injection. Linux permission, replacement, quarantine and restart cases pass.
+- [ ] Verify the moved POSIX adapter and failed-empty-save behavior on macOS via the existing signed
+      cache/notification regression suites. Windows storage remains a separate unimplemented
+      adapter.
+- [x] Move `NotificationLogic` routing/identity, `ReminderLedger`, catch-up/omission tracking,
       `AppStore` pure reminder eligibility/unmute/bookkeeping helpers, and `AlertController` pure
       snooze scheduling. Controllers delegate to one implementation; no broad orchestration rewrite.
-- [ ] Extend the core-only runner with model recovery, filtering, identities, ledger retention,
+- [x] Extend the core-only runner with model recovery, filtering, identities, ledger retention,
       receipt-owned rescheduling and cache policy fixtures as those rules become available.
-- [ ] Only then consider extracting live `AppStore` responsibilities behind demonstrated interfaces.
+- [x] Evaluate further `AppStore` extraction: materialization and source-generation/merge decisions
+      now have shared owners. Keep live `commitEvents`, timers, preferences and accepted receipt
+      submission/replacement ownership together until macOS lifecycle validation is available.
 
 ## macOS validation and acceptance
 
@@ -221,6 +226,72 @@ Verification on the recorded Swift 6.3.3/Linux host:
 - Visibility and concurrency ownership changes are recorded in `analysis/review.md`. No baseline
   entries were added, removed or relaxed in this slice.
 
-Next implementation slice: portable SHA-256 and cache snapshot/coverage policy, preserving existing
-key bytes and on-disk recovery semantics. Then extract reminder routing/ledger/snooze policy.
-Complete the macOS acceptance checklist on the signing Mac before merging this extraction.
+### Calendar/cache/reminder policy slice
+
+Implemented focused owners under `Sources/NowCore`:
+
+- `Calendar/`: materialization with injected color/link adapters, cache snapshot validation and
+  coverage, request generations and source merge. The macOS builder/merge overloads preserve native
+  palette and `NSDataDetector` behavior while delegating one algorithm.
+- `Reminders/`: stable occurrence identity/fingerprints, routing/grouping, ledger reconciliation,
+  source-owned omission/catch-up/sync episodes, due/Join eligibility, unmute/pruning and snooze
+  rules. Existing controller methods delegate; no duplicate policy implementation or replacement
+  live store.
+- `Activity/`: activity values and debouncing; CoreAudio probing/classification stays native.
+- `Storage/`: existing serial POSIX disk adapter for macOS/Linux, with explicit directory injection.
+  Default application paths stay in the macOS extension. Windows filesystem support is not supplied.
+- `Support/`: SHA-256, using CryptoKit on macOS and pinned Swift Crypto 4.5.2 on Linux/Windows.
+  `Package.resolved` deliberately pins Swift ASN.1 1.7.2 transitively. Dependency manifests require
+  compiler 6.1+; root manifest/package APIs and app/core language mode remain Swift 5 compatible.
+
+Validation on the previously recorded Swift 6.3.3/Debian 12 host:
+
+- Debug and release core runners each pass **217 checks**, with strict concurrency and warnings as
+  errors. Known SHA-256 vectors and independently calculated cache/current/legacy reminder hashes
+  verify exact existing key bytes. A resource-limit fixture was corrected to actually exceed the
+  unchanged recurrence budget; no production limit or algorithm was weakened.
+- Real subprocesses write and reopen cache plus ledger, proving handled reminders remain handled
+  across a process restart. Storage fixtures verify 0700/0600, corruption preservation/retirement,
+  symlink rejection, queued removal, failed accepted-empty quarantine and no stale restoration.
+- Materialization/merge fixtures cover coincident overrides, explicit-empty inheritance, RDATE/
+  EXDATE, lazy link resolution, incomplete feeds/expansions, stale generations, URL edits, disable/
+  invalidation and successful-source omission ownership. Reminder fixtures cover rescheduling,
+  legacy alias ambiguity, receipt/snooze ownership, timing boundaries, suppression and safe snoozes.
+- All 12 portable compiler-gate probes pass. The durable
+  `python3 scripts/module-boundary-smoke.py --parse` passes all ten target configurations, verifies
+  shared source ownership and syntax-parses consumer files without claiming an SDK typecheck.
+- Required signed build/selftest, macOS analysis report and full analysis smoke were attempted and
+  remain unavailable (no `xcrun`/`xcode-select`, macOS SDK or signing environment). The SDK wrapper
+  now stops at failed discovery instead of accidentally starting a wrong-host build. Its syntax is
+  checked. Core tests bound dependency build parallelism to four jobs, overridable via
+  `NOW_BUILD_JOBS`.
+- Pinned SwiftLint 0.65.1 strict mode passes, and an unfiltered report confirms the existing 16
+  reviewed findings. Two materialization entries are relocated with exact signatures; its length
+  decreases from 116 to 115 and the existing baseline reason records that measured reduction. Four
+  portable lint probes pass via `python3 scripts/analysis-smoke.py --lint-only`. No threshold is
+  relaxed or new exception accepted. New value types use checked `Sendable`; the cache retains its
+  original serial-queue-protected unchecked conformance.
+
+The official Linux linter archive was checksum-verified but cannot run on Debian 12's older glibc/
+libstdc++. The unmodified SwiftLint 0.65.1 source tag was instead built with the installed compiler;
+`.tools/swiftlint/swiftlint version` reports 0.65.1. Source/intermediate artifacts stay outside the
+repo; only the executable is copied into ignored `.tools`. The installer now selects pinned platform
+archives, preserving its original macOS path; incompatible runtime/version checks fail before
+replacing an installed tool. No host libc was replaced.
+
+### Next gates
+
+The Foundation-only cache directory-selection extension and transport result type also pass host
+typechecking against the actual built `NowCore` module with complete concurrency and warnings as
+errors. This verifies the extracted cache API/convenience initializer boundary without pretending to
+typecheck AppKit/EventKit code on Linux.
+
+The Linux-verifiable shared-policy groundwork is complete for this plan. Before another live-state
+ownership refactor or merge, run the macOS acceptance checklist, including old/new full parser
+digests, cache recovery, notification lifecycle, focus/liveness and signed updater smoke. Those
+tests guard platform ordering that a Linux-only model cannot prove.
+
+After that, decide the first port's minimum feature set and run actual target-platform spikes:
+native text URL discovery, tray/menu, background reminder focus, notification actions after restart,
+wake/autostart and packaging/update trust. Windows needs its own toolchain and filesystem
+validation. These remain explicit next-stage work, not a claimed shipping Linux/Windows app.

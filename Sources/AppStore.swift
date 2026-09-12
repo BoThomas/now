@@ -663,53 +663,11 @@ final class AppStore: ObservableObject {
     /// - Successful results carry feed warnings (degraded events) alongside
     ///   events; failures keep the previous warning untouched.
     nonisolated static func mergeICS(current: [MeetingEvent], results: [FetchResult], live: [CalendarSubscription], previousErrors: [UUID: String], previousWarnings: [UUID: String] = [:], latestRequestIDs: [UUID: Int] = [:], invalidatedCalendarIDs: Set<UUID> = []) -> (events: [MeetingEvent], errors: [UUID: String], warnings: [UUID: String], allSucceeded: Bool, observedCalendarIDs: Set<UUID>) {
-        let liveByID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0) })
-        let colorByID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex) })
-        // Muted flags come from the LIVE rules — a fetch that started before a
-        // rule edit must land with the new flags applied, exactly like colors.
-        let matchers = TitleFilterMatcher.byCalendar(subscriptions: live)
-        var events = current.compactMap { event -> MeetingEvent? in
-            guard !invalidatedCalendarIDs.contains(event.calendarID),
-                  let subscription = liveByID[event.calendarID], subscription.isEnabled else { return nil }
-            var copy = event
-            if let hex = colorByID[event.calendarID] { copy.colorHex = hex }
-            copy.isMuted = matchers[event.calendarID]?.matches(title: event.title) ?? false
-            return copy
-        }
-        let enabledIDs = Set(live.filter(\.isEnabled).map(\.id))
-        var errors = previousErrors.filter { enabledIDs.contains($0.key) && !invalidatedCalendarIDs.contains($0.key) }
-        var warnings = previousWarnings.filter { enabledIDs.contains($0.key) && !invalidatedCalendarIDs.contains($0.key) }
-        var allSucceeded = true
-        var observedCalendarIDs: Set<UUID> = []
-        for result in results {
-            guard let subscription = liveByID[result.subscription.id],
-                  subscription.isEnabled,
-                  subscription.url == result.subscription.url,
-                  latestRequestIDs[result.subscription.id, default: result.requestID] == result.requestID else {
-                allSucceeded = false
-                continue
-            }
-            if let error = result.error {
-                errors[subscription.id] = error
-                allSucceeded = false
-                continue // failed fetch: keep the cached events
-            }
-            observedCalendarIDs.insert(subscription.id)
-            errors.removeValue(forKey: subscription.id)
-            if let warning = result.warning {
-                warnings[subscription.id] = warning
-            } else {
-                warnings.removeValue(forKey: subscription.id)
-            }
-            events.removeAll { $0.calendarID == subscription.id }
-            events.append(contentsOf: result.events.map { event in
-                var copy = event
-                if let hex = colorByID[event.calendarID] { copy.colorHex = hex }
-                copy.isMuted = matchers[event.calendarID]?.matches(title: event.title) ?? false
-                return copy
-            })
-        }
-        return (events, errors, warnings, allSucceeded, observedCalendarIDs)
+        let merged = CalendarSnapshotMerge.merge(current: current, results: results, live: live,
+            previousErrors: previousErrors, previousWarnings: previousWarnings, latestRequestIDs: latestRequestIDs,
+            invalidatedCalendarIDs: invalidatedCalendarIDs,
+            colorHex: { $0.colorHex.isEmpty ? Palette.hex(for: $0.colorIndex) : $0.colorHex })
+        return (merged.events, merged.errors, merged.warnings, merged.allSucceeded, merged.observedCalendarIDs)
     }
 
 
@@ -1035,25 +993,13 @@ final class AppStore: ObservableObject {
     /// Events unmuted before their window are untouched; brand-new events (no
     /// previous id) are untouched — that is intended late-delivery behavior.
     nonisolated static func ratchetSilence(previous: [MeetingEvent], fallbackMutedByID: [String: Bool] = [:], current: [MeetingEvent], alerted: Set<String>, snoozed: [String: Date], leadSeconds: Int, now: Date) -> (alerted: Set<String>, snoozed: [String: Date]) {
-        var wasMuted = fallbackMutedByID
-        for event in previous { wasMuted[event.id] = event.isMuted }
-        var alerted = alerted
-        var snoozed = snoozed
-        let lead = TimeInterval(leadSeconds)
-        for event in current {
-            guard wasMuted[event.id] == true, !event.isMuted else { continue }
-            guard now >= event.start.addingTimeInterval(-lead), now < event.end else { continue }
-            alerted.insert(event.id)
-            snoozed.removeValue(forKey: event.id)
-        }
-        return (alerted, snoozed)
+        ReminderReconciliation.ratchetSilence(previous: previous, fallbackMutedByID: fallbackMutedByID, current: current,
+                                             alerted: alerted, snoozed: snoozed, leadSeconds: leadSeconds, now: now)
     }
 
     /// Keep muted state for the same source-scoped lifetime as alert/snooze state.
     nonisolated static func retainedMutedStates(previous: [String: Bool], current: [MeetingEvent], retainedIDs: Set<String>) -> [String: Bool] {
-        var retained = previous.filter { retainedIDs.contains($0.key) }
-        for event in current { retained[event.id] = event.isMuted }
-        return retained
+        ReminderReconciliation.retainedMutedStates(previous: previous, current: current, retainedIDs: retainedIDs)
     }
 
     /// Deterministic ordering + dedup for the published event list: stable
@@ -1061,16 +1007,11 @@ final class AppStore: ObservableObject {
     /// don't shuffle between commits, and one entry per id so duplicate
     /// reminder cards / ForEach ids can't appear.
     nonisolated static func normalizedEvents(_ events: [MeetingEvent]) -> [MeetingEvent] {
-        var seen = Set<String>()
-        var unique: [MeetingEvent] = []
-        for event in events.sorted(by: { ($0.start, $0.calendarName, $0.title, $0.id) < ($1.start, $1.calendarName, $1.title, $1.id) }) {
-            if seen.insert(event.id).inserted { unique.append(event) }
-        }
-        return unique
+        ReminderReconciliation.normalizedEvents(events)
     }
 
     nonisolated static func prunedBookkeeping(alerted: Set<String>, snoozed: [String: Date], retainedIDs: Set<String>) -> (alerted: Set<String>, snoozed: [String: Date]) {
-        (alerted.intersection(retainedIDs), snoozed.filter { retainedIDs.contains($0.key) })
+        ReminderReconciliation.prunedBookkeeping(alerted: alerted, snoozed: snoozed, retainedIDs: retainedIDs)
     }
 
     nonisolated static func changedSubscriptionURLs(previous: [CalendarSubscription], current: [CalendarSubscription]) -> Set<UUID> {
@@ -1320,7 +1261,7 @@ final class AppStore: ObservableObject {
     }
 
     nonisolated static func joinHandlesReminder(_ event: MeetingEvent, leadSeconds: Int, now: Date) -> Bool {
-        now >= event.start.addingTimeInterval(-TimeInterval(leadSeconds)) && now < event.end
+        ReminderTiming.joinHandlesReminder(event, leadSeconds: leadSeconds, now: now)
     }
 
     private func persistReminderLedger() {
@@ -1403,15 +1344,7 @@ final class AppStore: ObservableObject {
     /// re-fires when its snooze expires, again only while `now < event.end`.
     /// Title-muted events never fire — the pure seam `tick()` shares with tests.
     nonisolated static func dueForAlert(events: [MeetingEvent], alerted: Set<String>, snoozed: [String: Date], leadSeconds: Int, now: Date) -> [MeetingEvent] {
-        let lead = TimeInterval(leadSeconds)
-        return events.filter { event in
-            if event.isMuted { return false }
-            if alerted.contains(event.id) {
-                if let fireAt = snoozed[event.id], now >= fireAt, now < event.end { return true }
-                return false
-            }
-            return now >= event.start.addingTimeInterval(-lead) && now < event.end
-        }
+        ReminderTiming.dueForAlert(events: events, alerted: alerted, snoozed: snoozed, leadSeconds: leadSeconds, now: now)
     }
 
     private func scheduleRefreshTimer() {
@@ -1713,61 +1646,6 @@ struct AccessRequestGate {
     }
 }
 
-/// Tracks the newest fetch request per subscription so late asynchronous
-/// results never overwrite newer data (pure — unit-testable without an
-/// AppStore). A full refresh supersedes every in-flight targeted resync for
-/// the subscriptions it fetches; a targeted resync supersedes the full
-/// refresh (and any older resync) for its one subscription.
-struct FetchTracker {
-    private var nextID = 1
-    private(set) var latestPerSubscription: [UUID: Int] = [:]
-
-    mutating func begin(subscriptionID: UUID) -> Int {
-        let id = nextID
-        nextID += 1
-        latestPerSubscription[subscriptionID] = id
-        return id
-    }
-
-    mutating func beginFull(subscriptionIDs: [UUID]) -> Int {
-        let id = nextID
-        nextID += 1
-        for subscriptionID in subscriptionIDs { latestPerSubscription[subscriptionID] = id }
-        return id
-    }
-}
-
-/// One in-flight fetch: the subscription snapshot the request was made against
-/// plus the generation token that decides whether the result is still current
-/// when it lands. (Top level — free of AppStore's MainActor isolation so the
-/// selftest can construct these directly.)
-struct FetchRequest {
-    let subscription: CalendarSubscription
-    let requestID: Int
-}
-
-/// A completed fetch for one subscription: parsed events, an error, an
-/// optional feed warning, and the request generation it belongs to.
-struct FetchResult {
-    let subscription: CalendarSubscription
-    let events: [MeetingEvent]
-    let error: String?
-    var warning: String?
-    var requestID = 0
-    var fetchedAt: Date?
-    var isOffline = false
-
-    init(subscription: CalendarSubscription, events: [MeetingEvent], error: String?, warning: String? = nil, requestID: Int = 0, fetchedAt: Date? = nil, isOffline: Bool = false) {
-        self.subscription = subscription
-        self.events = events
-        self.error = error
-        self.warning = warning
-        self.requestID = requestID
-        self.fetchedAt = fetchedAt
-        self.isOffline = isOffline
-    }
-}
-
 /// Global across full and targeted refreshes, even when their hosts differ.
 /// Waiters do not start URLSession tasks or retain response bodies.
 private actor CalendarDownloadSlots {
@@ -1788,34 +1666,6 @@ private actor CalendarDownloadSlots {
     func release() {
         if waiting.isEmpty { active -= 1 }
         else { waiting.removeFirst().resume() }
-    }
-}
-
-/// Pure source-snapshot bookkeeping, shared by real commits and orchestration
-/// tests. Owners remain known while absent so another source cannot age them.
-struct ReminderSnapshotTracker {
-    private var calendarByID: [String: UUID] = [:]
-    private var missingOnce: Set<String> = []
-
-    mutating func invalidate(calendarIDs: Set<UUID>) {
-        calendarByID = calendarByID.filter { !calendarIDs.contains($0.value) }
-        missingOnce.formIntersection(Set(calendarByID.keys))
-    }
-
-    mutating func retainedIDs(current: [MeetingEvent], observedCalendarIDs: Set<UUID>, enabledCalendarIDs: Set<UUID>) -> Set<String> {
-        let active = Set(current.map(\.id))
-        calendarByID = calendarByID.filter { enabledCalendarIDs.contains($0.value) }
-        for (id, calendarID) in calendarByID where observedCalendarIDs.contains(calendarID) && !active.contains(id) {
-            if missingOnce.contains(id) { calendarByID.removeValue(forKey: id) }
-            else { missingOnce.insert(id) }
-        }
-        for event in current where enabledCalendarIDs.contains(event.calendarID) {
-            calendarByID[event.id] = event.calendarID
-            missingOnce.remove(event.id)
-        }
-        let retained = Set(calendarByID.keys)
-        missingOnce.formIntersection(retained)
-        return retained
     }
 }
 

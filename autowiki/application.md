@@ -50,13 +50,13 @@ must wait for that acknowledgement.
 
 ## Persistence and recovery
 
-| State                                             | Owner and storage                                                                                                                          |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Subscriptions, native selections, settings, pause | `Persisted` in [core models](../Sources/NowCore/Models.swift); `local.tboch.now.state.v1` via [AppStore](../Sources/AppStore.swift)        |
-| Handled reminders, snoozes, notification receipts | [Notifications.swift](../Sources/Notifications.swift) and the ledger integration in [AppStore](../Sources/AppStore.swift)                  |
-| Offline ICS occurrences                           | [CalendarEventCache](../Sources/CalendarEventCache.swift), under Application Support / bundle ID / `CalendarCache-v1`                      |
-| Initial setup and feature history                 | [SetupAssistant](../Sources/SetupAssistant.swift) and [FeatureGuides](../Sources/FeatureGuides.swift), each with a separate preference key |
-| Update bookkeeping                                | [UpdateController](../Sources/Updater.swift), `local.tboch.now.updates.v1`                                                                 |
+| State                                             | Owner and storage                                                                                                                                              |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Subscriptions, native selections, settings, pause | `Persisted` in [core models](../Sources/NowCore/Models.swift); `local.tboch.now.state.v1` via [AppStore](../Sources/AppStore.swift)                            |
+| Handled reminders, snoozes, notification receipts | [Notifications.swift](../Sources/Notifications.swift) and the ledger integration in [AppStore](../Sources/AppStore.swift)                                      |
+| Offline ICS occurrences                           | [CalendarEventCache](../Sources/NowCore/Storage/CalendarEventCache.swift), with the macOS shell selecting Application Support / bundle ID / `CalendarCache-v1` |
+| Initial setup and feature history                 | [SetupAssistant](../Sources/SetupAssistant.swift) and [FeatureGuides](../Sources/FeatureGuides.swift), each with a separate preference key                     |
+| Update bookkeeping                                | [UpdateController](../Sources/Updater.swift), `local.tboch.now.updates.v1`                                                                                     |
 
 [StoredPreferences](../Sources/Preferences.swift) distinguishes absent data from damaged data.
 Tolerant decoding can salvage valid siblings, but records recovery; loading prefers a verified
