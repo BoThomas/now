@@ -30,8 +30,8 @@ before grouping ongoing meetings. See `CatchUpRefreshTracker`, `offerNotificatio
 All event changes pass through `commitEvents`. It normalizes the list, reconciles handled/snoozed
 history, applies the unmute rule, and updates open panels and accepted notifications. A meeting
 unmuted after its lead window begins is marked handled and loses its snooze to avoid a surprise
-alert. [TitleFilterMatcher](../Sources/TitleFilter.swift) supplies per-calendar exact or regex
-matching; filtered meetings remain in lists.
+alert. [TitleFilterMatcher](../Sources/NowCore/TitleFilter.swift) supplies per-calendar exact or
+regex matching; filtered meetings remain in lists.
 
 `ReminderSnapshotTracker` and [ReminderLedger](../Sources/Notifications.swift) retain bookkeeping
 through one successful omission from the event's own calendar. Two such omissions retire it;
@@ -43,8 +43,8 @@ The ledger stores source-scoped hashed keys, end/start times, and snoozes withou
 With fullscreen delivery, a changed scheduled start can re-arm the reminder; an explicit snooze or
 accepted notification receipt retains ownership of its lifecycle. Notification occurrence keys
 preserve the original recurrence anchor, so moved siblings remain distinct. These identities must be
-kept consistent across [Models](../Sources/Models.swift), [ICSBuilder](../Sources/ICS.swift), native
-mapping, and cache restoration.
+kept consistent across [Models](../Sources/NowCore/Models.swift),
+[ICSBuilder](../Sources/ICS.swift), native mapping, and cache restoration.
 
 ## Notification actions and replacements
 

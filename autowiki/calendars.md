@@ -2,8 +2,8 @@
 
 [Project map](quickstart.md) · [Reminder delivery](reminders.md)
 
-Both source types become [MeetingEvent](../Sources/Models.swift) values. ICS parsing and recurrence
-expansion live in the shared [NowCore parser](../Sources/NowCore/ICS.swift); the macOS
+Both source types become [MeetingEvent](../Sources/NowCore/Models.swift) values. ICS parsing and
+recurrence expansion live in the shared [NowCore parser](../Sources/NowCore/ICS.swift); the macOS
 [ICSBuilder](../Sources/ICS.swift) materializes those parsed values into application events.
 [NativeCalendarSource](../Sources/NativeCalendars.swift) asks EventKit for already materialized
 occurrences. Both enforce a start-time window of six hours before through fourteen days after fetch
@@ -42,7 +42,7 @@ expands supported rules, adds RDATEs, excludes EXDATEs, and replaces occurrences
 original recurrence dates. Sorted UID and anchor traversal keeps budget allocation deterministic.
 The builder preserves distinct occurrences moved to the same actual start. Original occurrence
 identity also feeds notification identity, while agenda IDs retain actual-start semantics in
-[Models.swift](../Sources/Models.swift).
+[core models](../Sources/NowCore/Models.swift).
 
 Unsupported RRULEs fall back to the first occurrence with a warning; they are not approximately
 expanded. Unknown time zones and unsupported date forms can skip records with warnings. In contrast,

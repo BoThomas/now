@@ -35,6 +35,7 @@ enum SelfTest {
         readinessTests(&reminders)
         var settings = Checker()
         settingsTests(&settings)
+        modelBoundaryTests(&settings)
         var fetch = Checker()
         fetchMergeTests(&fetch)
         calendarCacheTests(&fetch)
@@ -1784,9 +1785,9 @@ enum SelfTest {
         // Pause survives relaunch via Persisted round-trip.
         let pausedAt = now.addingTimeInterval(3600)
         let encoded = try? JSONEncoder().encode(Persisted(subscriptions: [], settings: AppSettings(), nativeCalendars: [], pausedUntil: pausedAt))
-        let decoded = encoded.flatMap { try? JSONDecoder().decode(Persisted.self, from: $0) }
+        let decoded = encoded.flatMap { try? AppModelCoding.decoder().decode(Persisted.self, from: $0) }
         c.expect(decoded?.pausedUntil == pausedAt, "pausedUntil persists")
-        let legacy = try? JSONDecoder().decode(Persisted.self, from: Data("{\"subscriptions\":[],\"settings\":{}}".utf8))
+        let legacy = try? AppModelCoding.decoder().decode(Persisted.self, from: Data("{\"subscriptions\":[],\"settings\":{}}".utf8))
         c.expect(legacy?.pausedUntil == nil, "legacy persisted state decodes without pausedUntil")
     }
 
@@ -1839,7 +1840,7 @@ enum SelfTest {
         let negativeSnooze = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"snoozeSeconds\":-9223372036854775808}".utf8))
         c.expect(negativeSnooze?.snoozeSeconds == 60, "negative snooze restores a safe duration")
         for json in ["{}", "{\"settings\":null}", "{\"settings\":\"damaged\"}", "{\"settings\":{}}"] {
-            let saved = try? JSONDecoder().decode(Persisted.self, from: Data(json.utf8))
+            let saved = try? AppModelCoding.decoder().decode(Persisted.self, from: Data(json.utf8))
             c.expect(saved?.settings.snoozeSeconds == 0, "state recovery uses the shared just-in-time default: \(json)")
         }
         let atStartLegacy = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"leadSeconds\":0}".utf8))
@@ -1999,10 +2000,10 @@ enum SelfTest {
          "settings":{"leadSeconds":300},
          "nativeCalendars":[{"ekIdentifier":"x","name":"GoodNative","id":"00000000-0000-0000-0000-000000000002"},{"ekIdentifier":42}]}
         """
-        let recovered = try? JSONDecoder().decode(Persisted.self, from: Data(stateJSON.utf8))
+        let recovered = try? AppModelCoding.decoder().decode(Persisted.self, from: Data(stateJSON.utf8))
         c.expect(recovered?.subscriptions.count == 1 && recovered?.subscriptions.first?.name == "Good", "malformed subscription skipped, good one kept")
         c.expect(recovered?.nativeCalendars.count == 1 && recovered?.nativeCalendars.first?.name == "GoodNative", "malformed native calendar skipped, good one kept")
-        let allBad = try? JSONDecoder().decode(Persisted.self, from: Data("{\"subscriptions\":\"nope\"}".utf8))
+        let allBad = try? AppModelCoding.decoder().decode(Persisted.self, from: Data("{\"subscriptions\":\"nope\"}".utf8))
         c.expect(allBad?.subscriptions.isEmpty == true && allBad?.settings == AppSettings(), "fully malformed state falls back to defaults")
 
         // Contrast-safe color derivation.
@@ -2352,7 +2353,7 @@ enum SelfTest {
         // old JSON without the key, cap enforcement, invalid-regex persistence.
         func decodeSubscription(_ json: String) -> CalendarSubscription? {
             guard let data = json.data(using: .utf8) else { return nil }
-            return try? JSONDecoder().decode(CalendarSubscription.self, from: data)
+            return try? AppModelCoding.decoder().decode(CalendarSubscription.self, from: data)
         }
         c.expect(decodeSubscription(#"{"name":"Work","url":"https://x.example/cal.ics"}"#)?.titleFilters.isEmpty ?? false, "subscriptions decode without titleFilters key (backward compat)")
         let malformed = decodeSubscription(#"{"name":"Work","url":"https://x.example/cal.ics","titleFilters":[{"pattern":"OK"},{"id":123,"pattern":"bad"}]}"#)

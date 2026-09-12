@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 import AppKit
 
 @MainActor enum QuitSmoke {

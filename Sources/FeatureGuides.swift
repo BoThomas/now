@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 import SwiftUI
 
 /// Stable feature IDs, not release numbers: an upgrade can cross several introductions.

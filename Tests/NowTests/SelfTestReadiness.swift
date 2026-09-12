@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 import AppKit
 
 extension SelfTest {
@@ -89,7 +90,7 @@ extension SelfTest {
         var duplicateNative = native
         duplicateNative.id = sub.id
         let payload = Persisted(subscriptions: [sub, sub], nativeCalendars: [duplicateNative, native, native])
-        let decoded = try? JSONDecoder().decode(Persisted.self, from: JSONEncoder().encode(payload))
+        let decoded = try? AppModelCoding.decoder().decode(Persisted.self, from: JSONEncoder().encode(payload))
         c.expect(decoded?.subscriptions.count == 1 && decoded?.nativeCalendars.count == 1 && decoded?.nativeCalendars.first?.id == native.id, "readiness: source decode removes duplicate IDs across both kinds")
         var guides = FeatureGuideState()
         let pending = guides.acknowledge(catalog: FeatureGuideCatalog.entries, installedUpdate: true)

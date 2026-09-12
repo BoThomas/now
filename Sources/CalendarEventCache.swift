@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 import CryptoKit
 
 /// A materialized feed snapshot, never a source of new recurrence expansion.

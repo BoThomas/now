@@ -18,11 +18,20 @@ import NowCore
         datesAndOverrides(&check)
         recurrence(&check)
         links(&check)
+        do {
+            try modelDecoding(&check)
+            try modelRecovery(&check)
+            try modelEncoding(&check)
+            titleFilters(&check)
+            meetingIdentity(&check)
+        } catch {
+            check.expect(false, "model fixture failed to decode/encode: \(error)")
+        }
         if !check.failures.isEmpty {
             for failure in check.failures { print("FAIL: \(failure)") }
             exit(1)
         }
-        print("CORE TESTS OK — \(check.count) checks; parser, dates, recurrence, link policy")
+        print("CORE TESTS OK — \(check.count) checks; parser, dates, recurrence, links, models, recovery, filters, identity")
     }
 
     static func calendar(_ body: String) -> String {

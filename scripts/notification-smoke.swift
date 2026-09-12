@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 import AppKit
 import UserNotifications
 
@@ -434,7 +435,7 @@ struct NotificationSmoke {
         require(updater.available == nil && updater.smokeStagedVersion == nil && updater.windowContent == nil,
                 "skip clears menu offer, staging and window")
         require(!delivery.receipts.values.contains { $0.updateVersion == release.version }, "skip removes update notification")
-        let savedSkip = UserDefaults.standard.data(forKey: AppStore.storageKey).flatMap { try? JSONDecoder().decode(Persisted.self, from: $0) }
+        let savedSkip = UserDefaults.standard.data(forKey: AppStore.storageKey).flatMap { try? AppModelCoding.decoder().decode(Persisted.self, from: $0) }
         require(savedSkip?.settings.skippedUpdateVersion == release.version, "skip persists across restart")
         let automatic = UpdateLogic.decide(manifest: release, currentVersion: "1.0.0", skipped: store.settings.skippedUpdateVersion, now: Date(), minAge: 86400)
         if case .skippedVersion = automatic {} else { require(false, "automatic check suppresses skipped version") }
@@ -650,7 +651,7 @@ struct NotificationSmoke {
         require(probe.calls == 1 && probeStore.settings.inMeetingDelivery == .notification && probeStore.meetingDetectionError != nil,
                 "startup failure preserves notification preference and exposes error")
         let savedProbeSettings = UserDefaults.standard.data(forKey: AppStore.storageKey)!
-        require((try? JSONDecoder().decode(Persisted.self, from: savedProbeSettings))?.settings.inMeetingDelivery == .notification,
+        require((try? AppModelCoding.decoder().decode(Persisted.self, from: savedProbeSettings))?.settings.inMeetingDelivery == .notification,
                 "failed startup retains choice on disk")
         clock = base.addingTimeInterval(4); probeStore.smokeRetryMeetingDetection(); await settle()
         require(probe.calls == 1, "capability retry respects initial backoff")

@@ -654,8 +654,15 @@ harness.
 `Sources/NowCore/ICS.swift` holds parsing, recurrence and link policy; `Sources/ICS.swift` holds
 macOS text discovery and feed materialization. Keep `NSDataDetector` in the shell and inject
 candidate URLs into shared link selection. Preserve URL priority, structured-conference handling and
-the lack of arbitrary-link fallback. `CalendarSubscription`/`MeetingEvent` still depend on AppKit
-palette defaults and settings decoding; extraction must not silently freeze or alter those defaults.
+the lack of arbitrary-link fallback. Plain models and title filtering now live in `NowCore`.
+`Sources/Models.swift` preserves the macOS color accessors and convenience initializers. Decode
+macOS profiles/subscriptions through `AppModelCoding.decoder()`, including inside
+`StoredPreferences`: missing/null legacy colors need the current palette, while explicit empty
+colors must stay empty. The core's decoder-local `ModelDecoding` policy must not become a mutable
+global or a frozen copy of system colors. Its `@Sendable` palette closure captures no mutable app
+state. Unconfigured core decoding retains the unresolved empty-color sentinel; that is not a
+replacement for macOS migration. The original recovery audit's lock-protected ownership and coding
+keys are preserved. Plain values use checked `Sendable` conformance across the module boundary.
 `NowCore` must not import the shell or compile fixture substitutions. `package` access exists only
 for actual app/harness consumers. The core runner does not establish full materialization, storage,
 notification or Windows compatibility; grow its coverage as those rules move.

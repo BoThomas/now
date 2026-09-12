@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 import UserNotifications
 
 /// Production AppStore/controller, fake transport, isolated preferences and cache.

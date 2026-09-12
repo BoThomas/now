@@ -1,7 +1,7 @@
 # Current work target: cross-platform groundwork via core extraction
 
-Status: first core slice committed/pushed; initial Linux gate passed. macOS acceptance gates remain
-pending before merge or release.
+Status: parser groundwork committed/pushed; models/filtering slice implemented and Linux-validated.
+macOS acceptance gates remain pending before merge or release.
 
 Branch: `feat/cross-platform-core`. Starting point: build/test modernization merged through PR #16,
 merge commit `d01dbd786159bc63b088dfc1254c880d088eccd9`.
@@ -25,8 +25,9 @@ behavioral redesign, or weakening of regression safeguards is authorized.
 ## Boundary inventory and decisions
 
 The pre-extraction package has 21 application source files and allow-listed `NowHarness` runners.
-Framework absence is insufficient evidence of portability: inspect referenced types and Foundation
-APIs as well as imports.
+The table inventories that starting layout; completed slices and current evidence are recorded
+below. Framework absence is insufficient evidence of portability: inspect referenced types and
+Foundation APIs as well as imports.
 
 | Existing source                                                                                                                                 | Boundary decision                                                                                                                                                                                                                                    |
 | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -91,7 +92,7 @@ the macOS UI, and a general platform-service abstraction without a concrete cons
 
 ## Subsequent slices after the early gate
 
-- [ ] Extract plain application models, filters and decoding policy after resolving native color and
+- [x] Extract plain application models, filters and decoding policy after resolving native color and
       sound defaults without changing persisted output or recovery behavior on macOS.
 - [ ] Choose a maintained portable SHA-256 strategy (for example Swift Crypto) before moving cache
       and reminder keys. Preserve exact bytes, lowercase hex encoding, identity prefixes and legacy
@@ -188,5 +189,38 @@ Groundwork commit `686b3e9` was pushed to `origin/feat/cross-platform-core` befo
   missing pinned SwiftLint. macOS SDK/GUI/signing, full lint smoke, and historical materialization
   digest comparison remain unverified. Installing Linux tools cannot provide those gates.
 
-Next implementation slice: models/filtering and their color/default-decoding seams. Complete the
-macOS acceptance checklist on the signing Mac before merging this extraction.
+### Models/filtering slice
+
+Implemented shared `CalendarSubscription`, `AppSettings`, `NativeCalendar`, `Persisted`,
+`MeetingEvent`, title filtering and the existing tolerant decoding/audit helpers. Native calendar
+IDs and sound identifiers are retained as opaque/compatibility data rather than renamed or migrated.
+`Sources/Models.swift` keeps native color properties and the existing convenience initializer APIs.
+
+`AppModelCoding.decoder()` supplies the current macOS palette through a per-decoder `@Sendable`
+callback; `StoredPreferences` and macOS profile/subscription fixtures use it. Missing/null colors
+retain their legacy defaulting behavior; explicit empty and saved colors are preserved. Core callers
+provide explicit constructor colors and can configure their own decoder palette. An unconfigured
+core decoder leaves the color unresolved (`""`) rather than inventing platform colors. No mutable
+global palette is added. The live persistence/backup/recovery controller remains in the shell.
+
+Verification on the recorded Swift 6.3.3/Linux host:
+
+- `./scripts/test-core.sh` and `NOW_TEST_CONFIGURATION=release ./scripts/test-core.sh`: all 107
+  checks passed, including 54 new model/filter checks. Complete strict concurrency and
+  warnings-as-errors remain enabled.
+- New checks cover exact saved-profile fields/values, all existing sound choices and fallback,
+  extreme timing inputs, partial recovery, duplicate source UUIDs, decoder-local recovery/color
+  policy, exact/regex filtering, and reschedule/coincident occurrence identities.
+- Portable analysis compiler smoke: all 12 probes passed. SwiftPM source isolation and a syntax-only
+  parse passed for all ten shipping/harness configurations, including discovery of the new fixtures.
+  Syntax parsing is not a macOS typecheck or runtime test.
+- Added macOS adapter fixtures for native palette defaulting and optional/explicit colors, plus a
+  live preference-recovery assertion. Signed build, macOS selftest and notification/recovery smoke
+  were attempted but are blocked by the unavailable Apple SDK/toolchain; analysis is blocked by
+  unavailable pinned SwiftLint. These gates remain open.
+- Visibility and concurrency ownership changes are recorded in `analysis/review.md`. No baseline
+  entries were added, removed or relaxed in this slice.
+
+Next implementation slice: portable SHA-256 and cache snapshot/coverage policy, preserving existing
+key bytes and on-disk recovery semantics. Then extract reminder routing/ledger/snooze policy.
+Complete the macOS acceptance checklist on the signing Mac before merging this extraction.

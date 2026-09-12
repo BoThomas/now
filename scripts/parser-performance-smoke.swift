@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 import CryptoKit
 
 // Both current and historical comparisons build their complete SwiftPM targets.

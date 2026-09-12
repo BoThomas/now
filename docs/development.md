@@ -139,10 +139,14 @@ fixture digests, including identities and presentation fields.
 
 ### Shared core and Linux checks
 
-`Sources/NowCore/ICS.swift` currently contains parsed values, envelope/date parsing, recurrence
-expansion and meeting-link policy. `Sources/ICS.swift` retains macOS `NSDataDetector` discovery and
-feed materialization into the app's palette-dependent models. The complete app and its reminder,
-cache and persistence controllers have not been ported.
+`Sources/NowCore` contains parsed values, envelope/date parsing, recurrence expansion, meeting-link
+policy, plain app models, tolerant decoding and title filtering. `Sources/ICS.swift` retains macOS
+`NSDataDetector` discovery and feed materialization; `Sources/Models.swift` supplies native color
+accessors, default-color constructors and `AppModelCoding.decoder()`. Use that decoder for macOS
+profiles/subscriptions so legacy missing/null color fields use the system palette. Core callers can
+supply their own decoder-local color policy through `ModelDecoding.decoder(calendarColor:)`; a bare
+decoder retains an unresolved color as `""`. Live storage/recovery, reminder controllers and the
+complete app have not been ported.
 
 With a Swift 5.9-or-newer host toolchain and its system dependencies installed:
 
@@ -157,10 +161,16 @@ The core script selects `NOW_TEST_SUITE=core` and builds `NowCoreTests` against 
 5 mode with complete concurrency checking and warnings treated as errors. It bypasses the macOS
 `xcrun`/arm64 wrapper, works without XCTest, and uses `.build/tests/core`. The synthetic fixtures
 cover envelopes, folding/limits, durations, timezone mapping, raw recurrence anchors, DST
-gap/overlap expansion, exact work budgets, and link policy with injected candidates. They do not
-access live preferences, calendars, network or UI. Linux compiler and system-library versions must
-be recorded with validation evidence; Linux success does not establish Windows support or macOS
-GUI/signing health. Full macOS validation still runs on the signing Mac.
+gap/overlap expansion, exact work budgets, link policy with injected candidates, saved-profile wire
+fields, tolerant recovery, color-policy isolation, filtering and agenda/notification identities.
+They do not access live preferences, calendars, network or UI. Linux compiler and system-library
+versions must be recorded with validation evidence; Linux success does not establish Windows support
+or macOS GUI/signing health. Full macOS validation still runs on the signing Mac.
+
+The macOS selftest also includes `Tests/NowTests/ModelBoundaryTests.swift`, checking native palette
+defaults (including extreme indices), nested legacy profile colors and optional event colors. The
+notification recovery smoke exercises the live `StoredPreferences` decoder with synthetic damaged
+profiles. Linux model checks supplement these macOS adapter checks rather than validating AppKit.
 
 The first Linux gate passed with Swift 6.3.3 (official Ubuntu 22.04 x86_64 distribution) on Debian
 12, glibc 2.36 and tzdata 2026b. This devbox has the toolchain at

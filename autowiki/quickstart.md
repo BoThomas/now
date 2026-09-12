@@ -9,12 +9,12 @@ engineering rulebook.
 ## Build and orient yourself
 
 The app's `NowApp` SwiftPM executable depends on the `NowCore` library in
-[Package.swift](../Package.swift). The first core slice contains parsed ICS values, parsing,
-recurrence expansion and meeting-link policy in [Sources/NowCore](../Sources/NowCore/). Application
-models, feed materialization and native integration remain in the macOS shell.
-[build-app.sh](../build-app.sh) assembles and signs the bundle. The build targets Apple Silicon and
-macOS 13 in Swift 5 language mode. See [development prerequisites](../docs/development.md) for SDK
-requirements.
+[Package.swift](../Package.swift). [Sources/NowCore](../Sources/NowCore/) contains parsed ICS
+values, parsing, recurrence expansion, meeting-link policy, plain application models, tolerant
+decoding and title filtering. Native presentation/default colors, feed materialization, live
+persistence and platform integration remain in the macOS shell. [build-app.sh](../build-app.sh)
+assembles and signs the bundle. The build targets Apple Silicon and macOS 13 in Swift 5 language
+mode. See [development prerequisites](../docs/development.md) for SDK requirements.
 
 Run from the repository root:
 
@@ -23,8 +23,8 @@ Run from the repository root:
 ./scripts/test.sh
 ```
 
-On this development machine, the signed build must run outside the agent sandbox so it can access
-the login keychain; follow [the build instructions in AGENTS.md](../AGENTS.md). The outputs are
+On the signing Mac, the signed build must run outside the agent sandbox so it can access the login
+keychain; follow [the build instructions in AGENTS.md](../AGENTS.md). The outputs are
 `outputs/now.app` and `outputs/now.zip`. The separate selftest executable exercises more than
 parsing, including reminder, cache, settings, and updater decisions. See
 [development and updates](development-and-updates.md) for focused checks and release constraints.

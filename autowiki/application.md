@@ -38,7 +38,7 @@ capability if needed, then commits once through `applyInitialSetup`. A generatio
 stale work after draft changes or closure. Permission denial permits completion with notification
 routes disabled and preserves the draft choices for navigation. Setup's new-profile timing default
 is 60 seconds; do not infer onboarding defaults solely from `AppSettings()`, whose base lead is 300
-seconds. The distinction is implemented in [Models.swift](../Sources/Models.swift) and
+seconds. The distinction is implemented in [core models](../Sources/NowCore/Models.swift) and
 [SetupAssistant.swift](../Sources/SetupAssistant.swift).
 
 [FeatureGuides](../Sources/FeatureGuides.swift) separately tracks stable introduction IDs for
@@ -52,7 +52,7 @@ must wait for that acknowledgement.
 
 | State                                             | Owner and storage                                                                                                                          |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Subscriptions, native selections, settings, pause | `Persisted` in [Models.swift](../Sources/Models.swift); `local.tboch.now.state.v1` via [AppStore](../Sources/AppStore.swift)               |
+| Subscriptions, native selections, settings, pause | `Persisted` in [core models](../Sources/NowCore/Models.swift); `local.tboch.now.state.v1` via [AppStore](../Sources/AppStore.swift)        |
 | Handled reminders, snoozes, notification receipts | [Notifications.swift](../Sources/Notifications.swift) and the ledger integration in [AppStore](../Sources/AppStore.swift)                  |
 | Offline ICS occurrences                           | [CalendarEventCache](../Sources/CalendarEventCache.swift), under Application Support / bundle ID / `CalendarCache-v1`                      |
 | Initial setup and feature history                 | [SetupAssistant](../Sources/SetupAssistant.swift) and [FeatureGuides](../Sources/FeatureGuides.swift), each with a separate preference key |
@@ -65,6 +65,21 @@ separately from the live payload. The persistent review notice is acknowledged t
 `PersistenceStatus.reviewed`, which leaves recovery copies intact. Encoding or size failures
 preserve previous saved bytes; UserDefaults provides no synchronous disk-error result, so successful
 encoding is not proof of disk durability.
+
+Plain model decoding and the per-decoder recovery audit live in
+[NowCore](../Sources/NowCore/PreferenceDecoding.swift). `StoredPreferences` still owns live domains,
+backup selection, recovery copies and error reporting in the shell. It creates its decoder through
+[`AppModelCoding.decoder()`](../Sources/Models.swift), supplying the current macOS palette for
+legacy subscription colors. Missing/null color fields resolve through that decoder-local policy;
+explicit empty or saved colors remain untouched. A bare core decoder leaves an unresolved color as
+`""` instead of choosing platform colors. Use the macOS factory when decoding profiles or
+subscriptions in shell code and fixtures.
+
+Native `MeetingEvent` color accessors and palette-default convenience initializers also live in
+[Sources/Models.swift](../Sources/Models.swift); core constructors receive explicit color strings.
+`NativeCalendar.ekIdentifier` is opaque persisted metadata, not an EventKit dependency. The core
+settings sound-name vocabulary preserves saved macOS choices and validation, while playback remains
+native. Coding keys and occurrence-ID construction stay with the core models.
 
 Legacy-domain migration in `AppStore.loadState` runs only if the current key is absent. While
 profile recovery remains unreviewed, startup preserves orphan or mismatched cache files rather than

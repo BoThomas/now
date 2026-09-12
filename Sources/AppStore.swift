@@ -1,4 +1,5 @@
 import SwiftUI
+import NowCore
 import AppKit
 import EventKit
 import ServiceManagement
@@ -31,7 +32,7 @@ final class AppStore: ObservableObject {
     #else
     nonisolated static let legacyDomain = "local.tboch.now"
     #endif
-    nonisolated static let soundNames = ["Basso", "Blow", "Bottle", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"]
+    nonisolated static let soundNames = AppSettings.soundNames
 
     @Published var subscriptions: [CalendarSubscription] {
         didSet {

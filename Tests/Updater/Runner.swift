@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 
 @main
 enum UpdaterTestRunner {

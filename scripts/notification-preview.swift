@@ -1,4 +1,5 @@
 import AppKit
+import NowCore
 import SwiftUI
 
 /// Optional real Notification Center / Settings UI check using a disposable signed

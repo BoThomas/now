@@ -70,3 +70,34 @@ Visibility changes are confined to the core's actual consumers:
   Apple's detector stays private in the shell.
 
 All widened declarations use `package`, not `public`; no unsafe concurrency annotations are added.
+
+## Models and filtering slice
+
+`Models.swift` and `TitleFilter.swift` now live under `Sources/NowCore`; native presentation and
+palette-default constructors stay in `Sources/Models.swift`. Neither moved file had a retained lint
+entry, so no baseline is relocated or regenerated in this slice. The existing 16 findings and their
+rationales remain; full macOS lint/concurrency analysis is still an outstanding gate.
+
+The following surfaces gain `package` access for existing app/harness consumers:
+
+- `CalendarSubscription`, `NativeCalendar`, `Persisted`, `MeetingEvent`: payload fields,
+  initializers, Codable/Identifiable witnesses and the legacy occurrence-ID accessor. Core calendar
+  and event constructors require explicit color strings; shell convenience initializers preserve the
+  macOS defaults. Coding keys and failable element decoding stay internal.
+- `AppSettings` and delivery enums: settings fields, derived choices and the existing preset/range
+  helpers used by UI and regression tests. The sound identifier list moves from `AppStore` to the
+  model's compatibility vocabulary; `AppStore.soundNames` delegates to it. Scalar normalization and
+  coding keys stay internal/private.
+- `TitleFilterRule`, its mode/fields/initializers, rule edit/normalization helpers and prepared
+  `TitleFilterMatcher` operations: UI, source reconciliation and tests. Matching and normalization
+  bodies are unchanged; compiled regex storage stays private.
+- `PreferenceDecoding` initialization, key and recovery result: `StoredPreferences` and fixtures.
+  Its existing `@unchecked Sendable` conformance moves with the same lock-protected state; no new
+  unsafe conformance is introduced. Internal `note`/`recover` operations remain within core.
+- `ModelDecoding.decoder(calendarColor:)`: a new per-decoder `@Sendable` callback for the native
+  palette, with a private user-info key. No global mutable platform configuration is introduced.
+
+Plain model values and delivery/filter enums have checked `Sendable` conformances, making their
+existing use across fetch and UI ownership boundaries explicit. Debug/release core checks pass
+complete strict concurrency with warnings treated as errors. This does not establish macOS actor
+checking for the native adapters.

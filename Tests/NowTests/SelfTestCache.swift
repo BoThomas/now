@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 
 extension SelfTest {
     static func calendarCacheTests(_ c: inout Checker) {
