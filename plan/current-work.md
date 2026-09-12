@@ -1,105 +1,159 @@
 # Current work target: cross-platform groundwork via core extraction
 
-Status: planned; implementation has not started.
+Status: first core slice implemented; initial Linux execution and macOS acceptance gates pending.
 
-Branch: `feat/cross-platform-core`.
+Branch: `feat/cross-platform-core`. Starting point: build/test modernization merged through PR #16,
+merge commit `d01dbd786159bc63b088dfc1254c880d088eccd9`.
 
-Starting point: build/test modernization merged through PR #16, merge commit
-`d01dbd786159bc63b088dfc1254c880d088eccd9`.
+## Objective and sequence
 
-## Objective
+Prepare _now_ for Windows and Linux by extracting shared Swift logic incrementally while preserving
+the native macOS experience, Swift 5 language mode, macOS 13 / Apple Silicon support, bundle
+identity, and release pipeline. A macOS library build alone does not demonstrate portability.
 
-Prepare _now_ for future Windows and Linux ports by extracting the platform-neutral core (ICS
-parsing, recurrence, models, filtering, activity policy, cache and reminder bookkeeping rules) from
-the AppKit/EventKit shell into its own SwiftPM library target. This stage ships no user-facing
-change: the macOS app keeps its current behavior, bundle identity, and release pipeline. Cross-
-platform shells (tray glue, notifications, SwiftCrossUI settings) are explicitly out of scope here
-and are decided after this stage.
+The sequence is: small shared core → headless Linux checks → expand models and reminder policy →
+targeted `AppStore` responsibility extraction → platform shell experiments. Linux validation happens
+before a broad controller refactor. Windows gets its own toolchain and integration checks before any
+Windows support claim; passing Linux does not establish Windows compatibility.
 
-Read `AGENTS.md`, `autowiki/quickstart.md`, the relevant topic pages, and
-`autowiki/engineering-notes.md` before implementation. This plan authorizes target/module
-restructuring and access-control widening only where extraction requires it. It does not authorize a
-release, a Swift 6 migration, platform/language-mode changes, behavioral changes, or weakening any
-safeguard recorded in the engineering notes.
+Read `AGENTS.md`, the AutoWiki topic pages, and engineering notes before changing a subsystem. Small
+behavior-preserving file splits, target restructuring, dependency injection at platform seams, and
+access-control changes required by those seams are authorized. No release, merge, Swift 6 migration,
+behavioral redesign, or weakening of regression safeguards is authorized.
 
-## Starting evidence and open decisions
+## Boundary inventory and decisions
 
-- The package currently defines one executable target `NowApp` (21 source files in `Sources/`) plus
-  allow-listed `NowHarness` test targets selected via `NOW_TEST_SUITE`. There is no library target.
-- Platform-neutral candidates with no AppKit/EventKit imports: `ICS.swift` (parsing and recurrence),
-  `Models.swift`, `TitleFilter.swift`, `MeetingActivity.swift`, most of `Helpers.swift`,
-  `CalendarEventCache.swift` (verify its I/O is path-injected, not hardcoded), and the pure policy
-  portions of `Preferences.swift`.
-- Shell-bound files that must stay out of the core: `App.swift`, `AppStore.swift` (EventKit
-  ownership), `MenuBar.swift`, `*UI.swift`, `Notifications.swift`, `NativeCalendars.swift`,
-  `Updater.swift`/`UpdateDownload.swift`.
-- `AppStore` responsibility extraction was deliberately deferred by PR #16 and remains follow-up
-  work; this stage must not attempt a broad controller redesign. Extract the core around it.
-- Library target naming and visibility strategy are open decisions: smallest viable option is a
-  second SwiftPM target consumed by `NowApp` and the harnesses; widening `public` is allowed only
-  where the module boundary requires it, and never as a general API cleanup.
-- Harness selection in `Package.swift` compiles `Sources` plus suite fixtures; it must be updated so
-  suites still compile without duplicating production sources between targets.
-- The analysis scripts discover sources and match baselines by path; source moves between files or
-  targets require reviewing `analysis/` baselines and `analysis/review.md` rationales. Findings must
-  be relocated reviewably, never silently accepted or dropped.
-- 16 lint findings carry individual rationales; extraction may resolve some and relocate others.
-  Record which and why.
+The pre-extraction package has 21 application source files and allow-listed `NowHarness` runners.
+Framework absence is insufficient evidence of portability: inspect referenced types and Foundation
+APIs as well as imports.
 
-## Phase 1: define the core boundary
+| Existing source                                                                                                                                 | Boundary decision                                                                                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ICS.swift`                                                                                                                                     | Parser, parsed values, recurrence expansion and link classification/selection belong in core. `NSDataDetector` text discovery is an Apple Foundation adapter; feed-to-`MeetingEvent` materialization still depends on shell models/colors.           |
+| `TitleFilter.swift`                                                                                                                             | Rules and prepared string matching are candidates; calendar mapping depends on the current app models. Move together with models in a later slice.                                                                                                   |
+| `Models.swift`                                                                                                                                  | Mixed: native color properties and `Palette` defaults, `AppStore.soundNames`, preference recovery, native selections and persisted schema. Split deliberately; preserve macOS default colors, sound validation, coding keys and migration semantics. |
+| `Helpers.swift`                                                                                                                                 | AppKit palette/image/activation code stays in shell. Formatting helpers need individual API and locale review, including `RelativeDateTimeFormatter`.                                                                                                |
+| `MeetingActivity.swift`                                                                                                                         | CoreAudio probe, process metadata, bundle-ID classifiers and polling stay in shell. Activity values and debouncing are later core candidates.                                                                                                        |
+| `CalendarEventCache.swift`                                                                                                                      | Snapshot validation/coverage/fingerprints are later core candidates. Default directory uses Application Support and bundle identity; I/O uses POSIX permissions and rename. Path injection alone does not make Windows storage portable.             |
+| `Preferences.swift`                                                                                                                             | Move tolerant decoding/recovery rules only with their model consumers. Combine/OSLog status and live preference-domain selection stay in shell.                                                                                                      |
+| `Notifications.swift`                                                                                                                           | Routing, occurrence hashing, `ReminderLedger`, catch-up and omission rules are later core candidates. Native transport, permissions, live receipts and UI integration stay in shell initially.                                                       |
+| `AppStore.swift`                                                                                                                                | Keep the controller and `commitEvents` ordering. Later delegate existing pure due-reminder, unmute, normalization, source-generation and bookkeeping decisions to core. Do not duplicate them.                                                       |
+| `AlertUI.swift`                                                                                                                                 | Later move pure snooze eligibility/scheduling. Panel focus, keyboard handling and preview presentation stay in shell.                                                                                                                                |
+| `App.swift`, `MenuBar.swift`, `NativeCalendars.swift`                                                                                           | AppKit lifecycle, menus, EventKit and source mapping stay in shell.                                                                                                                                                                                  |
+| `CalendarSettingsUI.swift`, `SettingsUI.swift`, `NotificationSettingsUI.swift`, `SetupAssistant.swift`, `FeatureGuides.swift`, `UpdateUI.swift` | UI/controllers remain shell-owned; setup/feature persistence is not redesigned in this slice.                                                                                                                                                        |
+| `Updater.swift`, `UpdateDownload.swift`                                                                                                         | Keep unchanged except imports/build integration forced by the boundary; Foundation-only networking is not automatically core scope.                                                                                                                  |
 
-- [ ] Inventory every file in `Sources/` for framework imports (AppKit, EventKit, UserNotifications,
-      OSLog) and network/updater dependencies; record the resulting core/shell split and any file
-      that resists classification before moving anything.
-- [ ] Choose the smallest viable library target layout and record the decision, including rejected
-      alternatives (e.g., separate package, multiple feature modules).
-- [ ] Move the core files into the library target without behavioral edits; keep names, types and
-      access levels stable except where the module boundary requires widening, and record each
-      widening.
+Use one `NowCore` SwiftPM library target under `Sources/NowCore`, consumed by `NowApp` and all
+existing harnesses. Keep shell files directly under `Sources` for this first slice. Exclude the core
+directory from shell source discovery so it is never compiled into a second production module. Use
+`package` access for necessary same-package consumers, retaining implementation-only members as
+internal/private. No external public API or separate package is needed yet. Record widened surfaces
+with their consumers; do not expose internals merely to make a future port easier.
 
-## Phase 2: rebuild app and harnesses on the boundary
+Rejected for now: multiple feature modules, a separate package, blanket `public` access, replacing
+the macOS UI, and a general platform-service abstraction without a concrete consumer.
 
-- [ ] Make `NowApp` depend on the core library; keep the executable entry point, bundle metadata,
-      entitlements and signing pipeline identical.
-- [ ] Update `Package.swift` harness selection so every suite builds against the same library; no
-      suite may recompile a private copy of core sources.
-- [ ] Update analysis source discovery, baselines and `analysis/review.md` for the new layout,
-      relocating findings with reviewable rationale; verify that new findings still fail and
-      resolved baseline entries are removed.
-- [ ] Update agent instructions (`AGENTS.md`), AutoWiki pages, and any scripts that assume a single
-      target, so instructions describe the layout that actually ships.
+## Slice 1: shared parser groundwork
 
-## Phase 3: verify behavior is unchanged
+- [x] Extract parsed values, ICS parsing, recurrence expansion and link policy into `NowCore`
+      without changing algorithms or output. Inject text URL discovery; macOS keeps
+      `NSDataDetector`.
+- [x] Keep `ICSBuilder` materialization and existing application models in the shell until the
+      color/default-decoding boundary is resolved. This slice is not the complete reminder core.
+- [x] Make the app and every macOS harness consume the same `NowCore` target. Preserve entrypoints,
+      fixture isolation, signing and bundle assembly.
+- [x] Add an allow-listed core-only executable runner that imports the library without compiling
+      AppKit, EventKit, UI, network transports or updater code. No live preferences or calendars.
+- [x] Make analysis compile/check core and consumers as separate modules with package access;
+      recursive file discovery followed by a flattened typecheck is not sufficient.
+- [x] Relocate individual lint baseline entries and retain their rationales. Extend analysis smoke
+      to detect new core and shell findings and broken cross-module access. Never regenerate debt.
+- [x] Keep historical parser comparison usable across the file split, comparing an explicitly pinned
+      pre-extraction revision against current full materialization output.
+- [x] Update development instructions and affected AutoWiki architecture pages.
+- [ ] Run available groundwork checks, document unavailable macOS gates, then commit and push as
+      requested. A pushed branch is not a verified macOS release or permission to merge.
 
-- [ ] Signed release and debug builds pass the full selftest suite; occurrence identity, receipt
-      ownership, recurrence results, and recovery data are unchanged.
-- [ ] All existing test suites (notification, reminder, cache, fetch, workload, parser, updater)
-      pass in the new layout, including the parser benchmark digest comparison.
-- [ ] Analysis and analysis smoke pass for shipping, selftest and updater configurations.
-- [ ] GUI launch and liveness checks pass with no permission prompts; updater smoke passes against
-      the unchanged pinned identity.
-- [ ] Record artifact sizes and build timings as observations only; no performance claims.
-- [ ] Run `npm ci`, `npm run format-docs`, and `npm run check-docs` after Markdown edits; refresh
-      affected wiki pages with the AutoWiki skill if architecture explanations change.
+## Early headless Linux gate
 
-## Validation and acceptance
+- [ ] Install a supported official Swift Linux toolchain and system dependencies in the devbox;
+      record compiler/OS/architecture and reproducible commands. Keep toolchain artifacts ignored or
+      outside the repository. Do not use the macOS `xcrun`/arm64 wrapper for Linux.
+- [ ] Build and run the core-only target in debug and release, in Swift 5 mode, with complete strict
+      concurrency checking. Compiler warnings are failures; no unsafe annotations to silence them.
+- [ ] Exercise complete/truncated envelopes, CRLF/folding, parser limits, timezone mapping, DST gaps
+      and overlaps, exact recurrence budget boundaries, raw override identities and link policy with
+      synthetic input and explicit clocks/zones. Compare expected results rather than timing claims.
+- [ ] Record unsupported APIs or platform differences as findings, fix only justified seams, and
+      document the actual boundary proven. Native text URL detection and full feed materialization
+      are not established by this runner.
 
-Follow the current `AGENTS.md` commands. On this machine the signed build runs outside the agent
-sandbox for login-keychain access; selftest runs normally. Keep selftests deterministic and
-EventKit-free: never construct `AppStore` or another `EKEventStore` there. Use disposable test
-domains and synthetic feeds; never seed the installed app's calendars or preferences.
+## Subsequent slices after the early gate
 
-## Boundaries and deferred work
+- [ ] Extract plain application models, filters and decoding policy after resolving native color and
+      sound defaults without changing persisted output or recovery behavior on macOS.
+- [ ] Choose a maintained portable SHA-256 strategy (for example Swift Crypto) before moving cache
+      and reminder keys. Preserve exact bytes, lowercase hex encoding, identity prefixes and legacy
+      aliases; test against known saved-state fixtures. Never substitute Swift `Hasher`.
+- [ ] Move cache snapshot/coverage/recovery decisions while leaving platform directory selection and
+      filesystem operations in adapters where needed. Verify permission, atomic replacement and
+      failed-empty-save no-resurrection behavior on each supported filesystem/platform.
+- [ ] Move `NotificationLogic` routing/identity, `ReminderLedger`, catch-up/omission tracking,
+      `AppStore` pure reminder eligibility/unmute/bookkeeping helpers, and `AlertController` pure
+      snooze scheduling. Controllers delegate to one implementation; no broad orchestration rewrite.
+- [ ] Extend the core-only runner with model recovery, filtering, identities, ledger retention,
+      receipt-owned rescheduling and cache policy fixtures as those rules become available.
+- [ ] Only then consider extracting live `AppStore` responsibilities behind demonstrated interfaces.
 
-Do not write any Windows/Linux code, tray implementations, notification shims, or add SwiftCrossUI
-or other UI dependencies in this stage. Do not extract `AppStore` responsibilities beyond what the
-core boundary forces, reorganize settings files, or touch the updater beyond keeping it compiling.
-No release, no merge without a separate request. Follow-up candidates after this stage, in the order
-they become meaningful: `AppStore` responsibility extraction, a cross-platform core usage spike
-(headless run of the core on Linux via the Swift Linux toolchain), then shell experiments (tray
-glue, notifications, SwiftCrossUI settings) per platform.
+## macOS validation and acceptance
+
+Run the commands in `AGENTS.md`: signed build and selftest after changes; analysis and analysis
+smoke after Swift/tooling changes. On the signing Mac, build outside the agent sandbox for keychain
+access. The Linux devbox cannot replace signing, AppKit, EventKit, notification, or GUI validation.
+
+Before accepting the extraction on macOS:
+
+- [ ] Signed release/debug builds and debug/optimized selftests pass.
+- [ ] All notification/startup/focus, reminder, cache, fetch, workload, parser and updater suites
+      pass, including a parser digest comparison to the pinned pre-extraction revision.
+- [ ] Analysis and its failure probes pass across core, shipping, selftest and updater
+      configurations; inspect `--report` for relocated flagged functions.
+- [ ] GUI launch/liveness and permission-prompt behavior are unchanged; signed updater smoke passes
+      against the pinned identity.
+- [ ] Record artifact sizes/build timings as observations only.
+- [x] Run `npm ci`, `npm run format-docs`, and `npm run check-docs` after Markdown edits.
+
+Keep selftests deterministic and EventKit-free: never construct `AppStore` or another
+`EKEventStore`. Use disposable domains, fake transports and synthetic feeds. Never seed the
+installed app's data.
+
+## Product and shell decisions before a port
+
+Proposed first-port scope: ICS feeds, agenda/tray, reminders, Join/Snooze and offline recovery.
+Decide the first shipping OS and whether native calendar accounts and meeting detection are required
+before selecting a UI framework. These are proposed requirements, not promised parity.
+
+Prototype background reminder visibility/focus, notification actions after cold restart, tray/menu
+support, wake/catch-up and autostart on the actual target desktops (including relevant Linux desktop
+environments). Packaging/update trust needs a per-platform design. SwiftCrossUI or another toolkit
+is chosen after these probes, not assumed by the core extraction. No UI dependency or production
+Windows/Linux shell is added in this stage.
 
 ## Handoff
 
-Implementation stages and validation evidence are recorded below as work proceeds. Continue on this
-branch; do not merge or release without a separate request.
+Implementation and validation evidence will be recorded here as work proceeds. Commit and push are
+authorized by the current request; no merge or release is authorized.
+
+### Groundwork checkpoint
+
+The first slice adds `NowCore`, the core-only runner and module-aware compiler gates. macOS
+`ICSBuilder` remains in its original file with its materialization body unchanged; Apple text URL
+discovery delegates to the core's existing selection policy. Package visibility changes and seven
+relocated lint entries are itemized in `analysis/review.md`.
+
+Before the initial Linux run: pinned npm install, Markdown format/check, Python syntax compilation,
+shell syntax check for `test-core.sh`, and `git diff --check` passed. The required signed build,
+selftest, analysis report and full analysis smoke were attempted but cannot start on this Debian 12
+x86_64 devbox (initially no zsh or Swift; no macOS SDK, AppKit, GUI or signing keychain). No macOS
+build, runtime equivalence or lint pass is claimed. Core compilation/execution follows the requested
+groundwork commit/push checkpoint.

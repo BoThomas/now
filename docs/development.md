@@ -52,14 +52,15 @@ failures. `--report` makes findings informational but still fails on compiler/to
 and compiler-version information go under `.build/analysis/`, which app builds retain. Run analysis
 after building. Release preflight runs the default check, including with `--app`.
 
-The compiler checks shipping sources, the selftest configuration and the signed-updater runner
-configuration with `-strict-concurrency=complete` in Swift 5 mode for arm64/macOS 13. All 13
-original warnings have been resolved; the concurrency baseline is empty. See the
-[finding review](../analysis/review.md) for ownership changes and retained lint rationales. Matching
-uses file, diagnostic message, source-line text and occurrence count, so line-number shifts alone do
-not cause failures. Compiler/SDK upgrades or edits to a flagged line can require deliberate review.
-The current snapshot is written to `.build/analysis/concurrency-current.json`; it never overwrites
-the committed baseline.
+The compiler emits the shared `NowCore` module, then separately checks shipping sources, the
+selftest configuration, the signed-updater runner and the core-only runner against it with
+`-strict-concurrency=complete` in Swift 5 mode for arm64/macOS 13. All 13 original warnings have
+been resolved; the concurrency baseline is empty. See the [finding review](../analysis/review.md)
+for ownership changes and retained lint rationales. Matching uses file, diagnostic message,
+source-line text and occurrence count, so line-number shifts alone do not cause failures.
+Compiler/SDK upgrades or edits to a flagged line can require deliberate review. The current snapshot
+is written to `.build/analysis/concurrency-current.json`; it never overwrites the committed
+baseline.
 
 SwiftLint checks complexity, function length, parameter count, nesting, force casts/tries, duplicate
 conditions and identical operands. The separate `Tests` directory is outside production lint scope;
@@ -78,7 +79,9 @@ safety. Duplication/dead-code tools are deferred until a concrete audit warrants
 
 When changing the analysis tooling, run `python3 scripts/analysis-smoke.py`. It uses disposable
 Swift sources to verify baseline matching, rejection of new warnings/lint findings, report mode, and
-compiler/missing-tool failures.
+compiler/missing-tool failures. Probes cover both core and shell findings and inaccessible core
+APIs. `--compiler-only` runs portable compiler/baseline probes without the macOS SDK or SwiftLint;
+it does not replace the full analysis smoke.
 
 ### App diagnostics and checks
 
@@ -100,7 +103,10 @@ See [AGENTS.md](../AGENTS.md) for development notes and the release workflow.
 `NOW_TEST_CONFIGURATION=release ./scripts/test.sh` exercises optimized compilation. Command Line
 Tools lack XCTest, so the manifest selects a named `NowHarness` executable from an allow-list via
 `NOW_TEST_SUITE`. Each suite uses `.build/tests/<suite>`, with debug/release artifacts separated by
-SwiftPM. The shipping default selects only `NowApp`. No application API is public.
+SwiftPM. The shipping default selects `NowApp` and its `NowCore` dependency. Every macOS harness
+imports that same library instead of compiling a private core copy. Core access needed within the
+package uses Swift 5.9 `package` visibility; no external public API is introduced. Suite
+conditionals remain on the shell harness rather than propagating into the library.
 
 Hosted harnesses share `scripts/harness.py` and compile production source with conditional
 `NOW_TESTING` accessors. Native fetching asserts empty native selections and returns; notification
@@ -125,5 +131,33 @@ Calendar permission prompts, real Notification Center delivery or older macOS ve
 
 The pinned-ID updater fixture uses an explicit disposable preference suite and injected cache;
 changing HOME alone does not isolate macOS preferences. Interactive menu/focus checks require an
-unlocked, undisturbed desktop. The historical parser comparison still uses a standalone swiftc
-compile; its working variant is the optimized SwiftPM target.
+unlocked, undisturbed desktop. Historical parser comparisons build complete archived revisions with
+their own SwiftPM layouts. Use
+`python3 scripts/parser-performance-smoke.py --compare-revision d01dbd7` for extraction equivalence;
+`--compare-head` compares to the current committed revision. Both compare the full materialization
+fixture digests, including identities and presentation fields.
+
+### Shared core and Linux checks
+
+`Sources/NowCore/ICS.swift` currently contains parsed values, envelope/date parsing, recurrence
+expansion and meeting-link policy. `Sources/ICS.swift` retains macOS `NSDataDetector` discovery and
+feed materialization into the app's palette-dependent models. The complete app and its reminder,
+cache and persistence controllers have not been ported.
+
+With a Swift 5.9-or-newer host toolchain and its system dependencies installed:
+
+```bash
+swift --version
+./scripts/test-core.sh
+NOW_TEST_CONFIGURATION=release ./scripts/test-core.sh
+python3 scripts/analysis-smoke.py --compiler-only
+```
+
+The core script selects `NOW_TEST_SUITE=core` and builds `NowCoreTests` against `NowCore`, in Swift
+5 mode with complete concurrency checking and warnings treated as errors. It bypasses the macOS
+`xcrun`/arm64 wrapper, works without XCTest, and uses `.build/tests/core`. The synthetic fixtures
+cover envelopes, folding/limits, durations, timezone mapping, raw recurrence anchors, DST
+gap/overlap expansion, exact work budgets, and link policy with injected candidates. They do not
+access live preferences, calendars, network or UI. Linux compiler and system-library versions must
+be recorded with validation evidence; Linux success does not establish Windows support or macOS
+GUI/signing health. Full macOS validation still runs on the signing Mac.

@@ -16,7 +16,9 @@ also runs it in shipping, selftest and updater-runner configurations.
 [Reviewed findings](../analysis/review.md) records the resolved concurrency warnings and retained
 lint rationales. `./scripts/setup-analysis.sh` installs the pinned linter once, and `--report` on
 the analysis command exposes the existing backlog. See the
-[analysis workflow](../docs/development.md#code-analysis) for baseline review and limitations.
+[analysis workflow](../docs/development.md#code-analysis) for baseline review and limitations. The
+compiler emits `NowCore` as a module before checking shell and fixture consumers; the
+[module checker](../scripts/typecheck-modules.py) never flattens core sources into the shell.
 
 [SelfTest.run](../Tests/NowTests/SelfTest.swift) aggregates pure parser, recurrence, reminder,
 notification, settings, fetch/cache, bookkeeping, filter, and updater checks. Its own entry point
@@ -25,6 +27,7 @@ panels. Extend the existing pure policy helpers when testing decisions.
 
 | Changed behavior                                                  | Focused checks beyond build/selftest                                                                                                                                                              |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared parser/recurrence/link policy or module boundary           | `./scripts/test-core.sh` and `NOW_TEST_CONFIGURATION=release ./scripts/test-core.sh` ([runner](../Tests/NowCoreTests/Runner.swift)); these do not replace macOS materialization/smoke suites      |
 | Notification routing, receipts, preferences, setup, startup/focus | `python3 scripts/notification-smoke.py --all-smokes` ([harness](../scripts/notification-smoke.py))                                                                                                |
 | Reminder bookkeeping or paused agenda                             | `python3 scripts/reminder-state-smoke.py` ([harness](../scripts/reminder-state-smoke.py))                                                                                                         |
 | Offline persistence/restoration                                   | `python3 scripts/calendar-cache-smoke.py` ([harness](../scripts/calendar-cache-smoke.py))                                                                                                         |
@@ -103,10 +106,14 @@ Before changing this area, read the relevant
 
 ## Compilation and test isolation
 
-[Package.swift](../Package.swift) selects the shipping `NowApp` executable by default. Test commands
-select an allow-listed `NowHarness` executable with a dedicated scratch directory, supporting
-Command Line Tools without XCTest. Unit fixtures live in `Tests/NowTests`; hosted runners use
-conditional accessors in the same files as private production state. No source copies are rewritten.
-See the [test boundary](../docs/development.md#test-target-boundary) for dependency substitutions
-and the separate signed updater fixture. Production CLI parsing, native-calendar inspection, meeting
+[Package.swift](../Package.swift) selects the shipping `NowApp` executable plus its `NowCore`
+library dependency by default. macOS test commands select an allow-listed `NowHarness` executable
+with the same core dependency and a dedicated scratch directory, supporting Command Line Tools
+without XCTest. `NOW_TEST_SUITE=core` instead selects `NowCoreTests`, which imports only the library
+and Foundation. Suite defines apply to the shell harness, not the core. Cross-module APIs use
+`package` access, with implementation helpers remaining internal/private. Unit fixtures live in
+`Tests/NowTests`; hosted runners use conditional accessors in the same files as private production
+state. No source copies are rewritten. See the
+[test boundary](../docs/development.md#test-target-boundary) for dependency substitutions and the
+separate signed updater fixture. Production CLI parsing, native-calendar inspection, meeting
 detection and update-check diagnostics remain supported.

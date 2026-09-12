@@ -8,7 +8,10 @@ engineering rulebook.
 
 ## Build and orient yourself
 
-The app uses one SwiftPM executable target in [Package.swift](../Package.swift).
+The app's `NowApp` SwiftPM executable depends on the `NowCore` library in
+[Package.swift](../Package.swift). The first core slice contains parsed ICS values, parsing,
+recurrence expansion and meeting-link policy in [Sources/NowCore](../Sources/NowCore/). Application
+models, feed materialization and native integration remain in the macOS shell.
 [build-app.sh](../build-app.sh) assembles and signs the bundle. The build targets Apple Silicon and
 macOS 13 in Swift 5 language mode. See [development prerequisites](../docs/development.md) for SDK
 requirements.
@@ -25,6 +28,10 @@ the login keychain; follow [the build instructions in AGENTS.md](../AGENTS.md). 
 `outputs/now.app` and `outputs/now.zip`. The separate selftest executable exercises more than
 parsing, including reminder, cache, settings, and updater decisions. See
 [development and updates](development-and-updates.md) for focused checks and release constraints.
+
+For a host-toolchain check of the shared library only, run `./scripts/test-core.sh` (and repeat with
+`NOW_TEST_CONFIGURATION=release`). This does not build or validate the macOS app. See the
+[core workflow](../docs/development.md#shared-core-and-linux-checks) for scope and prerequisites.
 
 ## Choose a path
 

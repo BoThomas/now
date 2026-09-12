@@ -295,8 +295,8 @@ rejected. Existing `/meet/` Personal Room links continue through the generic mat
 ### Meeting links
 
 See [calendar link extraction](calendars.md#recurrence-and-identity) and
-[ICS.swift](../Sources/ICS.swift). The recognized-provider search does not fall back to arbitrary
-HTTP(S) URLs.
+[NowCore/ICS.swift](../Sources/NowCore/ICS.swift). The recognized-provider search does not fall back
+to arbitrary HTTP(S) URLs.
 
 ### Feed line endings/folding
 
@@ -644,7 +644,21 @@ moved siblings, and iterate sorted keys. One resolved master/override revision l
 link once; never reuse a master link for an override with explicitly changed/empty fields.
 `python3 scripts/parser-performance-smoke.py --compare-head` checks output equivalence and reports
 timings on repeated long descriptions and thousands of coincident overrides; ordinary preflight runs
-the working-copy fixtures.
+the working-copy fixtures. Across extraction, use `--compare-revision d01dbd7` to retain the
+original comparison point after commits. Each variant builds a complete revision through SwiftPM;
+never mix a historical parser with current models or duplicate a private core into the working
+harness.
+
+### Shared parser boundary
+
+`Sources/NowCore/ICS.swift` holds parsing, recurrence and link policy; `Sources/ICS.swift` holds
+macOS text discovery and feed materialization. Keep `NSDataDetector` in the shell and inject
+candidate URLs into shared link selection. Preserve URL priority, structured-conference handling and
+the lack of arbitrary-link fallback. `CalendarSubscription`/`MeetingEvent` still depend on AppKit
+palette defaults and settings decoding; extraction must not silently freeze or alter those defaults.
+`NowCore` must not import the shell or compile fixture substitutions. `package` access exists only
+for actual app/harness consumers. The core runner does not establish full materialization, storage,
+notification or Windows compatibility; grow its coverage as those rules move.
 
 ### Activation compatibility
 

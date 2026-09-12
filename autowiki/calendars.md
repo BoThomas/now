@@ -2,11 +2,13 @@
 
 [Project map](quickstart.md) · [Reminder delivery](reminders.md)
 
-Both source types become [MeetingEvent](../Sources/Models.swift) values. ICS parsing/expansion lives
-in [ICS.swift](../Sources/ICS.swift); [NativeCalendarSource](../Sources/NativeCalendars.swift) asks
-EventKit for already materialized occurrences. Both enforce a start-time window of six hours before
-through fourteen days after fetch time and exclude all-day/cancelled meetings. Native mapping also
-applies the configured declined-event filter.
+Both source types become [MeetingEvent](../Sources/Models.swift) values. ICS parsing and recurrence
+expansion live in the shared [NowCore parser](../Sources/NowCore/ICS.swift); the macOS
+[ICSBuilder](../Sources/ICS.swift) materializes those parsed values into application events.
+[NativeCalendarSource](../Sources/NativeCalendars.swift) asks EventKit for already materialized
+occurrences. Both enforce a start-time window of six hours before through fourteen days after fetch
+time and exclude all-day/cancelled meetings. Native mapping also applies the configured
+declined-event filter.
 
 ## From feed to accepted snapshot
 
@@ -56,8 +58,11 @@ For changes here, inspect recurrence, zone, override, and compliance fixtures in
 recognized as a meeting link. It searches recognized meeting links in location, description,
 alternate description, title, and attachment order; there is no arbitrary HTTP(S) fallback in that
 search. Native mapping synthesizes a `ParsedEvent` to share this extraction logic. Provider
-recognition and display-location cleanup belong in [ICS.swift](../Sources/ICS.swift), not separate
-UI-specific matchers.
+recognition, precedence and display-location cleanup belong in
+[NowCore](../Sources/NowCore/ICS.swift), not separate UI-specific matchers. Text URL discovery is
+injected into that policy; the macOS overload in [Sources/ICS.swift](../Sources/ICS.swift) retains
+`NSDataDetector`. Foundation imports alone do not make an API portable. The core-only runner tests
+selection with synthetic detected URLs, not Linux parity with Apple's text detector.
 
 ## Restore and failure recovery
 

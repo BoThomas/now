@@ -29,6 +29,10 @@ def main():
     name = "concurrency-production" if "--production" in sys.argv else "concurrency"
     if "--updater" in sys.argv:
         name = "concurrency-updater"
+    if "--core" in sys.argv:
+        name = "concurrency-core"
+    if "--core-tests" in sys.argv:
+        name = "concurrency-core-tests"
     current = diagnostics((report / (name + ".log")).read_text())
     (report / (name + "-current.json")).write_text(json.dumps(current, indent=2) + "\n")
     baseline = json.loads(Path("analysis/concurrency-baseline.json").read_text())

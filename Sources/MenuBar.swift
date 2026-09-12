@@ -1,4 +1,5 @@
 import AppKit
+import NowCore
 import SwiftUI
 import Combine
 

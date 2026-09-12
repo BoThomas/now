@@ -39,3 +39,34 @@ All 13 original warnings are resolved, and their individual baseline entries are
 The startup function's length finding was resolved by extracting notification wiring during the
 runner migration. No other lint entries were removed, regenerated or relaxed. Lint still scans
 conditional test hooks within production files; dedicated fixture files remain outside its scope.
+
+## Core extraction relocation
+
+The first extraction moves seven existing findings to `Sources/NowCore/ICS.swift`: `RRULE.parse`
+(one), `ICSParser.parse` (one), `ICSParser.makeEvent` (two), `ICSParser.parseDuration` (one), and
+`RRULEExpander.expand` (two). Their baseline paths are relocated and source text includes `package`
+where cross-module consumers require it; function bodies and the above rationales are unchanged. The
+two `ICSBuilder.meetings` findings remain in `Sources/ICS.swift`, with updated line locations. The
+other seven findings remain in place. No finding is resolved by this move and none is newly
+accepted. Full SwiftLint `--report` verification still requires the pinned macOS toolchain.
+
+Visibility changes are confined to the core's actual consumers:
+
+- `ICSProperty` and its fields/explicit initializer: native mapping, materialization and fixtures.
+- `ParsedEvent`, its existing initializer and payload fields: native mapping, CLI diagnostics,
+  materialization, overrides and parser fixtures.
+- `RRULE` and `parse`: parsed payload and rejection tests. Its representation/helpers stay internal.
+- `ICSParseResult` and result fields: builder, CLI and fixtures. Its initializer stays internal.
+- `ICSDateFormatters` initialization and `retainedCount`: builder-owned cache and ownership tests;
+  its formatter operation/storage stay internal/private.
+- `ICSParser` parse/date/make-event/duration/unescape/property/unfolding operations and line limits:
+  production callers and existing parser regression tests. Implementation helpers, the zone
+  table/lookup, warning-collecting make-event overload, duration bound and `ICSInputError` stay
+  internal/private.
+- `RRULEExpander` expansion/result fields, occurrence entrypoints and budget: builder and budget/DST
+  fixtures. Calendar traversal helpers stay private.
+- `LinkExtractor` selection with injected discovery, join conversion, provider/display/classifier
+  and text cleanup operations: native adapter, UI and link regression tests. Tables stay internal;
+  Apple's detector stays private in the shell.
+
+All widened declarations use `package`, not `public`; no unsafe concurrency annotations are added.
