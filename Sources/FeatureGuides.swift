@@ -73,7 +73,7 @@ final class FeatureGuideController: ObservableObject {
     private let defaults: UserDefaults
     private var acknowledged = false
 
-    init(defaults: UserDefaults = .standard, catalog: [FeatureGuideDefinition] = FeatureGuideCatalog.entries) {
+    init(defaults: UserDefaults = AppPreferences.standard, catalog: [FeatureGuideDefinition] = FeatureGuideCatalog.entries) {
         self.defaults = defaults
         self.catalog = catalog
         state = StoredPreferences.load(FeatureGuideState.self, key: Self.storageKey, label: "Feature guide history", defaults: defaults) ?? FeatureGuideState()

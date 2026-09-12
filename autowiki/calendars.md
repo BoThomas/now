@@ -22,7 +22,7 @@ continuation lines, and validates the entire calendar envelope before returning 
 prefix followed by an unfinished component is a feed error; a complete empty calendar is a valid
 empty result. Physical lines are capped at 200,000 and unfolded lines at 10,000 characters. Parser
 errors propagate through `ICSBuildResult` and `FetchResult`, so a rejected feed cannot masquerade as
-an empty success. The [structure and merge tests](../Sources/SelfTest.swift) exercise these
+an empty success. The [structure and merge tests](../Tests/NowTests/SelfTest.swift) exercise these
 boundaries.
 
 `mergeICS` in [AppStore.swift](../Sources/AppStore.swift) checks the live source ID, enabled state,
@@ -48,8 +48,9 @@ exhausting a recurrence or occurrence budget rejects the whole feed: 100,000 cal
 series, 500,000 per feed, and 10,000 relevant occurrences. This preserves the last complete
 snapshot. The expander verifies generated local dates/times across DST gaps before counting them.
 For changes here, inspect recurrence, zone, override, and compliance fixtures in
-[SelfTest.swift](../Sources/SelfTest.swift), plus the [workload](../scripts/feed-workload-smoke.py)
-and [materialization performance](../scripts/parser-performance-smoke.py) harnesses.
+[SelfTest.swift](../Tests/NowTests/SelfTest.swift), plus the
+[workload](../scripts/feed-workload-smoke.py) and
+[materialization performance](../scripts/parser-performance-smoke.py) harnesses.
 
 `LinkExtractor.link` first accepts a usable explicit conference property, then a URL property
 recognized as a meeting link. It searches recognized meeting links in location, description,
@@ -86,7 +87,7 @@ operational constraints are in [AGENTS.md](../AGENTS.md).
 
 Use [calendar-fetch-smoke.py](../scripts/calendar-fetch-smoke.py) for transport/structure and
 [calendar-cache-smoke.py](../scripts/calendar-cache-smoke.py) for isolated process-restart recovery.
-These complement the pure [cache tests](../Sources/SelfTestCache.swift); do not seed live app
+These complement the pure [cache tests](../Tests/NowTests/SelfTestCache.swift); do not seed live app
 calendars for testing.
 
 Before changing this area, read the relevant

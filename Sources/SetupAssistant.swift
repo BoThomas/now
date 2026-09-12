@@ -94,7 +94,7 @@ final class SetupAssistantController: ObservableObject {
     }
     var pending: Bool { !state.completed }
 
-    init(isNewProfile: Bool, settings: AppSettings, defaults: UserDefaults = .standard) {
+    init(isNewProfile: Bool, settings: AppSettings, defaults: UserDefaults = AppPreferences.standard) {
         self.defaults = defaults
         state = StoredPreferences.load(SetupAssistantState.self, key: Self.storageKey, label: "Setup choices", defaults: defaults)
             ?? SetupAssistantState(isNewProfile: isNewProfile, settings: settings, supportsMeetings: MeetingActivityProbe.platformPotentiallySupported)

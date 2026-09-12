@@ -21,10 +21,10 @@ import AppKit
             UserDefaults.standard.removeVolatileDomain(forName: UserDefaults.argumentDomain)
         }
         _ = NSApplication.shared
-        let delegate = AppDelegate()
+        let delegate = AppDelegate(store: AppStore(eventCache: CalendarEventCache(directory: URL(fileURLWithPath: ProcessInfo.processInfo.environment["NOW_TEST_CACHE_ROOT"]!))))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        delegate.updateWindow = window
+        delegate.smokeUpdateWindow = window
         window.orderFront(nil)
         response = .alertThirdButtonReturn
         delegate.handleQuitRequest()
@@ -38,7 +38,7 @@ import AppKit
         delegate.handleQuitRequest()
         try ReminderStateSmoke.require(terminations == 1, "confirmed Quit invokes termination")
         response = .alertThirdButtonReturn
-        delegate.handleQuitFromWindow(window, closeTitle: "Close Settings")
+        delegate.smokeHandleQuitFromWindow(window, closeTitle: "Close Settings")
         try ReminderStateSmoke.require(buttons == ["Quit now", "Close Settings", "Cancel"], "Settings retains its existing dialog choices")
         window.close()
     }
@@ -74,7 +74,7 @@ struct ReminderStateSmoke {
             UserDefaults.standard.removeVolatileDomain(forName: UserDefaults.argumentDomain)
         }
         _ = NSApplication.shared
-        let store = AppStore()
+        let store = AppStore(eventCache: CalendarEventCache(directory: URL(fileURLWithPath: ProcessInfo.processInfo.environment["NOW_TEST_CACHE_ROOT"]!)))
         // Never start AppStore: no EventKit fetch, login-item changes, or timers.
         var clock = Date()
         store.now = { clock }
@@ -82,7 +82,7 @@ struct ReminderStateSmoke {
         store.onAlert = { deliveries.append(contentsOf: $0.map(\.uid)) }
         store.resync(subscriptionID: a.id)
         try await waitFor("initial synthetic feed loads") { store.events.contains { $0.uid == "a" } }
-        store.tick()
+        store.smokeTick()
         try require(deliveries == ["a"], "production tick records the first due reminder")
         let eventA = store.events.first { $0.uid == "a" }!
         let snoozeUntil = clock.addingTimeInterval(300)
@@ -96,10 +96,10 @@ struct ReminderStateSmoke {
         _ = await AppStore.fetchData(base + "/a-full")
         store.resync(subscriptionID: a.id)
         try await waitFor("temporarily missing event returns") { store.events.contains { $0.uid == "a" } }
-        store.tick()
+        store.smokeTick()
         try require(deliveries == ["a"], "F09: unrelated refresh and recolor preserve the snooze")
         clock = snoozeUntil
-        store.tick()
+        store.smokeTick()
         try require(deliveries == ["a", "a"], "F09: retained snooze re-fires at its original deadline")
 
         let alerts = AlertController()
@@ -113,7 +113,7 @@ struct ReminderStateSmoke {
         let normalIDs = menu.items.compactMap { ($0.representedObject as? MeetingEvent)?.id }
         store.pauseIndefinitely()
         store.snooze([eventA.id: clock.addingTimeInterval(-1)])
-        store.tick()
+        store.smokeTick()
         try require(deliveries.count == 2, "F11: pause suppresses an otherwise due reminder")
         controller.menuNeedsUpdate(menu)
         let rows = menu.items.filter { $0.representedObject is MeetingEvent }
@@ -126,7 +126,7 @@ struct ReminderStateSmoke {
         }
         try require(NSApp.sendAction(action, to: resume.target, from: resume) && !store.isPaused,
                     "F11: native Resume action clears pause")
-        store.tick()
+        store.smokeTick()
         try require(deliveries.count == 3, "F11: reminder delivery resumes after Resume Now")
         func requestCounts() async throws -> [String: Int] {
             let (data, _) = await AppStore.fetchData(base + "/stats")
@@ -136,7 +136,7 @@ struct ReminderStateSmoke {
         let beforeAdd = try await requestCounts()
         clock = clock.addingTimeInterval(1)
         store.addSubscription(name: "Synthetic C", urlString: base + "/c")
-        try await waitFor("B7b: addition completes a full refresh") { !store.isRefreshing && store.events.contains { $0.uid == "c" } }
+        try await waitFor("B7b: addition completes a full refresh") { !store.smokeIsRefreshing && store.events.contains { $0.uid == "c" } }
         let afterAdd = try await requestCounts()
         try require(["/a", "/b", "/c"].allSatisfy { afterAdd[$0, default: 0] - beforeAdd[$0, default: 0] == 1 },
                     "B7b: adding requests each enabled feed exactly once")
@@ -145,7 +145,7 @@ struct ReminderStateSmoke {
         _ = await AppStore.fetchData(base + "/b-fail")
         clock = clock.addingTimeInterval(1)
         store.refresh()
-        try await waitFor("B7b: partial failure completes") { !store.isRefreshing }
+        try await waitFor("B7b: partial failure completes") { !store.smokeIsRefreshing }
         try require(store.lastChecked == clock && store.errors[b.id] != nil, "B7b: failed check advances time and retains its error")
         try require(store.events.first { $0.uid == "a" }?.title == "Updated A", "B7b: healthy calendar still updates when another fails")
         try require(store.events.first { $0.uid == "b" }?.title == cachedB.title, "B7b: failed calendar retains cached events")
@@ -158,17 +158,17 @@ struct ReminderStateSmoke {
         try require(NSApp.sendAction(failureAction, to: failure.target, from: failure) && settingsOpened, "B7b: failure summary opens Settings")
         _ = await AppStore.fetchData(base + "/b-ok")
         store.refresh()
-        try await waitFor("B7b: recovery completes") { !store.isRefreshing }
+        try await waitFor("B7b: recovery completes") { !store.smokeIsRefreshing }
         controller.menuNeedsUpdate(menu)
         try require(store.errors.isEmpty && !menu.items.contains { $0.title.contains("failed to sync") }, "B7b: recovery removes failure summary")
         _ = await AppStore.fetchData(base + "/b-fail")
         store.refresh()
-        try await waitFor("B7b: repeat failure completes") { !store.isRefreshing }
+        try await waitFor("B7b: repeat failure completes") { !store.smokeIsRefreshing }
         let beforeRemove = try await requestCounts()
         clock = clock.addingTimeInterval(1)
         store.removeSubscription(b.id)
         try require(store.errors[b.id] == nil, "B7b: removing source immediately clears its error")
-        try await waitFor("B7b: removal completes a full refresh") { !store.isRefreshing }
+        try await waitFor("B7b: removal completes a full refresh") { !store.smokeIsRefreshing }
         let afterRemove = try await requestCounts()
         try require(["/a", "/c"].allSatisfy { afterRemove[$0, default: 0] - beforeRemove[$0, default: 0] == 1 } && afterRemove["/b"] == beforeRemove["/b"],
                     "B7b: removing requests remaining feeds once and never the removed feed")
@@ -178,7 +178,7 @@ struct ReminderStateSmoke {
         clock = clock.addingTimeInterval(1)
         let cachedIDs = Set(store.events.map(\.id))
         store.refresh()
-        try await waitFor("B7b: total failure completes") { !store.isRefreshing }
+        try await waitFor("B7b: total failure completes") { !store.smokeIsRefreshing }
         controller.menuNeedsUpdate(menu)
         try require(store.lastChecked == clock && store.errors.count == 2 && Set(store.events.map(\.id)) == cachedIDs,
                     "B7b: total failure advances check time and preserves all cached events")
@@ -204,21 +204,21 @@ struct ReminderStateSmoke {
         try require(trackedMenu.items.filter { $0.action == nil && $0.submenu == nil }.allSatisfy { !$0.isEnabled },
                     "informational rows remain disabled after a tracking tick")
 
-        let priorLoginState = store.loginItemState
+        let priorLoginState = store.smokeLoginItemState
         controller.smokeBeginTracking()
-        store.loginItemState = .enabled
+        store.smokeLoginItemState = .enabled
         controller.smokeRefreshMenu(at: clock)
         try require(trackedMenu.items.first { $0.title == "Launch at Login" }?.state == .on,
                     "tracked menu adopts changed login registration without reopening")
-        store.loginItemState = .disabled
+        store.smokeLoginItemState = .disabled
         controller.smokeRefreshMenu(at: clock)
         try require(trackedMenu.items.first { $0.title == "Launch at Login" }?.state == .off,
                     "tracked menu clears disabled login registration")
-        store.loginItemState = priorLoginState
+        store.smokeLoginItemState = priorLoginState
         controller.smokeEndTracking()
 
         clock = clock.addingTimeInterval(7)
-        store.tick()
+        store.smokeTick()
         let expectedSyncLabel = Fmt.syncStatus(store.lastChecked!, relativeTo: store.displayTime)
         try require(store.displayTime == clock && trackedMenu.items.contains { $0.title == expectedSyncLabel },
                     "menu sync label follows the same published clock as Settings without a menu timer tick")
@@ -234,7 +234,7 @@ struct ReminderStateSmoke {
         // The preceding targeted recovery deliberately left the other source's
         // failure intact. Recover it before testing a successful empty agenda.
         store.refresh()
-        try await waitFor("all sources recover before agenda checks") { !store.isRefreshing && store.errors.isEmpty }
+        try await waitFor("all sources recover before agenda checks") { !store.smokeIsRefreshing && store.errors.isEmpty }
         let fixtureTime = Date(timeIntervalSince1970: 1_800_000_000)
         clock = fixtureTime
         let many = (0..<20).map { index in
@@ -242,7 +242,7 @@ struct ReminderStateSmoke {
                 end: fixtureTime.addingTimeInterval(3600 + Double(index) * 60), location: nil, notes: nil, link: nil,
                 calendarID: a.id, calendarName: "Synthetic A", colorIndex: 0)
         }
-        store.commitEvents(many)
+        store.smokeCommitEvents(many)
         for limit in AppSettings.allowedMenuMeetingLimits {
             store.settings.menuMeetingLimit = limit
             controller.menuNeedsUpdate(menu)

@@ -186,7 +186,7 @@ release_failed() {
   case "$PHASE" in
     "preparing release files"|"building and testing")
       print -u2 "Recovery: fix the failure in this worktree, then resume the preflight and publication:"
-      print -u2 "  ./build-app.sh --require-identity && ./outputs/now.app/Contents/MacOS/now --selftest"
+      print -u2 "  ./build-app.sh --require-identity && ./scripts/test.sh"
       print -u2 "  ./scripts/preflight.sh --app outputs/now.app && cp outputs/now.zip 'outputs/now-$TAG.zip'"
       print -u2 "  git add Info.plist CHANGELOG.md && git commit -m 'Release $TAG' && git tag '$TAG'"
       print -u2 "  git push --atomic -u origin HEAD '$TAG'"

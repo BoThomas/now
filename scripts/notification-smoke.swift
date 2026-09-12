@@ -163,7 +163,7 @@ struct NotificationSmoke {
             let a = meeting("group-a", start: 30, link: URL(string: "https://example.com/a")!)
             let b = meeting("group-b", start: 30)
             let other = meeting("group-other", start: 31, link: URL(string: "https://example.com/other")!)
-            groupedStore.commitEvents([other, b, a]); groupedStore.tick(); await settle()
+            groupedStore.smokeCommitEvents([other, b, a]); groupedStore.smokeTick(); await settle()
             require(groupedTransport.submissions.count == 2, "same start gets one banner while a one-second difference stays separate")
             let banner = groupedDelivery.receipts.values.first { $0.keys.count == 2 }!
             require(banner.category == SystemNotificationTransport.chooseMeetingCategory && !banner.catchUp, "ordinary group offers Choose Meeting")
@@ -172,7 +172,7 @@ struct NotificationSmoke {
             require(!privateText.body.contains(a.title) && !privateText.body.contains(b.title), "group privacy hides titles")
             let single = groupedDelivery.receipts.values.first { $0.keys.count == 1 }!
             require(single.category == SystemNotificationTransport.category(join: true, snooze: true), "single keeps Join and Snooze")
-            groupedStore.tick(); await settle()
+            groupedStore.smokeTick(); await settle()
             require(groupedTransport.submissions.count == 2, "accepted groups do not repeat")
             var agenda = 0
             var openedLink = false
@@ -184,55 +184,55 @@ struct NotificationSmoke {
             groupedStore.prepareForTermination({})
         }
         let one = meeting("one")
-        store.commitEvents([one]); store.tick(); store.tick(); await settle()
+        store.smokeCommitEvents([one]); store.smokeTick(); store.smokeTick(); await settle()
         require(system.submissions.count == 1 && fullscreen.isEmpty, "notification mode never presents fullscreen")
-        store.tick(); await settle()
+        store.smokeTick(); await settle()
         require(system.submissions.count == 1, "accepted notification does not repeat each tick")
         let token = delivery.receipts.keys.first!
         delivery.receive(id: token, action: "snooze")
-        clock = one.start.addingTimeInterval(-1); store.tick(); await settle()
+        clock = one.start.addingTimeInterval(-1); store.smokeTick(); await settle()
         require(system.submissions.count == 1, "at-start snooze remains quiet before start")
-        clock = one.start; store.tick(); await settle()
+        clock = one.start; store.smokeTick(); await settle()
         require(system.submissions.count == 2, "notification snooze re-fires at exact deadline")
         delivery.receive(id: delivery.receipts.keys.first!, action: UNNotificationDismissActionIdentifier)
-        store.tick(); await settle()
+        store.smokeTick(); await settle()
         require(system.submissions.count == 2, "explicit dismiss stays handled")
 
         // Real preferences reload: saved settings contain only synthetic source.
         let restarted = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("cache2")))
         restarted.now = { clock }
         await restarted.restoreCachedEvents()
-        restarted.commitEvents([one])
+        restarted.smokeCommitEvents([one])
         var restartedAlerts = 0
         restarted.onAlert = { restartedAlerts += $0.count }
         let restartTransport = FakeNotifications()
         let restartDelivery = ReminderNotificationController(transport: restartTransport)
         restarted.connectNotifications(restartDelivery)
-        restarted.tick(); await settle()
+        restarted.smokeTick(); await settle()
         require(restartTransport.submissions.isEmpty && restartedAlerts == 0, "dismiss survives AppStore restart")
 
         let two = meeting("two", start: 240)
-        store.commitEvents([one, two])
+        store.smokeCommitEvents([one, two])
         system.status.authorization = .denied
-        store.tick(); await settle()
+        store.smokeTick(); await settle()
         require(system.submissions.count == 2 && fullscreen.isEmpty, "permission revocation has no fullscreen fallback")
         system.status.authorization = .allowed
         delivery.refreshPermission(force: true, now: clock); await settle()
-        store.tick(); await settle()
+        store.smokeTick(); await settle()
         require(system.submissions.count == 3, "permission recovery retries still-due reminder")
         store.settings.hideNotificationDetails = true
         require(delivery.receipts.isEmpty, "privacy edit immediately removes previously delivered details")
 
         let three = meeting("three", start: 280)
         system.hold = true
-        store.commitEvents([one, two, three]); store.tick(); await settle()
+        store.smokeCommitEvents([one, two, three]); store.smokeTick(); await settle()
         let staleID = delivery.receipts.keys.first!
-        store.commitEvents([one, two]); system.release(); await settle()
+        store.smokeCommitEvents([one, two]); system.release(); await settle()
         require(delivery.receipts.isEmpty && system.removed.contains(staleID), "event removed during add removes stale notification")
         system.hold = false
-        store.commitEvents([one, two, three]); store.tick(); await settle()
+        store.smokeCommitEvents([one, two, three]); store.smokeTick(); await settle()
         require(delivery.receipts.count == 1, "stale add never marks returned event handled")
-        store.pauseIndefinitely(); store.tick(); await settle()
+        store.pauseIndefinitely(); store.smokeTick(); await settle()
         require(delivery.receipts.isEmpty, "pause removes delivered notifications")
         store.resume()
 
@@ -241,30 +241,30 @@ struct NotificationSmoke {
         store.settings.notifyOnCatchUp = true
         let runningA = meeting("runningA", start: 300), runningB = meeting("runningB", start: 400)
         store.beginNotificationCatchUp()
-        let wakeRequest = store.beginFullRefresh(subscriptionIDs: [source.id])
-        store.commitEvents([runningA]); store.tick(); await settle()
+        let wakeRequest = store.smokeBeginFullRefresh(subscriptionIDs: [source.id])
+        store.smokeCommitEvents([runningA]); store.smokeTick(); await settle()
         let beforeSecondSource = system.submissions.count
-        store.commitEvents([runningA, runningB]); store.tick(); await settle()
+        store.smokeCommitEvents([runningA, runningB]); store.smokeTick(); await settle()
         require(system.submissions.count == beforeSecondSource, "catch-up waits for asynchronous refresh completion")
-        store.finishRefresh(fetched: [source], requestID: wakeRequest); await settle()
+        store.smokeFinishRefresh(fetched: [source], requestID: wakeRequest); await settle()
         require(system.submissions.last?.keys.count == 2 && system.submissions.last?.catchUp == true, "wake groups running meetings")
         let before = system.submissions.count
-        store.beginNotificationCatchUp(); store.tick(); await settle()
+        store.beginNotificationCatchUp(); store.smokeTick(); await settle()
         require(system.submissions.count == before && fullscreen.isEmpty, "repeated wake does not duplicate catch-up")
-        clock = base.addingTimeInterval(1900); store.tick(); await settle()
+        clock = base.addingTimeInterval(1900); store.smokeTick(); await settle()
         require(delivery.receipts.isEmpty, "ended meetings removed from Notification Center")
         store.settings.notifySyncErrors = true
-        let failureRequest = store.beginFullRefresh(subscriptionIDs: [source.id])
-        store.merge(results: [FetchResult(subscription: source, events: [], error: "Synthetic failure", requestID: failureRequest)])
-        store.finishRefresh(fetched: [source], requestID: failureRequest)
+        let failureRequest = store.smokeBeginFullRefresh(subscriptionIDs: [source.id])
+        store.smokeMerge(results: [FetchResult(subscription: source, events: [], error: "Synthetic failure", requestID: failureRequest)])
+        store.smokeFinishRefresh(fetched: [source], requestID: failureRequest)
         store.pauseIndefinitely()
         let beforeError = system.submissions.count
-        clock = clock.addingTimeInterval(299); store.tick(); await settle()
+        clock = clock.addingTimeInterval(299); store.smokeTick(); await settle()
         require(system.submissions.count == beforeError, "sync problem does not notify before sustained-failure threshold")
-        clock = clock.addingTimeInterval(1); store.tick(); await settle()
+        clock = clock.addingTimeInterval(1); store.smokeTick(); await settle()
         require(system.submissions.count == beforeError + 1 && system.submissions.last?.sync == true, "sync error notifies independently of reminder pause")
         delivery.receive(id: delivery.receipts.keys.first!, action: UNNotificationDismissActionIdentifier)
-        clock = clock.addingTimeInterval(600); store.tick(); await settle()
+        clock = clock.addingTimeInterval(600); store.smokeTick(); await settle()
         require(system.submissions.count == beforeError + 1, "dismissed sync error does not repeat unchanged")
         let errorRestart = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("cache3")))
         errorRestart.now = { clock }
@@ -273,15 +273,15 @@ struct NotificationSmoke {
         errorDelivery.now = { clock }
         errorRestart.connectNotifications(errorDelivery)
         await errorRestart.restoreCachedEvents()
-        let restartRequest = errorRestart.beginFullRefresh(subscriptionIDs: [source.id])
-        errorRestart.merge(results: [FetchResult(subscription: source, events: [], error: "Still failing", requestID: restartRequest)])
-        errorRestart.finishRefresh(fetched: [source], requestID: restartRequest); await settle()
+        let restartRequest = errorRestart.smokeBeginFullRefresh(subscriptionIDs: [source.id])
+        errorRestart.smokeMerge(results: [FetchResult(subscription: source, events: [], error: "Still failing", requestID: restartRequest)])
+        errorRestart.smokeFinishRefresh(fetched: [source], requestID: restartRequest); await settle()
         require(errorTransport.submissions.isEmpty, "continuous failure stays quiet across restart")
-        store.merge(results: [FetchResult(subscription: source, events: [], error: nil, requestID: failureRequest)])
-        store.tick()
-        store.merge(results: [FetchResult(subscription: source, events: [], error: "New failure", requestID: failureRequest)])
-        store.tick()
-        clock = clock.addingTimeInterval(300); store.tick(); await settle()
+        store.smokeMerge(results: [FetchResult(subscription: source, events: [], error: nil, requestID: failureRequest)])
+        store.smokeTick()
+        store.smokeMerge(results: [FetchResult(subscription: source, events: [], error: "New failure", requestID: failureRequest)])
+        store.smokeTick()
+        clock = clock.addingTimeInterval(300); store.smokeTick(); await settle()
         require(system.submissions.count == beforeError + 2, "recovery re-arms a new failure episode")
         // Setup permission is explicit and denied permission never re-prompts.
         let beforeSetup = store.settings
@@ -366,30 +366,30 @@ struct NotificationSmoke {
         do {
             let recoveryStore = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("recovery-cache")), initialState: Persisted())
             let recovery = UpdateController(store: recoveryStore)
-            recovery.applyDecision(.available(release), userInitiated: true)
-            recovery.stagedVersion = release.version
-            recovery.stagedRoot = root.appendingPathComponent("missing-stage")
-            recovery.state.pendingInstallVersion = release.version
+            recovery.smokeApplyDecision(.available(release), userInitiated: true)
+            recovery.smokeStagedVersion = release.version
+            recovery.smokeStagedRoot = root.appendingPathComponent("missing-stage")
+            recovery.smokeState.pendingInstallVersion = release.version
             var terminated = false
             recovery.onTerminateForUpdate = { terminated = true }
             recovery.install()
-            require(!terminated && recovery.stagedVersion == nil && recovery.state.pendingInstallVersion == nil, "missing staging re-prepares without starting an install or retaining marker")
+            require(!terminated && recovery.smokeStagedVersion == nil && recovery.smokeState.pendingInstallVersion == nil, "missing staging re-prepares without starting an install or retaining marker")
 
             let invalidRoot = root.appendingPathComponent("invalid-stage")
             let executable = invalidRoot.appendingPathComponent("extracted/now.app/Contents/MacOS/now")
             try! FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
             try! Data("unsigned executable".utf8).write(to: executable)
-            recovery.stagedRoot = invalidRoot; recovery.stagedVersion = release.version
+            recovery.smokeStagedRoot = invalidRoot; recovery.smokeStagedVersion = release.version
             recovery.install()
             require(recovery.isVerifyingInstall, "install exposes verification progress")
             recovery.dismissWindow()
             await settle()
-            require(!terminated && !recovery.isVerifyingInstall && recovery.installAttempt == nil, "Later cancels install before verification can commit")
+            require(!terminated && !recovery.isVerifyingInstall && recovery.smokeInstallAttempt == nil, "Later cancels install before verification can commit")
             recovery.install()
             for _ in 0..<100 where recovery.isVerifyingInstall { await settle() }
-            require(!terminated && recovery.preparationFailure != nil && recovery.stagedRoot == nil,
+            require(!terminated && recovery.preparationFailure != nil && recovery.smokeStagedRoot == nil,
                     "install rejects an existing unsigned staged executable with a retryable failure")
-            require(recovery.state.pendingInstallVersion == nil && recovery.installAttempt == nil, "failed verification never commits an install marker")
+            require(recovery.smokeState.pendingInstallVersion == nil && recovery.smokeInstallAttempt == nil, "failed verification never commits an install marker")
 
             let timeoutRoot = root.appendingPathComponent("helper-timeout")
             try! FileManager.default.createDirectory(at: timeoutRoot, withIntermediateDirectories: true)
@@ -397,19 +397,19 @@ struct NotificationSmoke {
             var cancelledQuit = false
             recovery.onCancelUpdateTermination = { cancelledQuit = true; recoveryStore.cancelTermination() }
             recoveryStore.prepareForTermination {}
-            recovery.installAttempt = token
-            recovery.stagedRoot = timeoutRoot
-            recovery.stagedVersion = release.version
-            recovery.state.pendingInstallVersion = release.version
-            recovery.installHelperExited(attempt: UUID(), status: 1)
-            require(recovery.state.pendingInstallVersion != nil, "stale helper completion cannot clear a newer attempt")
+            recovery.smokeInstallAttempt = token
+            recovery.smokeStagedRoot = timeoutRoot
+            recovery.smokeStagedVersion = release.version
+            recovery.smokeState.pendingInstallVersion = release.version
+            recovery.smokeInstallHelperExited(attempt: UUID(), status: 1)
+            require(recovery.smokeState.pendingInstallVersion != nil, "stale helper completion cannot clear a newer attempt")
             require(UpdateInstaller.spawnHelper(bundlePath: root.appendingPathComponent("unused.app").path,
                 stagedAppPath: timeoutRoot.appendingPathComponent("extracted/now.app").path,
                 backupPath: root.appendingPathComponent("unused-backup.app").path,
                 releasesURL: "https://example.invalid", extraEnv: ["NOW_SMOKE_POLL_TIMEOUT": "1"],
-                onExit: { status in Task { @MainActor in recovery.installHelperExited(attempt: token, status: status) } }), "timeout helper launches")
-            for _ in 0..<50 where recovery.installAttempt != nil { try? await Task.sleep(nanoseconds: 100_000_000) }
-            require(cancelledQuit && recovery.installAttempt == nil && recovery.stagedVersion == nil && recovery.state.pendingInstallVersion == nil,
+                onExit: { status in Task { @MainActor in recovery.smokeInstallHelperExited(attempt: token, status: status) } }), "timeout helper launches")
+            for _ in 0..<50 where recovery.smokeInstallAttempt != nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+            require(cancelledQuit && recovery.smokeInstallAttempt == nil && recovery.smokeStagedVersion == nil && recovery.smokeState.pendingInstallVersion == nil,
                     "real helper timeout clears staged state and persisted install marker")
             let persistedRecovery = UserDefaults.standard.data(forKey: UpdateController.stateKey).flatMap { try? JSONDecoder().decode(UpdateState.self, from: $0) }
             require(persistedRecovery != nil && persistedRecovery?.pendingInstallVersion == nil, "timeout clears the durable marker as well as memory")
@@ -417,21 +417,21 @@ struct NotificationSmoke {
             if case .problem(_, _, .preparation) = recovery.windowContent {} else { require(false, "timeout exposes recoverable preparation error") }
         }
         let priorUpdates = system.submissions.count
-        updater.state.firstSeenUpdateVersion = release.version
-        updater.state.firstSeenUpdateDate = Date().addingTimeInterval(-4 * 86400)
-        updater.stagedVersion = release.version
-        updater.applyDecision(.available(release), userInitiated: false)
-        store.tick(); await settle()
+        updater.smokeState.firstSeenUpdateVersion = release.version
+        updater.smokeState.firstSeenUpdateDate = Date().addingTimeInterval(-4 * 86400)
+        updater.smokeStagedVersion = release.version
+        updater.smokeApplyDecision(.available(release), userInitiated: false)
+        store.smokeTick(); await settle()
         require(system.submissions.count == priorUpdates + 1 && system.submissions.last?.updateVersion == release.version && system.submissions.last?.sound == false, "update notification submits silently while reminders paused")
         require(updater.windowContent == nil, "automatic update notification does not open update window")
         let updateToken = delivery.receipts.values.first { $0.updateVersion == release.version }!.id
-        store.tick(); await settle()
+        store.smokeTick(); await settle()
         require(system.submissions.count == priorUpdates + 1, "update does not notify repeatedly")
         delivery.receive(id: updateToken, action: UNNotificationDefaultActionIdentifier)
         if case .available(let shown) = updater.windowContent { require(shown.version == release.version, "update click opens matching release") }
         else { require(false, "update click opens existing update window") }
         updater.skipVersion(release.version)
-        require(updater.available == nil && updater.stagedVersion == nil && updater.windowContent == nil,
+        require(updater.available == nil && updater.smokeStagedVersion == nil && updater.windowContent == nil,
                 "skip clears menu offer, staging and window")
         require(!delivery.receipts.values.contains { $0.updateVersion == release.version }, "skip removes update notification")
         let savedSkip = UserDefaults.standard.data(forKey: AppStore.storageKey).flatMap { try? JSONDecoder().decode(Persisted.self, from: $0) }
@@ -439,33 +439,33 @@ struct NotificationSmoke {
         let automatic = UpdateLogic.decide(manifest: release, currentVersion: "1.0.0", skipped: store.settings.skippedUpdateVersion, now: Date(), minAge: 86400)
         if case .skippedVersion = automatic {} else { require(false, "automatic check suppresses skipped version") }
         let manual = UpdateLogic.decide(manifest: release, currentVersion: "1.0.0", skipped: store.settings.skippedUpdateVersion, now: Date(), minAge: 0, userInitiated: true)
-        updater.applyDecision(manual, userInitiated: true)
+        updater.smokeApplyDecision(manual, userInitiated: true)
         if case .available = updater.windowContent {} else { require(false, "manual check reopens skipped version") }
         require(store.settings.skippedUpdateVersion == release.version, "manual check preserves automatic skip preference")
         updater.dismissWindow()
         let updateRestart = UpdateController(store: store)
-        updateRestart.applyDecision(.available(release), userInitiated: false)
-        store.tick(); await settle()
+        updateRestart.smokeApplyDecision(.available(release), userInitiated: false)
+        store.smokeTick(); await settle()
         require(system.submissions.count == priorUpdates + 1, "update notification marker survives restart and dismissal")
         var nextRelease = release
         nextRelease.version = "999.1.0"
         let newerDecision = UpdateLogic.decide(manifest: nextRelease, currentVersion: "1.0.0", skipped: store.settings.skippedUpdateVersion, now: Date(), minAge: 86400)
         if case .available = newerDecision {} else { require(false, "skipping does not suppress newer releases") }
-        updateRestart.applyDecision(newerDecision, userInitiated: false)
+        updateRestart.smokeApplyDecision(newerDecision, userInitiated: false)
         await settle()
         require(system.submissions.count == priorUpdates + 2, "new version can notify once")
-        updateRestart.applyDecision(.upToDate, userInitiated: false)
+        updateRestart.smokeApplyDecision(.upToDate, userInitiated: false)
         require(!delivery.receipts.values.contains { $0.updateVersion != nil }, "withdrawn updates removed from Notification Center")
         nextRelease.version = "999.2.0"
         system.hold = true
-        updateRestart.applyDecision(.available(nextRelease), userInitiated: false)
+        updateRestart.smokeApplyDecision(.available(nextRelease), userInitiated: false)
         await settle()
         store.settings.notifyUpdates = false
         system.release(); await settle()
-        require(updateRestart.state.lastNotificationVersion == "999.1.0", "disabled in-flight update does not consume version")
+        require(updateRestart.smokeState.lastNotificationVersion == "999.1.0", "disabled in-flight update does not consume version")
         require(!delivery.receipts.values.contains { $0.updateVersion != nil }, "disabling update notices removes pending receipt")
         system.hold = false
-        updateRestart.applyDecision(.available(nextRelease), userInitiated: true)
+        updateRestart.smokeApplyDecision(.available(nextRelease), userInitiated: true)
         if case .available = updateRestart.windowContent {} else { require(false, "manual check opens window even with update notices disabled") }
         let setupDomain = "now-setup-tests-" + UUID().uuidString
         let setupDefaults = UserDefaults(suiteName: setupDomain)!
@@ -518,7 +518,7 @@ struct NotificationSmoke {
         clock = base
         let detailOne = meeting("detail-one")
         let detailTwo = meeting("detail-two", link: URL(string: "https://zoom.us/j/123456789"))
-        store.commitEvents([detailOne, detailTwo])
+        store.smokeCommitEvents([detailOne, detailTwo])
         for selected in [[detailOne], [detailTwo], [detailOne, detailTwo]] {
             let item = ReminderNotification(id: UUID().uuidString, keys: selected.map { NotificationLogic.key($0.id) },
                 fingerprints: selected.map(NotificationLogic.fingerprint), expires: base.addingTimeInterval(1800),
@@ -533,26 +533,26 @@ struct NotificationSmoke {
         for mode in [CatchUpDelivery.notification, .skip] {
             store.settings.reminderDelivery = .fullscreen
             store.settings.catchUpDelivery = mode
-            store.commitEvents([])
-            let oldBatch = store.beginFullRefresh(subscriptionIDs: [source.id])
+            store.smokeCommitEvents([])
+            let oldBatch = store.smokeBeginFullRefresh(subscriptionIDs: [source.id])
             store.beginNotificationCatchUp()
-            store.finishRefresh(fetched: [source], requestID: oldBatch)
-            let firstWakeBatch = store.beginFullRefresh(subscriptionIDs: [source.id])
+            store.smokeFinishRefresh(fetched: [source], requestID: oldBatch)
+            let firstWakeBatch = store.smokeBeginFullRefresh(subscriptionIDs: [source.id])
             store.beginNotificationCatchUp() // A second wake queues another full batch.
-            store.finishRefresh(fetched: [source], requestID: firstWakeBatch)
-            let latestBatch = store.beginFullRefresh(subscriptionIDs: [source.id])
+            store.smokeFinishRefresh(fetched: [source], requestID: firstWakeBatch)
+            let latestBatch = store.smokeBeginFullRefresh(subscriptionIDs: [source.id])
             let discovered = meeting("review-wake-\(mode)", start: -120)
-            store.commitEvents([discovered])
+            store.smokeCommitEvents([discovered])
             let beforeCatchUp = system.submissions.count
-            store.tick(); await settle()
+            store.smokeTick(); await settle()
             require(!fullscreen.contains(discovered.id) && system.submissions.count == beforeCatchUp,
                     "new wake discovery never goes fullscreen or notifies before its batch finishes")
-            store.finishRefresh(fetched: [source], requestID: latestBatch); await settle()
+            store.smokeFinishRefresh(fetched: [source], requestID: latestBatch); await settle()
             require(!fullscreen.contains(discovered.id), "old completions preserve notification/skip route")
             require(system.submissions.count == beforeCatchUp + (mode == .notification ? 1 : 0),
                     "latest batch releases catch-up notification or retains skip")
             let upcoming = meeting("review-after-cutoff-\(mode)", start: 30)
-            store.commitEvents([upcoming]); store.tick(); await settle()
+            store.smokeCommitEvents([upcoming]); store.smokeTick(); await settle()
             require(fullscreen.contains(upcoming.id), "post-cutoff meeting retains normal delivery")
         }
 
@@ -567,13 +567,13 @@ struct NotificationSmoke {
         let queuedDelivery = ReminderNotificationController(transport: queuedTransport)
         queuedDelivery.now = { clock }; queued.connectNotifications(queuedDelivery)
         var queuedFullscreen = 0; queued.onAlert = { queuedFullscreen += $0.count }
-        let oldQueued = queued.beginFullRefresh(subscriptionIDs: [queuedSource.id])
+        let oldQueued = queued.smokeBeginFullRefresh(subscriptionIDs: [queuedSource.id])
         queued.beginNotificationCatchUp(); queued.refresh() // Sets pendingRefresh.
-        queued.finishRefresh(fetched: [queuedSource], requestID: oldQueued) // Starts queued full batch.
+        queued.smokeFinishRefresh(fetched: [queuedSource], requestID: oldQueued) // Starts queued full batch.
         let queuedEvent = MeetingEvent(uid: "queued", title: "Queued discovery", start: base.addingTimeInterval(-30),
             end: base.addingTimeInterval(1800), location: nil, notes: nil, link: nil,
             calendarID: queuedSource.id, calendarName: queuedSource.name, colorIndex: 0)
-        queued.commitEvents([queuedEvent]); queued.tick()
+        queued.smokeCommitEvents([queuedEvent]); queued.smokeTick()
         await settle()
         require(queuedFullscreen == 0 && queuedTransport.submissions.count == 1 && queuedTransport.submissions[0].catchUp,
                 "pendingRefresh hands catch-up ownership to the queued full batch")
@@ -584,16 +584,16 @@ struct NotificationSmoke {
         store.settings.catchUpDelivery = .normal
         let early = meeting("review-early", start: 86400, end: 90000)
         let dueJoin = meeting("review-due-join", start: 86400, end: 90000)
-        store.commitEvents([early, dueJoin]); store.joinedMeeting(early)
+        store.smokeCommitEvents([early, dueJoin]); store.joinedMeeting(early)
         clock = dueJoin.start.addingTimeInterval(-TimeInterval(store.settings.leadSeconds))
         store.joinedMeeting(dueJoin)
         let joinRestart = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("join-restart")))
         joinRestart.now = { clock }
         await joinRestart.restoreCachedEvents()
-        joinRestart.commitEvents([early, dueJoin])
+        joinRestart.smokeCommitEvents([early, dueJoin])
         var joinAlerts: [String] = []
         joinRestart.onAlert = { joinAlerts += $0.map(\.id) }
-        joinRestart.tick(); await settle()
+        joinRestart.smokeTick(); await settle()
         require(joinAlerts == [early.id], "early join preserves reminder; lead-window join remains handled after restart")
 
         clock = base
@@ -601,41 +601,41 @@ struct NotificationSmoke {
         store.settings.snoozeSeconds = 60
         for deferred in [false, true] {
             let event = meeting("review-paused-snooze-\(deferred)", start: 0)
-            store.commitEvents([event]); store.tick(); await settle()
+            store.smokeCommitEvents([event]); store.smokeTick(); await settle()
             let receipt = delivery.receipts.values.first { $0.keys.contains(NotificationLogic.key(event.id)) }!
-            let request = deferred ? store.beginFullRefresh(subscriptionIDs: [source.id]) : nil
+            let request = deferred ? store.smokeBeginFullRefresh(subscriptionIDs: [source.id]) : nil
             if deferred { delivery.receive(id: receipt.id, action: "snooze") }
             store.pauseIndefinitely()
             if !deferred { delivery.receive(id: receipt.id, action: "snooze") }
-            if let request { store.finishRefresh(fetched: [source], requestID: request) }
+            if let request { store.smokeFinishRefresh(fetched: [source], requestID: request) }
             let countBefore = system.submissions.count
             clock = base.addingTimeInterval(61)
-            store.tick(); await settle()
+            store.smokeTick(); await settle()
             require(system.submissions.count == countBefore, "paused explicit snooze remains quiet")
-            store.resume(); store.tick(); await settle()
+            store.resume(); store.smokeTick(); await settle()
             require(system.submissions.count == countBefore + 1, "direct/deferred Snooze re-arms through pause")
             clock = base
         }
         let unsafeSnooze = meeting("review-unsafe-snooze", start: 0, end: 2)
-        store.commitEvents([unsafeSnooze]); store.tick(); await settle()
+        store.smokeCommitEvents([unsafeSnooze]); store.smokeTick(); await settle()
         let unsafeReceipt = delivery.receipts.values.first { $0.keys.contains(NotificationLogic.key(unsafeSnooze.id)) }!
         store.pauseIndefinitely(); details = []
         delivery.receive(id: unsafeReceipt.id, action: "snooze")
         require(details.map(\.id) == [unsafeSnooze.id], "paused Snooze with no safe duration opens current details")
         store.resume()
         let endedSnooze = meeting("review-ended-snooze", start: 0, end: 90)
-        store.commitEvents([endedSnooze]); store.tick(); await settle()
+        store.smokeCommitEvents([endedSnooze]); store.smokeTick(); await settle()
         let endedReceipt = delivery.receipts.values.first { $0.keys.contains(NotificationLogic.key(endedSnooze.id)) }!
         store.pauseIndefinitely(); delivery.receive(id: endedReceipt.id, action: "snooze")
         clock = base.addingTimeInterval(91)
         let beforeEnded = system.submissions.count
-        store.resume(); store.tick(); await settle()
+        store.resume(); store.smokeTick(); await settle()
         require(system.submissions.count == beforeEnded, "snooze never re-fires after meeting end")
         clock = base
         let pair = [meeting("review-pair-a", start: 0), meeting("review-pair-b", start: 0)]
-        store.commitEvents(pair)
+        store.smokeCommitEvents(pair)
         let pairBefore = system.submissions.count
-        store.tick(); await settle()
+        store.smokeTick(); await settle()
         require(system.submissions.count == pairBefore + 1 && system.submissions.last?.keys.count == 2 && system.submissions.last?.category == SystemNotificationTransport.chooseMeetingCategory,
                 "ordinary simultaneous reminders share a chooser banner")
 
@@ -652,11 +652,11 @@ struct NotificationSmoke {
         let savedProbeSettings = UserDefaults.standard.data(forKey: AppStore.storageKey)!
         require((try? JSONDecoder().decode(Persisted.self, from: savedProbeSettings))?.settings.inMeetingDelivery == .notification,
                 "failed startup retains choice on disk")
-        clock = base.addingTimeInterval(4); probeStore.retryMeetingDetection(); await settle()
+        clock = base.addingTimeInterval(4); probeStore.smokeRetryMeetingDetection(); await settle()
         require(probe.calls == 1, "capability retry respects initial backoff")
-        clock = base.addingTimeInterval(5); probeStore.retryMeetingDetection(); await settle()
+        clock = base.addingTimeInterval(5); probeStore.smokeRetryMeetingDetection(); await settle()
         require(probe.calls == 2, "capability retries automatically at deadline")
-        clock = base.addingTimeInterval(14); probeStore.retryMeetingDetection(); await settle()
+        clock = base.addingTimeInterval(14); probeStore.smokeRetryMeetingDetection(); await settle()
         require(probe.calls == 2, "second failure doubles backoff")
         probe.result = .success([])
         probeStore.refreshMeetingActivityAfterWake(); await settle()
@@ -667,18 +667,18 @@ struct NotificationSmoke {
         probeStore.setInMeetingDelivery(.suppress); await settle()
         require(probeStore.settings.inMeetingDelivery == .normal, "failed fresh opt-in leaves delivery unchanged")
         let freshCalls = probe.calls
-        clock = base.addingTimeInterval(1000); probeStore.retryMeetingDetection(force: true); await settle()
+        clock = base.addingTimeInterval(1000); probeStore.smokeRetryMeetingDetection(force: true); await settle()
         require(probe.calls == freshCalls, "failed fresh opt-in does not silently retry enablement")
         probeStore.settings.inMeetingDelivery = .suppress
         probeStore.setInMeetingDelivery(.suppress); await settle()
-        for _ in 0..<8 { probeStore.retryMeetingDetection(force: true); await settle() }
+        for _ in 0..<8 { probeStore.smokeRetryMeetingDetection(force: true); await settle() }
         let cappedCalls = probe.calls
-        clock = clock.addingTimeInterval(299); probeStore.retryMeetingDetection(); await settle()
+        clock = clock.addingTimeInterval(299); probeStore.smokeRetryMeetingDetection(); await settle()
         require(probe.calls == cappedCalls, "repeated failures wait for capped backoff")
-        clock = clock.addingTimeInterval(1); probeStore.retryMeetingDetection(); await settle()
+        clock = clock.addingTimeInterval(1); probeStore.smokeRetryMeetingDetection(); await settle()
         require(probe.calls == cappedCalls + 1, "retry backoff caps at five minutes")
         probe.result = .success([])
-        probeStore.appBecameActive(); await settle()
+        probeStore.smokeAppBecameActive(); await settle()
         require(probe.calls == cappedCalls + 2 && probeStore.meetingDetectionError == nil,
                 "activation recovers saved suppression before retry deadline")
         probeStore.setInMeetingDelivery(.normal)
@@ -694,7 +694,7 @@ struct NotificationSmoke {
         probe.result = .failure(.processListUnavailable)
         probeStore.setInMeetingDelivery(.suppress); await settle()
         let unsupportedCalls = probe.calls
-        probeStore.retryMeetingDetection(force: true); await settle()
+        probeStore.smokeRetryMeetingDetection(force: true); await settle()
         require(probe.calls == unsupportedCalls && probeStore.settings.inMeetingDelivery == .suppress && probeStore.meetingDetectionAvailable == false,
                 "unsupported capability preserves preference without endless retries")
         probeStore.setInMeetingDelivery(.normal)

@@ -8,21 +8,22 @@ engineering rulebook.
 
 ## Build and orient yourself
 
-The app uses plain Swift files, compiled together by [build-app.sh](../build-app.sh), rather than an
-Xcode project or Swift package. The build targets Apple Silicon and macOS 13 in Swift 5 language
-mode. See [development prerequisites](../docs/development.md) for SDK requirements.
+The app uses one SwiftPM executable target in [Package.swift](../Package.swift).
+[build-app.sh](../build-app.sh) assembles and signs the bundle. The build targets Apple Silicon and
+macOS 13 in Swift 5 language mode. See [development prerequisites](../docs/development.md) for SDK
+requirements.
 
 Run from the repository root:
 
 ```bash
 ./build-app.sh --require-identity
-./outputs/now.app/Contents/MacOS/now --selftest
+./scripts/test.sh
 ```
 
 On this development machine, the signed build must run outside the agent sandbox so it can access
 the login keychain; follow [the build instructions in AGENTS.md](../AGENTS.md). The outputs are
-`outputs/now.app` and `outputs/now.zip`. Selftest selects the CLI path before GUI startup and
-exercises more than parsing, including reminder, cache, settings, and updater decisions. See
+`outputs/now.app` and `outputs/now.zip`. The separate selftest executable exercises more than
+parsing, including reminder, cache, settings, and updater decisions. See
 [development and updates](development-and-updates.md) for focused checks and release constraints.
 
 ## Choose a path

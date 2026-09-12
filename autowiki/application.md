@@ -4,11 +4,11 @@
 
 ## Startup and ownership
 
-[NowApp.main](../Sources/App.swift) dispatches diagnostic and selftest arguments before starting
-`NSApplication`. Normal startup installs `AppDelegate`, starts as an accessory app, and enters the
-AppKit run loop. The delegate owns the store, alert controller, menu controller, and
-settings/setup/update windows. `applicationDidFinishLaunching` wires notification responses and
-delivery callbacks before calling `AppStore.start()` and `UpdateController.start()`.
+[NowApp.main](../Sources/App.swift) dispatches diagnostic arguments before starting `NSApplication`.
+Normal startup installs `AppDelegate`, starts as an accessory app, and enters the AppKit run loop.
+The delegate owns the store, alert controller, menu controller, and settings/setup/update windows.
+`applicationDidFinishLaunching` wires notification responses and delivery callbacks before calling
+`AppStore.start()` and `UpdateController.start()`.
 
 [AppStore](../Sources/AppStore.swift) is the main-actor state owner. It loads the saved profile and
 reminder history, starts a shared asynchronous ICS cache load, and re-encodes preferences to
@@ -89,3 +89,9 @@ existing store/controller methods so settings edits participate in reconciliatio
 
 Before changing this area, read the relevant
 [engineering constraints and regression notes](engineering-notes.md).
+
+The signed updater fixture keeps the pinned bundle identity needed by signature validation, so it
+cannot isolate preferences by renaming the bundle. `AppPreferences.standard` uses ordinary standard
+preferences in shipping builds and a required disposable suite in updater-test compilation. The
+fixture also injects a temporary cache and empty profile into AppDelegate. Other hosted fixtures use
+their disposable bundle domains. See [test isolation](../docs/development.md#test-target-boundary).

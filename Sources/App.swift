@@ -21,8 +21,20 @@ struct TerminationRequestGate {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let store = AppStore()
+    let store: AppStore
+
+    init(store: AppStore? = nil) {
+        self.store = store ?? AppStore()
+        super.init()
+    }
     let alertController = AlertController()
+    #if NOW_REMINDER_TESTS
+    private let runQuitDialog: (NSAlert) -> NSApplication.ModalResponse = QuitSmoke.respond
+    private let terminateApplication: () -> Void = QuitSmoke.terminate
+    #else
+    private let runQuitDialog: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
+    private let terminateApplication: () -> Void = { NSApp.terminate(nil) }
+    #endif
     /// Created lazily (initializes off `store`; property initializers run
     /// before self). First touched in applicationDidFinishLaunching.
     lazy var updateController = UpdateController(store: store)
@@ -71,10 +83,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarController?.openAgenda()
     }
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        setupMainMenu()
-        _ = setupAssistant
+    private func configureNotifications() {
+        #if NOW_NOTIFICATION_TESTS
+        let transport = FakeNotifications()
+        #else
         let transport = SystemNotificationTransport()
+        #endif
         let notifications = ReminderNotificationController(transport: transport)
         transport.response = { [weak self, weak notifications] id, action in
             self?.notificationInteraction()
@@ -85,6 +99,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.openNotificationMeetings = { [weak self] events in self?.menuBarController?.showMeetingDetails(events) }
         store.openNotificationAgenda = { [weak self] in self?.openNotificationAgenda() }
         store.openNotificationSyncSettings = { [weak self] in self?.openSettings() }
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        setupMainMenu()
+        _ = setupAssistant
+        configureNotifications()
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.type == .keyDown,
                event.modifierFlags.contains(.command),
@@ -185,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.prepareForTermination { [weak self] in
             // terminateLater runs a modal loop; ordinary main-queue Tasks may
             // stall there. Deliver the reply in the common run-loop modes.
-            RunLoop.main.perform(inModes: [.common]) {
+            RunLoop.main.perform(inModes: [.common]) { [weak self] in
                 MainActor.assumeIsolated {
                     guard self?.terminationGate.finish(request) == true else { return }
                     sender.reply(toApplicationShouldTerminate: true)
@@ -268,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if let window = updateWindow, window.isVisible {
             handleQuitFromWindow(window, closeTitle: "Close Window")
         } else {
-            NSApp.terminate(nil)
+            terminateApplication()
         }
     }
 
@@ -288,11 +308,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The reminder's own key monitor (esc/return/s) must not eat keystrokes
         // while this dialog is up.
         alertController.modalAlertActive = true
-        let result = alert.runModal()
+        let result = runQuitDialog(alert)
         alertController.modalAlertActive = false
         switch result {
         case .alertFirstButtonReturn:
-            NSApp.terminate(nil)
+            terminateApplication()
         case .alertSecondButtonReturn:
             alertController.close()
         default:
@@ -310,9 +330,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Cancel")
         alert.window.level = .floating
         AppActivation.activate()
-        switch alert.runModal() {
+        switch runQuitDialog(alert) {
         case .alertFirstButtonReturn:
-            NSApp.terminate(nil)
+            terminateApplication()
         case .alertSecondButtonReturn:
             window.close()
         default:
@@ -464,7 +484,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func terminateForUpdate() {
         updateWindow?.orderOut(nil)
         if alertController.isOpen { alertController.close() }
-        NSApp.terminate(nil)
+        terminateApplication()
     }
 }
 
@@ -490,15 +510,21 @@ extension AppDelegate: NSWindowDelegate {
     }
 }
 
+#if !NOW_TESTING
 @main
+#endif
 enum NowApp {
+    #if NOW_UPDATER_TESTS
+    @MainActor static let appDelegate = UpdaterTestRunner.makeDelegate()
+    #else
     @MainActor static let appDelegate = AppDelegate()
+    #endif
 
     static func main() {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("--selftest") {
-            SelfTest.run()
-            exit(0)
+            print("Run ./scripts/test.sh for the full selftest suite.")
+            exit(64)
         }
         if let index = arguments.firstIndex(of: "--parse"), index + 1 < arguments.count {
             parseCLI(arguments[index + 1])
@@ -518,6 +544,7 @@ enum NowApp {
             updateCheckCLI(base)
             exit(0)
         }
+        #if NOW_UPDATER_TESTS
         if let index = arguments.firstIndex(of: "--update-smoke") {
             let base = updateCLIValue(after: index, arguments: arguments)
             updateSmokeCLI(base)
@@ -547,6 +574,12 @@ enum NowApp {
             try? report.write(toFile: reportPath, atomically: true, encoding: .utf8)
             exit(0)
         }
+        #else
+        if arguments.contains("--update-smoke") {
+            print("Use scripts/update-smoke.sh with a separately built updater fixture.")
+            exit(64)
+        }
+        #endif
         // main() itself is nonisolated; everything below runs on the main thread.
         MainActor.assumeIsolated {
             let app = NSApplication.shared
@@ -701,20 +734,20 @@ enum NowApp {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         let semaphore = DispatchSemaphore(value: 0)
-        var data: Data?
-        var status: Int?
-        var fetchError: String?
         guard UpdateFetch.allows(url, apiBaseOverride: UpdateFetch.apiBaseOverride) else {
             print("DECISION error — update URL must use HTTPS")
             return
         }
         UpdateTransport.session.dataTask(with: request) { body, response, error in
-            data = body
-            status = (response as? HTTPURLResponse)?.statusCode
-            fetchError = error?.localizedDescription
+            reportUpdateResponse(data: body, status: (response as? HTTPURLResponse)?.statusCode,
+                                 fetchError: error?.localizedDescription)
             semaphore.signal()
         }.resume()
         semaphore.wait()
+    }
+
+    // The response remains owned by its completion; the waiting CLI shares no mutable results.
+    private static func reportUpdateResponse(data: Data?, status: Int?, fetchError: String?) {
         if let fetchError {
             print("HTTP error — \(fetchError)")
             return
@@ -748,6 +781,7 @@ enum NowApp {
         print("DECISION (auto)   \(describe(automatic))")
     }
 
+    #if NOW_UPDATER_TESTS
     /// Hidden smoke mode: runs the REAL updater flow (check → stage → verify →
     /// spawn swap helper → terminate) headless against an overridden API base.
     /// Exit codes: 0 spawned helper (or stuck-quit variant stayed alive),
@@ -888,6 +922,8 @@ enum NowApp {
         exit(0)
     }
 
+    #endif
+
     /// Services the main run loop while waiting — async URLSession/Task
     /// completions must be allowed to land (same pattern as --native).
     static func runLoopWait(_ semaphore: DispatchSemaphore) {
@@ -915,7 +951,9 @@ enum NowApp {
         let environment = ProcessInfo.processInfo.environment
         // Injected negative (smoke): this instance deliberately never
         // acknowledges — the helper must roll back, so this is a failure.
+        #if NOW_UPDATER_TESTS || NOW_SELFTEST_TESTS
         if environment["NOW_SMOKE_HELPER_FAULT"] == "health" { return false }
+        #endif
         let rawToken = environment["NOW_HEALTH_TOKEN"]
         let rawPath = environment["NOW_HEALTH_ACK"]
         // No helper contract at all: an ordinary launch — nothing to
@@ -986,3 +1024,27 @@ enum NowApp {
         }
     }
 }
+
+#if NOW_TESTING
+// Test-only access to production transitions; absent from shipping compilation.
+extension AppDelegate {
+    var smokeSettingsWindow: NSWindow? {
+        get { settingsWindow }
+        set { settingsWindow = newValue }
+    }
+    var smokeSetupWindow: NSWindow? {
+        get { setupWindow }
+        set { setupWindow = newValue }
+    }
+    var smokeUpdateWindow: NSWindow? {
+        get { updateWindow }
+        set { updateWindow = newValue }
+    }
+    var smokeSetupAssistant: SetupAssistantController {
+        get { setupAssistant }
+        set { setupAssistant = newValue }
+    }
+    func smokeFinishInitialSetup() { finishInitialSetup() }
+    func smokeHandleQuitFromWindow(_ window: NSWindow, closeTitle: String) { handleQuitFromWindow(window, closeTitle: closeTitle) }
+}
+#endif

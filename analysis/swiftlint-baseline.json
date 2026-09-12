@@ -16,21 +16,6 @@
   },
   {
     "violation": {
-      "ruleIdentifier": "function_body_length",
-      "ruleDescription": "Function bodies should not span too many lines",
-      "ruleName": "Function Body Length",
-      "severity": "warning",
-      "location": {
-        "line": 74,
-        "file": "Sources/App.swift",
-        "character": 5
-      },
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 85 lines"
-    },
-    "text": "    func applicationDidFinishLaunching(_ notification: Notification) {"
-  },
-  {
-    "violation": {
       "ruleIdentifier": "cyclomatic_complexity",
       "ruleDescription": "Complexity of function bodies should be limited.",
       "ruleName": "Cyclomatic Complexity",

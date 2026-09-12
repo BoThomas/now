@@ -1,8 +1,9 @@
 # AGENTS.md — now
 
-Native macOS menu bar app for meeting reminders. Plain Swift files in `Sources/`, compiled together
-without an Xcode project or Swift package. Keep Swift 5 language mode and macOS 13 / Apple Silicon
-compatibility. `make-icon.swift` is a separate tool and must remain outside `Sources/`.
+Native macOS menu bar app for meeting reminders. SwiftPM compiles the application target in
+`Sources/`; `build-app.sh` assembles and signs the bundle. Keep Swift 5 language mode and macOS 13 /
+Apple Silicon compatibility. `make-icon.swift` is a separate tool and must remain outside
+`Sources/`.
 
 ## AutoWiki and project context
 
@@ -36,7 +37,7 @@ Always run the signed build and selftest after changes:
 
 ```bash
 ./build-app.sh --require-identity
-./outputs/now.app/Contents/MacOS/now --selftest
+./scripts/test.sh
 ```
 
 After Swift or analysis-tooling changes, also run `./scripts/analyze.sh` (one-time tool setup:

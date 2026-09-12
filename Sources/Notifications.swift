@@ -315,7 +315,7 @@ final class ReminderNotificationController: ObservableObject {
     var onResponse: ((ReminderNotification, String) -> Void)?
     var onMeetingPreview: (() -> Void)?
 
-    init(transport: NotificationTransport, defaults: UserDefaults = .standard) {
+    init(transport: NotificationTransport, defaults: UserDefaults = AppPreferences.standard) {
         self.transport = transport
         self.defaults = defaults
         if let saved = StoredPreferences.load([String: ReminderNotification].self, key: storageKey, label: "Delivered reminder history", defaults: defaults, maxBytes: 8_000_000) {

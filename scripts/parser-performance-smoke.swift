@@ -1,9 +1,11 @@
 import Foundation
 import CryptoKit
 
-// Models use this fixed palette of sound names only for settings decoding.
-// No AppStore/EventKit instance is linked into this parser benchmark.
+// Only the standalone historical-parser comparison needs this settings stub.
+// The SwiftPM runner links production types but never constructs AppStore/EventKit.
+#if !NOW_TESTING
 enum AppStore { static let soundNames = ["Hero"] }
+#endif
 
 @main enum ParserPerformanceSmoke {
     static func main() {

@@ -65,7 +65,7 @@ final class OfflineProtocol: URLProtocol {
         if phase == "corrupt" {
             try require(store.events.count == 1 && store.events.first?.uid == "b" && store.cacheIssues[a.id] != nil, "corrupt source is isolated; other source restores")
             store.refresh()
-            try await wait("corrupt cache recovery refresh") { !store.isRefreshing }
+            try await wait("corrupt cache recovery refresh") { !store.smokeIsRefreshing }
             await cache.flush()
             try await wait("corrupt cache warning clears") { store.cacheIssues.isEmpty }
             try require(store.events.count == 2, "corrupt cache refilled from network")
@@ -77,13 +77,13 @@ final class OfflineProtocol: URLProtocol {
             try require(store.events.allSatisfy { $0.calendarName.hasPrefix("Live") }, "restore uses current subscription names")
             var deliveries: [String] = []
             store.onAlert = { deliveries += $0.map(\.uid) }
-            store.pauseIndefinitely(); store.tick()
+            store.pauseIndefinitely(); store.smokeTick()
             try require(deliveries.isEmpty, "pause suppresses restored offline reminders")
             store.resume()
-            store.tick(); store.tick()
+            store.smokeTick(); store.smokeTick()
             try require(deliveries == (phase == "offline" ? ["a"] : []), "offline reminder delivered once; successful empty snapshot remains empty")
             store.refresh()
-            try await wait("offline transport failure completes") { !store.isRefreshing }
+            try await wait("offline transport failure completes") { !store.smokeIsRefreshing }
             try require(store.offlineCalendarIDs.count == 2 && store.events.count == expected, "offline failure retains restored agenda")
             let menu = NSMenu()
             let alerts = AlertController()
@@ -98,18 +98,18 @@ final class OfflineProtocol: URLProtocol {
             if phase == "offline" {
                 OfflineProtocol.setOffline(false)
                 store.refresh()
-                try await wait("same-process connectivity recovery") { !store.isRefreshing }
+                try await wait("same-process connectivity recovery") { !store.smokeIsRefreshing }
                 try require(store.offlineCalendarIDs.isEmpty && store.errors.isEmpty && store.calendarSyncProblemTitle == nil,
                             "connectivity recovery clears the red Offline row without restarting")
                 try require(store.cacheInfo.values.allSatisfy { !$0.usingSavedData }, "recovery removes saved-data state")
-                store.tick()
+                store.smokeTick()
                 try require(deliveries == ["a"], "network recovery does not repeat the offline reminder")
                 await cache.flush()
             }
             return
         }
         store.refresh()
-        try await wait("\(phase): refresh completes") { !store.isRefreshing }
+        try await wait("\(phase): refresh completes") { !store.smokeIsRefreshing }
         await cache.flush()
         let loaded = await cache.load(subscriptions: [a, b])
         if phase == "mixed" {
@@ -124,7 +124,7 @@ final class OfflineProtocol: URLProtocol {
         }
         // Feed an old request after a newer accepted request. Disk must follow the same gate.
         let old = FetchResult(subscription: a, events: [], error: nil, requestID: -1)
-        store.merge(results: [old]); await cache.flush()
+        store.smokeMerge(results: [old]); await cache.flush()
         let afterOld = await cache.load(subscriptions: [a])
         try require(afterOld.snapshots[a.id]?.meetings.count == loaded.snapshots[a.id]?.meetings.count, "stale fetch cannot overwrite newer disk snapshot")
     }
@@ -135,7 +135,7 @@ final class OfflineProtocol: URLProtocol {
         let state = Persisted(subscriptions: [a, b], settings: settings, pausedUntil: .distantFuture)
         UserDefaults.standard.setVolatileDomain([AppStore.storageKey: try JSONEncoder().encode(state)], forName: UserDefaults.argumentDomain)
         let app = NSApplication.shared
-        let delegate = AppDelegate()
+        let delegate = AppDelegate(store: AppStore(eventCache: CalendarEventCache(directory: URL(fileURLWithPath: CommandLine.arguments[3]))))
         app.delegate = delegate
         app.setActivationPolicy(.accessory)
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
@@ -148,8 +148,8 @@ final class OfflineProtocol: URLProtocol {
                 let updated = MeetingEvent(uid: event.uid, title: "Quit snapshot", start: event.start,
                     end: event.end, location: event.location, notes: event.notes, link: event.link,
                     calendarID: a.id, calendarName: a.name, colorIndex: a.colorIndex)
-                delegate.store.merge(results: [FetchResult(subscription: a, events: [updated], error: nil,
-                    requestID: delegate.store.fetchTracker.latestPerSubscription[a.id] ?? 0, fetchedAt: Date())])
+                delegate.store.smokeMerge(results: [FetchResult(subscription: a, events: [updated], error: nil,
+                    requestID: delegate.store.smokeFetchTracker.latestPerSubscription[a.id] ?? 0, fetchedAt: Date())])
                 UserDefaults.standard.removePersistentDomain(forName: domain)
                 // Actual AppKit terminateLater/reply path must drain the queued write.
                 app.terminate(nil)

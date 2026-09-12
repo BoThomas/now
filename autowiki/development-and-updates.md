@@ -5,21 +5,23 @@
 ## Build and choose checks
 
 Follow [docs/development.md](../docs/development.md) for prerequisites and [AGENTS.md](../AGENTS.md)
-for the required signed build and selftest after changes. [build-app.sh](../build-app.sh) compiles
-`Sources/*.swift`, separately runs the root icon generator, assembles the bundle, signs and verifies
-it, then creates the ZIP. Keep `make-icon.swift` outside `Sources/` because it is a separate
-executable.
+for the required signed build and selftest after changes. [build-app.sh](../build-app.sh) builds the
+SwiftPM `NowApp` executable target, separately runs the root icon generator, assembles the bundle,
+signs and verifies it, then creates the ZIP. Keep `make-icon.swift` outside `Sources/` because it is
+a separate executable.
 
 After Swift or analysis-tooling changes, run `./scripts/analyze.sh` after the build. It compares
 strict-concurrency warnings and focused SwiftLint findings against committed baselines; preflight
-also runs it. `./scripts/setup-analysis.sh` installs the pinned linter once, and `--report` on the
-analysis command exposes the existing backlog. See the
+also runs it in shipping, selftest and updater-runner configurations.
+[Reviewed findings](../analysis/review.md) records the resolved concurrency warnings and retained
+lint rationales. `./scripts/setup-analysis.sh` installs the pinned linter once, and `--report` on
+the analysis command exposes the existing backlog. See the
 [analysis workflow](../docs/development.md#code-analysis) for baseline review and limitations.
 
-[SelfTest.run](../Sources/SelfTest.swift) aggregates pure parser, recurrence, reminder,
-notification, settings, fetch/cache, bookkeeping, filter, and updater checks. It dispatches before
-normal app startup; keep new tests free of constructed EventKit stores or fullscreen panels. Extend
-the existing pure policy helpers when testing decisions.
+[SelfTest.run](../Tests/NowTests/SelfTest.swift) aggregates pure parser, recurrence, reminder,
+notification, settings, fetch/cache, bookkeeping, filter, and updater checks. Its own entry point
+never starts the normal app; keep new tests free of constructed EventKit stores or fullscreen
+panels. Extend the existing pure policy helpers when testing decisions.
 
 | Changed behavior                                                  | Focused checks beyond build/selftest                                                                                                                                                              |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -30,11 +32,12 @@ the existing pure policy helpers when testing decisions.
 | Recurrence workload or occurrence materialization                 | `python3 scripts/feed-workload-smoke.py` and `python3 scripts/parser-performance-smoke.py` ([workload](../scripts/feed-workload-smoke.py), [performance](../scripts/parser-performance-smoke.py)) |
 | Signed update staging/install/rollback                            | `./scripts/update-smoke.sh --app outputs/now.app` ([harness](../scripts/update-smoke.sh))                                                                                                         |
 
-[scripts/preflight.sh](../scripts/preflight.sh) runs the signed build, selftest, and all of these
-suites; `--app` uses an existing bundle instead of rebuilding. The updater smoke temporarily quits
-and later reopens a running now. The full notification harness includes synthetic GUI fixtures. Use
-the disposable harness data rather than installed calendars/preferences. These commands describe
-repository workflows; a documentation review alone does not establish that they pass.
+[scripts/preflight.sh](../scripts/preflight.sh) runs the signed release build, debug and optimized
+selftests, and all of these suites; `--app` uses an existing bundle instead of rebuilding. The
+updater smoke temporarily quits and later reopens a running now. The full notification harness
+includes synthetic GUI fixtures. Use the disposable harness data rather than installed
+calendars/preferences. These commands describe repository workflows; a documentation review alone
+does not establish that they pass.
 
 ## Update discovery and preparation
 
@@ -97,3 +100,13 @@ not itself require publishing a release.
 
 Before changing this area, read the relevant
 [engineering constraints and regression notes](engineering-notes.md).
+
+## Compilation and test isolation
+
+[Package.swift](../Package.swift) selects the shipping `NowApp` executable by default. Test commands
+select an allow-listed `NowHarness` executable with a dedicated scratch directory, supporting
+Command Line Tools without XCTest. Unit fixtures live in `Tests/NowTests`; hosted runners use
+conditional accessors in the same files as private production state. No source copies are rewritten.
+See the [test boundary](../docs/development.md#test-target-boundary) for dependency substitutions
+and the separate signed updater fixture. Production CLI parsing, native-calendar inspection, meeting
+detection and update-check diagnostics remain supported.

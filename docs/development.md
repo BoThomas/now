@@ -9,7 +9,11 @@ reported by `xcrun`; override with `SDK_PATH` if needed).
 ./build-app.sh
 ```
 
-Builds `outputs/now.app` and `outputs/now.zip`. macOS 13+, arm64.
+Builds optimized `outputs/now.app` and `outputs/now.zip` using SwiftPM, in Swift 5 mode for macOS
+13+, arm64. `--debug` builds an unoptimized development bundle and ZIP under `outputs/debug/`.
+`--release` is the default. Incremental compilation artifacts are retained; `--clean` explicitly
+clears SwiftPM build artifacts. Use `--require-identity` to require the stable signing identity.
+Bundling, resources, entitlements, and signature verification remain in the wrapper.
 
 ## Development tools
 
@@ -45,22 +49,22 @@ handled by the script. Python 3 and the active Swift compiler are also required;
 
 The default command fails on compiler errors, new compiler warnings, new SwiftLint findings, or tool
 failures. `--report` makes findings informational but still fails on compiler/tool errors. Reports
-and compiler-version information go under `.build/analysis/`, which the next app build clears. Run
-analysis after building. Release preflight runs the default check, including with `--app`.
+and compiler-version information go under `.build/analysis/`, which app builds retain. Run analysis
+after building. Release preflight runs the default check, including with `--app`.
 
-The compiler checks all `Sources/*.swift`, including selftests, with `-strict-concurrency=complete`
-in Swift 5 mode for arm64/macOS 13. The initial baseline contains 13 warnings from Apple Swift
-6.3.3: shared preference defaults/formatter, concurrent closure captures, and actor-isolated
-settings helpers called by selftests. These are review items, not proof of 13 runtime races.
-Matching uses file, diagnostic message, source-line text and occurrence count, so line-number shifts
-alone do not cause failures. Compiler/SDK upgrades or edits to a flagged line can require deliberate
-review. The current snapshot is written to `.build/analysis/concurrency-current.json`; it never
-overwrites the committed baseline.
+The compiler checks shipping sources, the selftest configuration and the signed-updater runner
+configuration with `-strict-concurrency=complete` in Swift 5 mode for arm64/macOS 13. All 13
+original warnings have been resolved; the concurrency baseline is empty. See the
+[finding review](../analysis/review.md) for ownership changes and retained lint rationales. Matching
+uses file, diagnostic message, source-line text and occurrence count, so line-number shifts alone do
+not cause failures. Compiler/SDK upgrades or edits to a flagged line can require deliberate review.
+The current snapshot is written to `.build/analysis/concurrency-current.json`; it never overwrites
+the committed baseline.
 
 SwiftLint checks complexity, function length, parameter count, nesting, force casts/tries, duplicate
-conditions and identical operands. The four dedicated selftest files are excluded from lint only;
+conditions and identical operands. The separate `Tests` directory is outside production lint scope;
 embedded test helpers in other files remain included. File/type length and formatting rules are
-deliberately absent. The initial 17 findings are mostly parser branching and long functions, with
+deliberately absent. The 16 retained findings are mostly parser branching and long functions, with
 two seven-parameter helpers. For example, strict RRULE parsing has complexity 37: its rejection
 branches protect correctness, so reducing that number alone is not a reason to rewrite it.
 
@@ -79,7 +83,7 @@ compiler/missing-tool failures.
 ### App diagnostics and checks
 
 ```bash
-./outputs/now.app/Contents/MacOS/now --selftest        # parser unit tests
+./scripts/test.sh        # parser unit tests
 ./outputs/now.app/Contents/MacOS/now --parse <url-or-file> # inspect any iCal feed
 ./outputs/now.app/Contents/MacOS/now --native [list]       # inspect Apple Calendar access
 ./outputs/now.app/Contents/MacOS/now --meeting            # inspect active meeting audio metadata
@@ -89,3 +93,37 @@ python3 scripts/calendar-cache-smoke.py             # isolated offline restart/c
 ```
 
 See [AGENTS.md](../AGENTS.md) for development notes and the release workflow.
+
+### Test target boundary
+
+`./scripts/test.sh` builds the deterministic suite in a separate SwiftPM executable;
+`NOW_TEST_CONFIGURATION=release ./scripts/test.sh` exercises optimized compilation. Command Line
+Tools lack XCTest, so the manifest selects a named `NowHarness` executable from an allow-list via
+`NOW_TEST_SUITE`. Each suite uses `.build/tests/<suite>`, with debug/release artifacts separated by
+SwiftPM. The shipping default selects only `NowApp`. No application API is public.
+
+Hosted harnesses share `scripts/harness.py` and compile production source with conditional
+`NOW_TESTING` accessors. Native fetching asserts empty native selections and returns; notification
+fixtures use a fake transport and skip archive staging. Cache fixtures install an offline
+URLProtocol. Quit fixtures replace dialog responses and termination actions. These differences are
+compile-time only. Synthetic feeds, caches and preference domains remain disposable.
+
+The app retains `--parse`, `--native`, `--meeting`, and read-only `--update-check` diagnostics.
+`--selftest` and `--update-smoke` exit with a migration message. Updater smoke validates the
+supplied release signature, then builds a separately signed optimized updater runner under
+`outputs/testing/release/now.app`. Headless reporting and fault injection are test-only; staging,
+signature/version/OS checks, swap and rollback use the production implementation. Test builds cannot
+replace release output. The helper script retains its explicit fault contract so tests exercise the
+same script; production install calls pass no fault environment and strip inherited smoke variables.
+Updater fault tests therefore exercise a test binary, not the byte-identical shipping binary.
+
+`python3 scripts/artifact-smoke.py outputs/now.app` verifies shipping metadata, the exact signing
+requirement and entitlements, arm64/macOS 13 load commands, fixture exclusion, and production parser
+and update-check diagnostics. It launches production code for five seconds in a signed disposable
+bundle with an empty profile. This checks startup liveness; it does not replace manual testing of
+Calendar permission prompts, real Notification Center delivery or older macOS versions.
+
+The pinned-ID updater fixture uses an explicit disposable preference suite and injected cache;
+changing HOME alone does not isolate macOS preferences. Interactive menu/focus checks require an
+unlocked, undisturbed desktop. The historical parser comparison still uses a standalone swiftc
+compile; its working variant is the optimized SwiftPM target.

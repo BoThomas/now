@@ -75,7 +75,7 @@ The borderless panel has an explicit key monitor, including a one-second guard a
 flight when it takes focus. Keep its keyboard and activation behavior together with
 [AppDelegate](../Sources/App.swift); ordinary SwiftUI shortcuts alone do not cover disappearing
 snooze controls or background focus. Pure timing, snooze, key-action, and preview-transition cases
-live in [SelfTest.swift](../Sources/SelfTest.swift).
+live in [SelfTest.swift](../Tests/NowTests/SelfTest.swift).
 
 [MenuBarController](../Sources/MenuBar.swift) renders the agenda and countdown from store state.
 `AppStore.menuBarFocus` picks the nearest eligible start, gives a future start the exact midpoint

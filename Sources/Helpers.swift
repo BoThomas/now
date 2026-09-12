@@ -171,11 +171,11 @@ enum Fmt {
         formatter.dateStyle = .none
         return formatter
     }()
-    static let relativeFormatter: RelativeDateTimeFormatter = {
+    private static var relativeFormatter: RelativeDateTimeFormatter {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter
-    }()
+    }
 
     // Strict bounds also exclude Int.min, whose absolute value overflows.
     private static func wholeSeconds(_ interval: TimeInterval) -> Int? {

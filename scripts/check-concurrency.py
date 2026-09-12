@@ -10,7 +10,7 @@ import sys
 def diagnostics(log):
     findings = []
     for line in log.splitlines():
-        match = re.match(r"^(Sources/[^:]+):(\d+):\d+: warning: (.*)$", line)
+        match = re.match(r"^((?:Sources|Tests)/[^:]+):(\d+):\d+: warning: (.*)$", line)
         if match:
             filename, number, message = match.groups()
             source = Path(filename).read_text().splitlines()[int(number) - 1].strip()
@@ -26,8 +26,11 @@ def counts(findings):
 
 def main():
     report = Path(".build/analysis")
-    current = diagnostics((report / "concurrency.log").read_text())
-    (report / "concurrency-current.json").write_text(json.dumps(current, indent=2) + "\n")
+    name = "concurrency-production" if "--production" in sys.argv else "concurrency"
+    if "--updater" in sys.argv:
+        name = "concurrency-updater"
+    current = diagnostics((report / (name + ".log")).read_text())
+    (report / (name + "-current.json")).write_text(json.dumps(current, indent=2) + "\n")
     baseline = json.loads(Path("analysis/concurrency-baseline.json").read_text())
     added = counts(current) - counts(baseline)
     removed = counts(baseline) - counts(current)

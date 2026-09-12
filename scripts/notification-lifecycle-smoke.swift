@@ -34,8 +34,8 @@ private final class LifecycleFixture {
     }
     func prepare() async {
         await store.restoreCachedEvents()
-        let request = store.beginFullRefresh(subscriptionIDs: [source.id, second.id])
-        store.finishRefresh(fetched: [source, second], requestID: request)
+        let request = store.smokeBeginFullRefresh(subscriptionIDs: [source.id, second.id])
+        store.smokeFinishRefresh(fetched: [source, second], requestID: request)
     }
     func event(_ uid: String, title: String = "Original", start: TimeInterval = 120, end: TimeInterval = 1800,
                location: String? = nil, link: URL? = nil, muted: Bool = false) -> MeetingEvent {
@@ -44,9 +44,9 @@ private final class LifecycleFixture {
                      colorIndex: 0, isMuted: muted, notificationIdentity: "single:" + uid)
     }
     func commit(_ events: [MeetingEvent], observed: Bool = true) {
-        store.commitEvents(events, observedCalendarIDs: observed ? [source.id] : [])
+        store.smokeCommitEvents(events, observedCalendarIDs: observed ? [source.id] : [])
     }
-    func tick() async { store.tick(); await NotificationSmoke.settle() }
+    func tick() async { store.smokeTick(); await NotificationSmoke.settle() }
     func cleanup() { defaults.removePersistentDomain(forName: domain) }
 }
 
@@ -108,11 +108,11 @@ extension NotificationSmoke {
             restarted.onAlert = { shown += $0.map(\.id) }
             await restarted.restoreCachedEvents()
             let moved = f.event("rescheduled-after-restart", start: 600, end: 2400)
-            restarted.commitEvents([moved], observedCalendarIDs: [f.source.id])
-            restarted.tick()
+            restarted.smokeCommitEvents([moved], observedCalendarIDs: [f.source.id])
+            restarted.smokeTick()
             require(shown.isEmpty, "rescheduled reminder after restart waits for its new lead window")
             f.clock = moved.start.addingTimeInterval(-TimeInterval(restarted.settings.leadSeconds))
-            restarted.tick()
+            restarted.smokeTick()
             require(shown == [moved.id], "saved scheduled start re-arms fullscreen after restart")
         }
         do {
@@ -124,8 +124,8 @@ extension NotificationSmoke {
             f.store.onAlert = { shown += $0.count }
             f.commit([f.event("rescheduled-with-notification", start: -120)])
             f.store.beginNotificationCatchUp()
-            let request = f.store.beginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
-            f.store.finishRefresh(fetched: [f.source, f.second], requestID: request); await settle()
+            let request = f.store.smokeBeginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
+            f.store.smokeFinishRefresh(fetched: [f.source, f.second], requestID: request); await settle()
             require(f.transport.submissions.count == 1, "fullscreen mode can own an accepted catch-up notification")
             let moved = f.event("rescheduled-with-notification", start: 600, end: 2400)
             f.commit([moved]); await f.tick()
@@ -141,10 +141,10 @@ extension NotificationSmoke {
             let event = f.event("warm-action", link: url)
             f.commit([event]); await f.tick()
             let id = f.controller.receipts.keys.first!
-            let batch = f.store.beginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
+            let batch = f.store.smokeBeginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
             f.controller.receive(id: id, action: action)
-            require(f.store.isRefreshing && (action == "join" ? f.openedLinks == [url] : f.details.map(\.id) == [event.id]), "warm Join/body click executes before unrelated refresh completes")
-            f.store.finishRefresh(fetched: [f.source, f.second], requestID: batch)
+            require(f.store.smokeIsRefreshing && (action == "join" ? f.openedLinks == [url] : f.details.map(\.id) == [event.id]), "warm Join/body click executes before unrelated refresh completes")
+            f.store.smokeFinishRefresh(fetched: [f.source, f.second], requestID: batch)
         }
         do {
             let f = LifecycleFixture(root: root); defer { f.cleanup() }
@@ -169,8 +169,8 @@ extension NotificationSmoke {
             f.store.settings.catchUpDelivery = .notification
             let short = f.event("short", start: -120, end: 10), long = f.event("long", start: -120)
             f.commit([short, long]); f.store.beginNotificationCatchUp()
-            let request = f.store.beginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
-            f.store.finishRefresh(fetched: [f.source, f.second], requestID: request)
+            let request = f.store.smokeBeginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
+            f.store.smokeFinishRefresh(fetched: [f.source, f.second], requestID: request)
             await settle()
             let id = f.controller.receipts.keys.first!
             f.clock = f.base.addingTimeInterval(11); await f.tick()
@@ -185,8 +185,8 @@ extension NotificationSmoke {
             f.store.settings.catchUpDelivery = .notification
             let a = f.event("join-a", start: -120), b = f.event("join-b", start: -120)
             f.commit([a, b]); f.store.beginNotificationCatchUp()
-            let request = f.store.beginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
-            f.store.finishRefresh(fetched: [f.source, f.second], requestID: request); await settle()
+            let request = f.store.smokeBeginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
+            f.store.smokeFinishRefresh(fetched: [f.source, f.second], requestID: request); await settle()
             let id = f.controller.receipts.keys.first!
             f.store.joinedMeeting(a); await f.tick()
             require(f.controller.receipts[id]?.keys == [NotificationLogic.eventKey(b)] && f.transport.submissions.count == 1,
@@ -197,17 +197,17 @@ extension NotificationSmoke {
         do {
             let f = LifecycleFixture(root: root); defer { f.cleanup() }
             await f.prepare(); f.store.settings.notifySyncErrors = true
-            let request = f.store.beginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
-            f.store.merge(results: [f.source, f.second].map { FetchResult(subscription: $0, events: [], error: "offline", requestID: request) })
-            f.store.finishRefresh(fetched: [f.source, f.second], requestID: request)
+            let request = f.store.smokeBeginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
+            f.store.smokeMerge(results: [f.source, f.second].map { FetchResult(subscription: $0, events: [], error: "offline", requestID: request) })
+            f.store.smokeFinishRefresh(fetched: [f.source, f.second], requestID: request)
             f.clock = f.base.addingTimeInterval(300); await f.tick()
             let id = f.controller.receipts.keys.first!
-            f.store.merge(results: [FetchResult(subscription: f.source, events: [], error: nil, requestID: request)])
+            f.store.smokeMerge(results: [FetchResult(subscription: f.source, events: [], error: nil, requestID: request)])
             await f.tick()
             require(f.controller.receipts[id] != nil && f.transport.submissions.count == 1, "sync group survives partial recovery without re-notifying")
             f.clock = f.base.addingTimeInterval(2 * 86400); await f.tick()
             require(f.controller.receipts[id] != nil && f.transport.submissions.count == 1, "ongoing sync episode survives original submission expiry without re-notifying")
-            f.store.merge(results: [FetchResult(subscription: f.second, events: [], error: nil, requestID: request)])
+            f.store.smokeMerge(results: [FetchResult(subscription: f.second, events: [], error: nil, requestID: request)])
             await f.tick(); require(f.controller.receipts.isEmpty, "fully recovered sync group removed")
         }
         do {
@@ -216,11 +216,11 @@ extension NotificationSmoke {
             let original = f.event("edit")
             f.commit([original]); await f.tick()
             let oldID = f.controller.receipts.keys.first!
-            let request = f.store.beginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
+            let request = f.store.smokeBeginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
             f.commit([f.event("edit", title: "Intermediate")]); await f.tick()
             f.commit([f.event("edit", title: "Final", start: 240, end: 2000, location: "Room", link: URL(string: "https://example.com/new"))]); await f.tick()
             require(f.transport.submissions.count == 1, "edits within a full batch coalesce")
-            f.store.finishRefresh(fetched: [f.source, f.second], requestID: request); await settle()
+            f.store.smokeFinishRefresh(fetched: [f.source, f.second], requestID: request); await settle()
             let replacement = f.transport.submissions.last!
             require(f.transport.submissions.count == 2 && replacement.title == "Meeting updated" && !replacement.sound,
                     "time/title/location/link edit produces one silent labeled replacement")
@@ -354,12 +354,12 @@ extension NotificationSmoke {
             controller.now = { f.clock }; cold.connectNotifications(controller)
             var agenda = 0, details = 0
             cold.openNotificationAgenda = { agenda += 1 }; cold.openNotificationMeetings = { details += $0.count }
-            let request = cold.beginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
-            await cold.restoreCachedEvents(); cold.tick(); await settle()
+            let request = cold.smokeBeginFullRefresh(subscriptionIDs: [f.source.id, f.second.id])
+            await cold.restoreCachedEvents(); cold.smokeTick(); await settle()
             require(controller.receipts[id] != nil, "cold receipt survives empty cache before response arrives")
             if !missing { controller.receive(id: id, action: UNNotificationDefaultActionIdentifier) }
-            cold.commitEvents(missing ? [] : [event], observedCalendarIDs: [f.source.id])
-            cold.finishRefresh(fetched: [f.source, f.second], requestID: request); await settle()
+            cold.smokeCommitEvents(missing ? [] : [event], observedCalendarIDs: [f.source.id])
+            cold.smokeFinishRefresh(fetched: [f.source, f.second], requestID: request); await settle()
             if missing { controller.receive(id: id, action: UNNotificationDefaultActionIdentifier) }
             require(missing ? agenda == 1 : details == 1, "cold action resolves current meeting or menu agenda")
             controller.receive(id: id, action: UNNotificationDefaultActionIdentifier)
@@ -377,7 +377,7 @@ extension NotificationSmoke {
             choices.duringMeetings = false; choices.catchUp = true
             store.applyNotificationSetup(choices, owners: nil)
             let calls = probe.calls; probe.result = .success([])
-            time = time.addingTimeInterval(6); store.retryMeetingDetection(); await settle()
+            time = time.addingTimeInterval(6); store.smokeRetryMeetingDetection(); await settle()
             require(probe.calls == calls + 1 && store.meetingDetectionError == nil, "guide preserves scheduled retry")
             probe.hold = true
             store.setInMeetingDelivery(.suppress); await settle()
