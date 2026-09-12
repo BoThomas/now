@@ -1,233 +1,105 @@
-# Current work target: build/test modernization and scanner cleanup
+# Current work target: cross-platform groundwork via core extraction
 
-Status: complete; signed configurations, scanner review and final full release preflight passed.
+Status: planned; implementation has not started.
 
-Branch: `feat/build-test-modernization`.
+Branch: `feat/cross-platform-core`.
 
-Starting point: analysis workflow merged through PR #15, merge commit
-`1da1f71dec309c57f20b3bada0c170e56fe3f02e`.
+Starting point: build/test modernization merged through PR #16, merge commit
+`d01dbd786159bc63b088dfc1254c880d088eccd9`.
 
 ## Objective
 
-Standardize compilation and test execution, separate the full test suite from the shipping app, and
-resolve or explicitly justify the existing scanner findings. Preserve observable application
-behavior, calendar permissions, reminder bookkeeping, and updater safety. Work in small, reviewable
-commits; do not combine build migration with broad controller redesign.
+Prepare _now_ for future Windows and Linux ports by extracting the platform-neutral core (ICS
+parsing, recurrence, models, filtering, activity policy, cache and reminder bookkeeping rules) from
+the AppKit/EventKit shell into its own SwiftPM library target. This stage ships no user-facing
+change: the macOS app keeps its current behavior, bundle identity, and release pipeline. Cross-
+platform shells (tray glue, notifications, SwiftCrossUI settings) are explicitly out of scope here
+and are decided after this stage.
 
 Read `AGENTS.md`, `autowiki/quickstart.md`, the relevant topic pages, and
-`autowiki/engineering-notes.md` before implementation. This plan authorizes investigating and
-migrating the current plain-Swift build layout; it does not authorize a release, signing-identity
-rotation, platform/language-mode upgrade, or weakening safeguards. Update layout-specific agent
-instructions when the implemented build actually changes.
+`autowiki/engineering-notes.md` before implementation. This plan authorizes target/module
+restructuring and access-control widening only where extraction requires it. It does not authorize a
+release, a Swift 6 migration, platform/language-mode changes, behavioral changes, or weakening any
+safeguard recorded in the engineering notes.
 
 ## Starting evidence and open decisions
 
-- `build-app.sh` compiles all `Sources/*.swift` into one executable, manually assembles/signs the
-  app, deletes `.build` on each run, and has no explicit release optimization flag. `strip -x` is
-  symbol stripping, not compiler optimization.
-- Full selftests and several smoke/diagnostic entry points are reachable in the shipping executable.
-  Dedicated test files account for substantial source size; source line counts are not binary-size
-  measurements.
-- Some smoke harnesses rewrite temporary copies of app source to expose methods or replace
-  dependencies. Preserve their behavioral coverage while introducing stable test access points.
-- The starting baselines contain 13 compiler warnings and 17 lint findings: nine complexity, six
-  function-length, and two parameter-count findings. Re-run analysis before acting on these counts.
-- SwiftPM is the preferred initial direction for compilation and separate test targets, retaining a
-  thin app bundling/signing wrapper. Verify feasibility with the actual AppKit entry point, resource
-  paths, access control and existing integration harnesses. An Xcode app/test project is an
-  alternative if concrete integration requirements justify its additional tooling dependency.
-- Do not create a large package graph or make everything public merely to enable testing. Choose the
-  smallest viable production/test target structure. Pure unit tests must remain EventKit-free;
-  hosted integration tests may need a separately signed, disposable app.
+- The package currently defines one executable target `NowApp` (21 source files in `Sources/`) plus
+  allow-listed `NowHarness` test targets selected via `NOW_TEST_SUITE`. There is no library target.
+- Platform-neutral candidates with no AppKit/EventKit imports: `ICS.swift` (parsing and recurrence),
+  `Models.swift`, `TitleFilter.swift`, `MeetingActivity.swift`, most of `Helpers.swift`,
+  `CalendarEventCache.swift` (verify its I/O is path-injected, not hardcoded), and the pure policy
+  portions of `Preferences.swift`.
+- Shell-bound files that must stay out of the core: `App.swift`, `AppStore.swift` (EventKit
+  ownership), `MenuBar.swift`, `*UI.swift`, `Notifications.swift`, `NativeCalendars.swift`,
+  `Updater.swift`/`UpdateDownload.swift`.
+- `AppStore` responsibility extraction was deliberately deferred by PR #16 and remains follow-up
+  work; this stage must not attempt a broad controller redesign. Extract the core around it.
+- Library target naming and visibility strategy are open decisions: smallest viable option is a
+  second SwiftPM target consumed by `NowApp` and the harnesses; widening `public` is allowed only
+  where the module boundary requires it, and never as a general API cleanup.
+- Harness selection in `Package.swift` compiles `Sources` plus suite fixtures; it must be updated so
+  suites still compile without duplicating production sources between targets.
+- The analysis scripts discover sources and match baselines by path; source moves between files or
+  targets require reviewing `analysis/` baselines and `analysis/review.md` rationales. Findings must
+  be relocated reviewably, never silently accepted or dropped.
+- 16 lint findings carry individual rationales; extraction may resolve some and relocate others.
+  Record which and why.
 
-## Phase 1: establish the build and test boundary
+## Phase 1: define the core boundary
 
-- [x] Record the current build/test commands, toolchain, app metadata, designated signing
-      requirement, and baseline analysis output. Inspect all `--selftest`, smoke flags and test
-      environment hooks.
-- [x] Trial the smallest SwiftPM target layout; document the selected layout and any reason to
-      choose Xcode instead. Keep this separate from behavioral cleanup.
-- [x] Add explicit development and release configurations. Use optimized compilation deliberately
-      for release, preserve incremental artifacts for development, and provide an explicit clean
-      action. Verify optimized behavior rather than assuming equivalence.
-- [x] Preserve the app bundle ID, executable name, minimum OS, architecture, entitlements, icon and
-      other resources. Keep Swift 5 mode, macOS 13 and Apple Silicon compatibility. Keep the icon
-      generator outside the application target.
-- [x] Preserve exact stable signing, certificate verification, designated requirement and existing
-      staging/install/rollback/startup-health checks. Retain a single convenient build command and
-      existing output paths where practical.
+- [ ] Inventory every file in `Sources/` for framework imports (AppKit, EventKit, UserNotifications,
+      OSLog) and network/updater dependencies; record the resulting core/shell split and any file
+      that resists classification before moving anything.
+- [ ] Choose the smallest viable library target layout and record the decision, including rejected
+      alternatives (e.g., separate package, multiple feature modules).
+- [ ] Move the core files into the library target without behavioral edits; keep names, types and
+      access levels stable except where the module boundary requires widening, and record each
+      widening.
 
-## Phase 2: separate tests without losing coverage
+## Phase 2: rebuild app and harnesses on the boundary
 
-- [x] Move the full selftest suite into separate test targets/runners. Initially preserve every
-      assertion and deterministic fixture; reorganize tests only after proving the migration works.
-- [x] Ensure shipping builds exclude unit-test fixtures and developer-only runners. Decide
-      separately which operational diagnostics remain supported; do not remove useful diagnostics
-      blindly.
-- [x] Keep signed-app smoke coverage for startup, notification actions/focus and updater
-      installation and rollback. Where hooks are needed, design narrowly scoped test builds/runners
-      and verify that shipping behavior is still exercised. Document any unavoidable test-build
-      differences.
-- [x] Replace temporary-source rewriting with minimal explicit dependency injection or supported
-      test access. Do not widen the public API or introduce production bypasses just to satisfy
-      tests.
-- [x] Update all harnesses, preflight, release integration, analysis source discovery/baseline
-      paths, documentation and agent instructions for the chosen layout. Pure tests must not
-      initialize `AppStore`/`EKEventStore` or use live preferences/calendars.
+- [ ] Make `NowApp` depend on the core library; keep the executable entry point, bundle metadata,
+      entitlements and signing pipeline identical.
+- [ ] Update `Package.swift` harness selection so every suite builds against the same library; no
+      suite may recompile a private copy of core sources.
+- [ ] Update analysis source discovery, baselines and `analysis/review.md` for the new layout,
+      relocating findings with reviewable rationale; verify that new findings still fail and
+      resolved baseline entries are removed.
+- [ ] Update agent instructions (`AGENTS.md`), AutoWiki pages, and any scripts that assume a single
+      target, so instructions describe the layout that actually ships.
 
-## Phase 3: resolve scanner findings
+## Phase 3: verify behavior is unchanged
 
-- [x] Address concurrency warnings in small batches: immutable preference defaults, isolation of
-      pure settings helpers, shared formatter ownership, and nested callback captures/shared
-      callback results. Inspect actual thread and lifetime guarantees; warnings are not
-      automatically races.
-- [x] Review all lint findings. Extract cohesive parser stages or responsibilities only where it
-      improves understanding. Preserve strict rejection, recurrence identity and resource budgets.
-      Complexity needed for correct validation may warrant a documented retained finding.
-- [x] Remove resolved baseline entries and verify that new findings still fail. Never
-      bulk-regenerate baselines, loosen thresholds, add blanket suppressions, or add unsafe
-      concurrency annotations simply to obtain a pass. Path-only baseline migrations must be
-      reviewable and preserve the original findings without silently accepting new ones.
-- [x] Record each remaining finding with a concrete rationale. The target is resolved or
-      deliberately justified findings, not mechanically achieving zero warnings through
-      suppressions.
+- [ ] Signed release and debug builds pass the full selftest suite; occurrence identity, receipt
+      ownership, recurrence results, and recovery data are unchanged.
+- [ ] All existing test suites (notification, reminder, cache, fetch, workload, parser, updater)
+      pass in the new layout, including the parser benchmark digest comparison.
+- [ ] Analysis and analysis smoke pass for shipping, selftest and updater configurations.
+- [ ] GUI launch and liveness checks pass with no permission prompts; updater smoke passes against
+      the unchanged pinned identity.
+- [ ] Record artifact sizes and build timings as observations only; no performance claims.
+- [ ] Run `npm ci`, `npm run format-docs`, and `npm run check-docs` after Markdown edits; refresh
+      affected wiki pages with the AutoWiki skill if architecture explanations change.
 
 ## Validation and acceptance
 
-During the transition follow the current `AGENTS.md` commands. If commands change, retain
-compatibility wrappers until replacements are validated, then update all callers and instructions
-together.
-
-- [x] Signed build and selftest/replacement test suite pass. On this machine the signed build needs
-      execution outside the agent sandbox for login-keychain access; no ad-hoc workaround.
-- [x] Both development and optimized release builds pass relevant tests; record artifact sizes and
-      representative build timings without promising a particular improvement.
-- [x] GUI launch and continued liveness pass, with no unexpected permission prompts. Use synthetic
-      data and disposable app/preferences domains for integration tests.
-- [x] The full release preflight passes against the final signed release artifact, including updater
-      smoke. It may temporarily quit/reopen a running now; preserve the harness's restoration logic.
-- [x] Analysis and analysis smoke tests pass with the new layout. Check full-report mode when
-      editing baselined functions, since native SwiftLint baseline matching can hide growth in those
-      functions.
-- [x] Verify the release artifact no longer includes the full unit-test runner/fixtures and that
-      supported diagnostic commands still work. Check that test builds cannot replace release
-      outputs.
-- [x] Run `npm ci`, `npm run format-docs`, and `npm run check-docs` after Markdown edits. Refresh
-      affected wiki architecture explanations using the project AutoWiki skill when the architecture
-      changes.
-- [x] Finish with a clear report of the final target structure, commands, validation, remaining
-      justified findings and limitations. Commit and push implementation progress on this branch.
+Follow the current `AGENTS.md` commands. On this machine the signed build runs outside the agent
+sandbox for login-keychain access; selftest runs normally. Keep selftests deterministic and
+EventKit-free: never construct `AppStore` or another `EKEventStore` there. Use disposable test
+domains and synthetic feeds; never seed the installed app's calendars or preferences.
 
 ## Boundaries and deferred work
 
-Broader `AppStore` responsibility extraction, general settings-file reorganization, and simplifying
-its GitHub icon renderer are follow-ups unless a narrow change directly supports the target/test
-boundary or a reviewed scanner finding. Do not add duplication/dead-code tools, migrate to Swift 6,
-change user-facing behavior, publish a release, merge the implementation branch, or introduce a new
-CI/signing-secret setup as incidental work.
+Do not write any Windows/Linux code, tray implementations, notification shims, or add SwiftCrossUI
+or other UI dependencies in this stage. Do not extract `AppStore` responsibilities beyond what the
+core boundary forces, reorganize settings files, or touch the updater beyond keeping it compiling.
+No release, no merge without a separate request. Follow-up candidates after this stage, in the order
+they become meaningful: `AppStore` responsibility extraction, a cross-platform core usage spike
+(headless run of the core on Linux via the Swift Linux toolchain), then shell experiments (tray
+glue, notifications, SwiftCrossUI settings) per platform.
 
 ## Handoff
 
-Implementation stages are recorded below. Continue to use this branch; do not merge or release
-without a separate request. Final validation and any remaining limitations belong in this plan.
-
-## Implementation evidence
-
-### Stage 1 — minimal SwiftPM build
-
-Selected one executable target, `NowApp`, with product `now`. The existing `@main` AppKit entry
-point builds unchanged with SwiftPM; no public API or extra production modules are needed. Apple
-Swift 6.3.3 compiles in Swift 5 mode, targeting arm64 and macOS 13. The initial debug trial
-completed in 31.09 seconds. Repository-local module/manifest caches avoid sandbox cache permission
-failures. The bundle remains `com.thomasboch.now`, version 2.0.0/build 106, with unchanged
-resources, entitlements, and certificate-root designated requirement
-`A505B08900C56A28709479297A049525A2A187C6`. The pre-migration executable measured 4,802,800 bytes.
-
-`build-app.sh --require-identity` defaults to SwiftPM release optimization; `--debug` writes to
-`outputs/debug/now.app`, and `--clean` explicitly clears SwiftPM compilation artifacts. Existing
-release paths are retained. Initial analysis confirmed 13 concurrency warnings and 17 lint findings
-(nine complexity, six length, two parameter count). No baseline changes in this stage.
-
-Stage 1 checks: signed release build 58.51 s, signed incremental debug build 4.15 s; release
-executable 3,125,312 bytes, debug executable 10,728,480 bytes. Both full selftests pass. Default
-analysis accepts exactly the unchanged baseline. Documentation formatting/checks pass.
-
-### Stage 2 — separate runners and stable fixture access
-
-The XCTest trial failed because the installed Command Line Tools have no XCTest module. Selected an
-allow-listed SwiftPM executable runner per suite, compiling production sources without public APIs
-or Xcode. All original selftest files moved unchanged to `Tests/NowTests`; the runner passes. Hosted
-harnesses now use conditional same-file accessors instead of rewriting source. AppDelegate store
-injection isolates cache paths. Notification wiring moved to a cohesive method to keep the test
-factory from growing the baselined startup function; its resolved length entry was removed.
-Concurrency baseline edits only relocate the two selftest paths. Shipping builds omit unit fixtures
-and the updater smoke entry/body. Notification/lifecycle/recovery and reminder/menu/quit suites
-pass.
-
-### Stage 3 — scanner ownership fixes
-
-All 13 concurrency warnings are resolved: immutable preference defaults, nonisolated pure settings
-helpers, per-call relative formatter ownership, independent nested weak captures, and
-completion-owned update diagnostic output. Both shipping and selftest strict-concurrency
-configurations report zero. The concurrency baseline was pruned after verification, not regenerated.
-The 16 retained lint findings have individual rationales and coverage references in
-`analysis/review.md`; no thresholds or matching rules changed. Analysis smoke confirms new
-warnings/findings still fail.
-
-### Final artifact and regression checks
-
-The final release executable is 2,560,848 bytes (ZIP 2,000,300 bytes); debug is 9,908,784 bytes. The
-final incremental signed debug build took 5.37 seconds; release compilation after ownership changes
-took 17.06 seconds. These are local observations, not performance guarantees. Swift 5, arm64, the
-macOS 13 load command, bundle metadata, exact designated requirement, and entitlements are verified
-by the new artifact smoke. Test builds use separate output paths and scratch directories.
-
-Production parser and synthetic update-check diagnostics pass. A signed disposable copy remains live
-through the real GUI entry point for five seconds. Hosted optimized startup/activation tests cover
-setup migrations, background focus and policy restoration. The parser benchmark's historical stub
-was restricted to its standalone comparison after preflight exposed a duplicate AppStore; the
-SwiftPM and standalone builds now produce identical full-event digests for 7,000 recurring
-occurrences and 5,000 coincident overrides. No behavioral assertions or fixtures were removed.
-
-Remaining limitations: validation runs on macOS 26.6.2 with the 26.5 SDK, not a physical macOS 13
-host. Real Calendar permission prompts and live Notification Center delivery were not exercised.
-Updater fault tests use the separately signed optimized runner with production updater logic;
-shipping startup, signature and diagnostics are checked independently. Sixteen lint findings remain
-with concrete rationales in `analysis/review.md`. Per-call relative formatting adds an allocation;
-no runtime speed improvement is claimed. Full Xcode/XCTest adoption remains unnecessary for this
-Command Line Tools workflow.
-
-### Updater fixture isolation correction
-
-The first complete updater run exposed an old harness isolation gap: changing HOME did not reliably
-isolate UserDefaults. The new empty-native-calendar assertion stopped the health-timeout child when
-it encountered the installed profile. The runner now supplies a disposable preference suite and
-cache explicitly, under the unchanged pinned signing/bundle identity. `AppPreferences.standard`
-returns ordinary standard preferences in shipping builds; only the updater fixture selects its
-required disposable suite. Its normal startup uses a synthetic empty profile with automatic updates
-and login registration disabled. The assertion and exact timeout/rollback expectations are retained.
-The focused updater suite now passes all 13 scenarios plus post-stage signature/version mutation
-checks. A fresh signed build and complete preflight passed with this correction.
-
-Final analysis also covers the updater-runner configuration. The analysis smoke separately proves
-that shipping-only, selftest-only and updater-only compiler warnings fail, in addition to baseline
-matching and new-lint detection. One interactive menu-tracking assertion failed during a later
-preflight despite earlier successful runs; it passed unchanged in isolation and then in the final
-complete preflight. These GUI tests require an unlocked, undisturbed desktop.
-
-### Completion evidence
-
-Final full release preflight returned `RELEASE PREFLIGHT OK` on 2026-09-11 after the committed
-implementation. It included shipping signature/metadata/architecture/entitlement and fixture checks,
-production GUI liveness and diagnostics, debug and optimized selftests,
-notification/lifecycle/setup/ activation checks, reminder/menu/quit checks, cache restarts, feed
-streaming/cancellation/deadline checks, deterministic workloads, parser performance, and all updater
-installation/rollback/tampering checks. The shipping executable SHA-256 was unchanged across the
-test builds and complete preflight.
-
-Analysis passes with zero concurrency warnings in shipping, selftest and updater-runner
-configurations; all 16 retained lint findings are explicitly reviewed. Analysis smoke, shell syntax,
-Python compilation and Markdown formatting/checks pass. Both signed configurations were built.
-Implementation is organized into five coherent commits followed by this validation record. Work
-stays on `feat/build-test-modernization`; no merge, tag or release was performed. The remaining
-platform, live-service and interactive-GUI limitations above are deliberate and explicit.
+Implementation stages and validation evidence are recorded below as work proceeds. Continue on this
+branch; do not merge or release without a separate request.
