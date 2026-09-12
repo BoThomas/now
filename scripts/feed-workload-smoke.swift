@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 
 @main struct FeedWorkloadSmoke {
     static func require(_ value: Bool, _ message: String) {

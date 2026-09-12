@@ -51,13 +51,13 @@
       "ruleName": "Cyclomatic Complexity",
       "severity": "warning",
       "location": {
-        "line": 57,
-        "file": "Sources/ICS.swift",
+        "line": 61,
+        "file": "Sources/NowCore/ICS.swift",
         "character": 5
       },
       "reason": "Function should have complexity 15 or less; currently complexity is 37"
     },
-    "text": "    static func parse(_ text: String, eventTz: TimeZone?, dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> RRULE? {"
+    "text": "    package static func parse(_ text: String, eventTz: TimeZone?, dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> RRULE? {"
   },
   {
     "violation": {
@@ -66,13 +66,13 @@
       "ruleName": "Cyclomatic Complexity",
       "severity": "warning",
       "location": {
-        "line": 270,
-        "file": "Sources/ICS.swift",
+        "line": 276,
+        "file": "Sources/NowCore/ICS.swift",
         "character": 5
       },
       "reason": "Function should have complexity 15 or less; currently complexity is 21"
     },
-    "text": "    static func parse(_ text: String, dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> ICSParseResult {"
+    "text": "    package static func parse(_ text: String, dateFormatters: ICSDateFormatters = ICSDateFormatters()) -> ICSParseResult {"
   },
   {
     "violation": {
@@ -81,8 +81,8 @@
       "ruleName": "Cyclomatic Complexity",
       "severity": "warning",
       "location": {
-        "line": 439,
-        "file": "Sources/ICS.swift",
+        "line": 445,
+        "file": "Sources/NowCore/ICS.swift",
         "character": 5
       },
       "reason": "Function should have complexity 15 or less; currently complexity is 30"
@@ -96,8 +96,8 @@
       "ruleName": "Function Body Length",
       "severity": "warning",
       "location": {
-        "line": 439,
-        "file": "Sources/ICS.swift",
+        "line": 445,
+        "file": "Sources/NowCore/ICS.swift",
         "character": 12
       },
       "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 132 lines"
@@ -111,13 +111,13 @@
       "ruleName": "Cyclomatic Complexity",
       "severity": "warning",
       "location": {
-        "line": 737,
-        "file": "Sources/ICS.swift",
+        "line": 743,
+        "file": "Sources/NowCore/ICS.swift",
         "character": 5
       },
       "reason": "Function should have complexity 15 or less; currently complexity is 21"
     },
-    "text": "    static func parseDuration(_ value: String) -> TimeInterval? {"
+    "text": "    package static func parseDuration(_ value: String) -> TimeInterval? {"
   },
   {
     "violation": {
@@ -126,13 +126,13 @@
       "ruleName": "Cyclomatic Complexity",
       "severity": "warning",
       "location": {
-        "line": 859,
-        "file": "Sources/ICS.swift",
+        "line": 865,
+        "file": "Sources/NowCore/ICS.swift",
         "character": 5
       },
       "reason": "Function should have complexity 15 or less; currently complexity is 19"
     },
-    "text": "    static func expand(_ event: ParsedEvent, windowStart: Date, windowEnd: Date, budget: inout Int) -> Expansion {"
+    "text": "    package static func expand(_ event: ParsedEvent, windowStart: Date, windowEnd: Date, budget: inout Int) -> Expansion {"
   },
   {
     "violation": {
@@ -141,13 +141,13 @@
       "ruleName": "Function Body Length",
       "severity": "warning",
       "location": {
-        "line": 859,
-        "file": "Sources/ICS.swift",
+        "line": 865,
+        "file": "Sources/NowCore/ICS.swift",
         "character": 12
       },
       "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 82 lines"
     },
-    "text": "    static func expand(_ event: ParsedEvent, windowStart: Date, windowEnd: Date, budget: inout Int) -> Expansion {"
+    "text": "    package static func expand(_ event: ParsedEvent, windowStart: Date, windowEnd: Date, budget: inout Int) -> Expansion {"
   },
   {
     "violation": {
@@ -156,13 +156,13 @@
       "ruleName": "Cyclomatic Complexity",
       "severity": "warning",
       "location": {
-        "line": 1310,
-        "file": "Sources/ICS.swift",
-        "character": 5
+        "line": 32,
+        "file": "Sources/NowCore/Calendar/ICSBuilder.swift",
+        "character": 13
       },
       "reason": "Function should have complexity 15 or less; currently complexity is 24"
     },
-    "text": "    static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date) -> ICSBuildResult {"
+    "text": "    package static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date, colorHex: String, detectLink: @escaping (ParsedEvent) -> URL?) -> ICSBuildResult {"
   },
   {
     "violation": {
@@ -171,13 +171,13 @@
       "ruleName": "Function Body Length",
       "severity": "warning",
       "location": {
-        "line": 1310,
-        "file": "Sources/ICS.swift",
-        "character": 12
+        "line": 32,
+        "file": "Sources/NowCore/Calendar/ICSBuilder.swift",
+        "character": 20
       },
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 116 lines"
+      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 115 lines"
     },
-    "text": "    static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date) -> ICSBuildResult {"
+    "text": "    package static func meetings(fromICS text: String, subscription: CalendarSubscription, now: Date, colorHex: String, detectLink: @escaping (ParsedEvent) -> URL?) -> ICSBuildResult {"
   },
   {
     "violation": {

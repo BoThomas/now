@@ -1,4 +1,5 @@
 import SwiftUI
+import NowCore
 
 struct NotificationSettingsView: View {
     @ObservedObject var store: AppStore

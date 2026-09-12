@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 import AppKit
 
 extension NotificationSmoke {
@@ -70,6 +71,7 @@ extension NotificationSmoke {
         let partial = AppStore(eventCache: cache)
         await cache.flush()
         require(partial.subscriptions.map(\.name) == ["Good"] && !partial.settings.soundEnabled, "partial recovery keeps valid siblings and settings")
+        require(partial.subscriptions.first?.colorHex == Palette.hex(for: 0), "profile recovery resolves legacy colors with the macOS palette")
         require(StoredPreferences.needsReview(key), "lossy successful decoding raises recovery notice")
         require((defaults.array(forKey: StoredPreferences.recoveryKey(key))?.first as? Data) == lossy, "lossy migration preserves original data")
 

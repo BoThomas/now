@@ -8,10 +8,15 @@ engineering rulebook.
 
 ## Build and orient yourself
 
-The app uses one SwiftPM executable target in [Package.swift](../Package.swift).
-[build-app.sh](../build-app.sh) assembles and signs the bundle. The build targets Apple Silicon and
-macOS 13 in Swift 5 language mode. See [development prerequisites](../docs/development.md) for SDK
-requirements.
+The app's `NowApp` SwiftPM executable depends on the `NowCore` library in
+[Package.swift](../Package.swift). [Sources/NowCore](../Sources/NowCore/) contains parsed ICS
+values, parsing/materialization, plain models, filtering, cache policy and reminder decisions.
+Responsibilities are grouped under `Calendar/`, `Reminders/`, `Storage/`, `Activity/` and
+`Support/`. The serial POSIX cache adapter is shared by macOS/Linux with an injected directory.
+Native URL discovery, presentation, live preference/notification ownership and platform integration
+remain in the macOS shell. [build-app.sh](../build-app.sh) assembles and signs the bundle. The build
+targets Apple Silicon and macOS 13 in Swift 5 language mode. See
+[development prerequisites](../docs/development.md) for SDK requirements.
 
 Run from the repository root:
 
@@ -20,11 +25,15 @@ Run from the repository root:
 ./scripts/test.sh
 ```
 
-On this development machine, the signed build must run outside the agent sandbox so it can access
-the login keychain; follow [the build instructions in AGENTS.md](../AGENTS.md). The outputs are
+On the signing Mac, the signed build must run outside the agent sandbox so it can access the login
+keychain; follow [the build instructions in AGENTS.md](../AGENTS.md). The outputs are
 `outputs/now.app` and `outputs/now.zip`. The separate selftest executable exercises more than
 parsing, including reminder, cache, settings, and updater decisions. See
 [development and updates](development-and-updates.md) for focused checks and release constraints.
+
+For a host-toolchain check of the shared library only, run `./scripts/test-core.sh` (and repeat with
+`NOW_TEST_CONFIGURATION=release`). This does not build or validate the macOS app. See the
+[core workflow](../docs/development.md#shared-core-and-linux-checks) for scope and prerequisites.
 
 ## Choose a path
 

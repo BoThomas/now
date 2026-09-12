@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 import UserNotifications
 import AppKit
 import Security

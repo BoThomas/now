@@ -1,31 +1,6 @@
 import CoreAudio
 import Foundation
-
-enum MeetingProvider: Equatable {
-    case zoom
-    case teams
-    case browser
-    case webex
-    case slack
-    case faceTime
-
-    var name: String {
-        switch self {
-        case .zoom: return "Zoom"
-        case .teams: return "Microsoft Teams"
-        case .browser: return "Browser"
-        case .webex: return "Webex"
-        case .slack: return "Slack"
-        case .faceTime: return "FaceTime"
-        }
-    }
-}
-
-enum MeetingActivity: Equatable {
-    case inactive
-    case meeting(MeetingProvider)
-    case unknown
-}
+import NowCore
 
 struct MeetingAudioOwner: Equatable {
     let pid: pid_t
@@ -187,31 +162,6 @@ enum MeetingActivityProbe {
     }
 }
 
-struct MeetingActivityDebouncer {
-    private(set) var activity: MeetingActivity = .unknown
-    private var inactiveSnapshots = 0
-
-    mutating func apply(_ detected: MeetingActivity) -> MeetingActivity {
-        switch detected {
-        case .meeting:
-            inactiveSnapshots = 0
-            activity = detected
-        case .inactive:
-            inactiveSnapshots += 1
-            if inactiveSnapshots >= 2 { activity = .inactive }
-        case .unknown:
-            inactiveSnapshots = 0
-            activity = .unknown
-        }
-        return activity
-    }
-
-    mutating func reset() {
-        activity = .unknown
-        inactiveSnapshots = 0
-    }
-}
-
 @MainActor
 final class MeetingActivitySource {
     var onActivityChange: ((MeetingActivity) -> Void)?
@@ -307,8 +257,4 @@ final class MeetingActivitySource {
         let detected = MeetingActivityProbe.activity(owners: owners, includeBrowsers: includeBrowsers)
         onActivityChange?(debouncer.apply(detected))
     }
-}
-
-extension MeetingActivity {
-    var isDetectedMeeting: Bool { if case .meeting = self { return true }; return false }
 }

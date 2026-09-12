@@ -1,9 +1,10 @@
 # AGENTS.md — now
 
-Native macOS menu bar app for meeting reminders. SwiftPM compiles the application target in
-`Sources/`; `build-app.sh` assembles and signs the bundle. Keep Swift 5 language mode and macOS 13 /
-Apple Silicon compatibility. `make-icon.swift` is a separate tool and must remain outside
-`Sources/`.
+Native macOS menu bar app for meeting reminders. SwiftPM compiles the shell in `Sources/` against
+the shared `NowCore` library in `Sources/NowCore/`; `build-app.sh` assembles and signs the bundle.
+Keep Swift 5 language mode and macOS 13 / Apple Silicon compatibility. `make-icon.swift` is a
+separate tool and must remain outside `Sources/`. Core consumers use `package` access; never compile
+a second copy of core sources into an app or harness target.
 
 ## AutoWiki and project context
 
@@ -51,11 +52,25 @@ splitting functions or deduplicating UI/test fixtures. See the
 [analysis workflow](docs/development.md#code-analysis) for scope and limitations. For
 analysis-tooling changes, also run `python3 scripts/analysis-smoke.py`.
 
-On this development machine, run the build outside the agent sandbox (`exec_command` with
+On the signing Mac, run the build outside the agent sandbox (`exec_command` with
 `sandbox_permissions: "require_escalated"`) so signing can access the login keychain. Run selftest
 normally. A sandbox-only identity lookup failure does not mean the certificate is absent. If the
 unsandboxed build cannot use the identity, report it; do not accept ad-hoc signing, export private
 keys, or change keychain trust/access settings to work around it.
+
+For core changes, also run `./scripts/test-core.sh`,
+`NOW_TEST_CONFIGURATION=release ./scripts/test-core.sh`, and
+`python3 scripts/module-boundary-smoke.py --parse`. These use the host Swift toolchain without the
+macOS SDK wrapper. On a Linux devbox, record the macOS build/GUI/signing gates as unavailable; core
+tests do not replace them. Analysis-tooling changes can additionally exercise the portable compiler
+gates with `python3 scripts/analysis-smoke.py --compiler-only`. With pinned SwiftLint available,
+also use `python3 scripts/analysis-smoke.py --lint-only` for portable lint-gate probes. The default
+analyzer still checks the full macOS SDK configurations.
+
+The pinned Swift Crypto dependency requires a Swift 6.1+ compiler; app/core language mode remains
+Swift 5. Commit `Package.resolved` changes deliberately. macOS hashes use CryptoKit; portable hashes
+must preserve exact existing key bytes. Core storage requires injected directories, never a default
+application domain. Keep pure policy separate from platform adapters and live state ownership.
 
 Run focused suites from the
 [test selection table](autowiki/development-and-updates.md#build-and-choose-checks) as appropriate.

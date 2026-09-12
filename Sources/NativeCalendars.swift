@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 import AppKit
 import EventKit
 
@@ -148,6 +149,9 @@ final class NativeCalendarSource {
             end: ekEvent.endDate
         )
         let hex = native.colorHex.isEmpty ? Palette.hex(for: native.colorIndex) : native.colorHex
+        let occurrence = (ekEvent.hasRecurrenceRules || ekEvent.isDetached)
+            ? String((ekEvent.occurrenceDate ?? ekEvent.startDate).timeIntervalSince1970) : "single"
+        let notificationIdentity = "native:" + String(identifier.utf8.count) + ":" + identifier + ":" + occurrence
         return MeetingEvent(
             uid: parsed.uid,
             title: parsed.title,
@@ -160,8 +164,7 @@ final class NativeCalendarSource {
             calendarName: calendarTitle,
             colorIndex: native.colorIndex,
             colorHex: hex,
-            notificationIdentity: "native:" + String(identifier.utf8.count) + ":" + identifier + ":"
-                + ((ekEvent.hasRecurrenceRules || ekEvent.isDetached) ? String((ekEvent.occurrenceDate ?? ekEvent.startDate).timeIntervalSince1970) : "single")
+            notificationIdentity: notificationIdentity
         )
     }
 

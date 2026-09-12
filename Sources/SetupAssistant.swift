@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 import SwiftUI
 
 /// A persisted draft keeps first-run choices separate from active settings.

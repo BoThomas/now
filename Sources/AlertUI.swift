@@ -1,4 +1,5 @@
 import SwiftUI
+import NowCore
 import AppKit
 
 final class AlertPanel: NSPanel {
@@ -373,28 +374,11 @@ final class AlertController: ObservableObject {
 
     /// Shared choices must work for every active card. Ended cards do not
     /// constrain the group and are never added to a new snooze schedule.
-    struct SnoozeOptions: Equatable {
-        var atStartEnabled: Bool
-        var enabledDurations: Set<Int>
-        var anyEnabled: Bool { atStartEnabled || !enabledDurations.isEmpty }
-        var plans: [SnoozePlan] {
-            (atStartEnabled ? [.atStart] : []) + enabledDurations.sorted().map { .duration($0) }
-        }
-    }
-
-    enum SnoozePlan: Equatable {
-        case atStart
-        case duration(Int)
-    }
+    typealias SnoozeOptions = SnoozePolicy.Options
+    typealias SnoozePlan = SnoozePolicy.Plan
 
     nonisolated static func snoozeOptions(events: [MeetingEvent], now: Date, customSeconds: Int = 0) -> SnoozeOptions {
-        let active = events.filter { now < $0.end }
-        guard !active.isEmpty else { return SnoozeOptions(atStartEnabled: false, enabledDurations: []) }
-        let atStart = active.allSatisfy { now < $0.start }
-        let durations = Set(AppSettings.snoozeDurations(including: customSeconds).filter { seconds in
-            active.allSatisfy { now.addingTimeInterval(TimeInterval(seconds)) < $0.end }
-        })
-        return SnoozeOptions(atStartEnabled: atStart, enabledDurations: durations)
+        SnoozePolicy.options(events: events, now: now, customSeconds: customSeconds)
     }
 
     func snoozeOptions(at now: Date) -> SnoozeOptions {
@@ -403,46 +387,22 @@ final class AlertController: ObservableObject {
 
     /// Validate again at activation time, using the same policy as the UI.
     nonisolated static func snoozeSchedule(plan: SnoozePlan, events: [MeetingEvent], now: Date) -> [String: Date]? {
-        let customSeconds: Int
-        switch plan {
-        case .atStart: customSeconds = 0
-        case .duration(let seconds): customSeconds = seconds
-        }
-        guard snoozeOptions(events: events, now: now, customSeconds: customSeconds).plans.contains(plan) else { return nil }
-        return Dictionary(uniqueKeysWithValues: events.filter { now < $0.end }.map { event in
-            switch plan {
-            case .atStart: return (event.id, event.start)
-            case .duration(let seconds): return (event.id, now.addingTimeInterval(TimeInterval(seconds)))
-            }
-        })
+        SnoozePolicy.schedule(plan: plan, events: events, now: now)
     }
 
     /// Duration defaults shorten to the longest safe duration; never lengthen.
     /// Just in time remains an alternative when no duration fits before start.
     /// After start, a just-in-time default falls back to the shortest duration.
     nonisolated static func primarySnoozePlan(options: SnoozeOptions, defaultSeconds: Int) -> SnoozePlan? {
-        if defaultSeconds == 0 {
-            if options.atStartEnabled { return .atStart }
-            return options.enabledDurations.min().map { .duration($0) }
-        }
-        if let seconds = options.enabledDurations.filter({ $0 <= defaultSeconds }).max() {
-            return .duration(seconds)
-        }
-        return options.atStartEnabled ? .atStart : nil
+        SnoozePolicy.primaryPlan(options: options, defaultSeconds: defaultSeconds)
     }
 
     nonisolated static func snoozeMenuSelection(current: SnoozePlan?, options: SnoozeOptions, defaultSeconds: Int) -> SnoozePlan? {
-        if let current, options.plans.contains(current) { return current }
-        return primarySnoozePlan(options: options, defaultSeconds: defaultSeconds)
+        SnoozePolicy.selection(current: current, options: options, defaultSeconds: defaultSeconds)
     }
 
     nonisolated static func movedSnoozeSelection(current: SnoozePlan?, options: SnoozeOptions, direction: Int) -> SnoozePlan? {
-        let plans = options.plans
-        guard !plans.isEmpty else { return nil }
-        guard let current, let index = plans.firstIndex(of: current) else {
-            return direction > 0 ? plans.first : plans.last
-        }
-        return plans[(index + (direction > 0 ? 1 : plans.count - 1)) % plans.count]
+        SnoozePolicy.movedSelection(current: current, options: options, direction: direction)
     }
 
     func reconcileSnoozeMenu(options: SnoozeOptions) {

@@ -2,11 +2,14 @@
 
 [Project map](quickstart.md) · [Reminder delivery](reminders.md)
 
-Both source types become [MeetingEvent](../Sources/Models.swift) values. ICS parsing/expansion lives
-in [ICS.swift](../Sources/ICS.swift); [NativeCalendarSource](../Sources/NativeCalendars.swift) asks
-EventKit for already materialized occurrences. Both enforce a start-time window of six hours before
-through fourteen days after fetch time and exclude all-day/cancelled meetings. Native mapping also
-applies the configured declined-event filter.
+Both source types become [MeetingEvent](../Sources/NowCore/Models.swift) values. ICS parsing and
+recurrence expansion live in the shared [NowCore parser](../Sources/NowCore/ICS.swift).
+[ICSBuilder](../Sources/NowCore/Calendar/ICSBuilder.swift) materializes those values with injected
+color and link discovery; [the macOS overload](../Sources/ICS.swift) supplies the native adapters.
+[NativeCalendarSource](../Sources/NativeCalendars.swift) asks EventKit for already materialized
+occurrences. Both enforce a start-time window of six hours before through fourteen days after fetch
+time and exclude all-day/cancelled meetings. Native mapping also applies the configured
+declined-event filter.
 
 ## From feed to accepted snapshot
 
@@ -25,22 +28,24 @@ errors propagate through `ICSBuildResult` and `FetchResult`, so a rejected feed 
 an empty success. The [structure and merge tests](../Tests/NowTests/SelfTest.swift) exercise these
 boundaries.
 
-`mergeICS` in [AppStore.swift](../Sources/AppStore.swift) checks the live source ID, enabled state,
-URL, and request generation before accepting a result. A failure keeps previous events and adds a
-source error. A success replaces that source's events, including when empty, and records a
-successful source observation. Live colors and title filters are applied during merging, so a result
-cannot overwrite a newer settings edit. `finishRefresh` advances the shared “Last synced” timestamp
-whenever a full batch finishes, even if sources failed; targeted resyncs do not advance it. The
-timestamp is therefore a completed-check time, not proof every source succeeded.
+`AppStore.mergeICS` delegates to
+[CalendarSnapshotMerge](../Sources/NowCore/Calendar/CalendarSnapshotMerge.swift), which checks the
+live source ID, enabled state, URL, and request generation before accepting a result. A failure
+keeps previous events and adds a source error. A success replaces that source's events, including
+when empty, and records a successful source observation. Live colors and title filters are applied
+during merging, so a result cannot overwrite a newer settings edit. `finishRefresh` advances the
+shared “Last synced” timestamp whenever a full batch finishes, even if sources failed; targeted
+resyncs do not advance it. The timestamp is therefore a completed-check time, not proof every source
+succeeded.
 
 ## Recurrence and identity
 
-[ICSBuilder](../Sources/ICS.swift) groups records by UID, selects revisions with SEQUENCE/DTSTAMP,
-expands supported rules, adds RDATEs, excludes EXDATEs, and replaces occurrences using exact
-original recurrence dates. Sorted UID and anchor traversal keeps budget allocation deterministic.
-The builder preserves distinct occurrences moved to the same actual start. Original occurrence
-identity also feeds notification identity, while agenda IDs retain actual-start semantics in
-[Models.swift](../Sources/Models.swift).
+[ICSBuilder](../Sources/NowCore/Calendar/ICSBuilder.swift) groups records by UID, selects revisions
+with SEQUENCE/DTSTAMP, expands supported rules, adds RDATEs, excludes EXDATEs, and replaces
+occurrences using exact original recurrence dates. Sorted UID and anchor traversal keeps budget
+allocation deterministic. The builder preserves distinct occurrences moved to the same actual start.
+Original occurrence identity also feeds notification identity, while agenda IDs retain actual-start
+semantics in [core models](../Sources/NowCore/Models.swift).
 
 Unsupported RRULEs fall back to the first occurrence with a warning; they are not approximately
 expanded. Unknown time zones and unsupported date forms can skip records with warnings. In contrast,
@@ -56,24 +61,35 @@ For changes here, inspect recurrence, zone, override, and compliance fixtures in
 recognized as a meeting link. It searches recognized meeting links in location, description,
 alternate description, title, and attachment order; there is no arbitrary HTTP(S) fallback in that
 search. Native mapping synthesizes a `ParsedEvent` to share this extraction logic. Provider
-recognition and display-location cleanup belong in [ICS.swift](../Sources/ICS.swift), not separate
-UI-specific matchers.
+recognition, precedence and display-location cleanup belong in
+[NowCore](../Sources/NowCore/ICS.swift), not separate UI-specific matchers. Text URL discovery is
+injected into that policy; the macOS overload in [Sources/ICS.swift](../Sources/ICS.swift) retains
+`NSDataDetector`. Foundation imports alone do not make an API portable. The core-only runner tests
+selection with synthetic detected URLs, not Linux parity with Apple's text detector.
 
 ## Restore and failure recovery
 
-[CalendarCacheSnapshot](../Sources/CalendarEventCache.swift) stores materialized occurrences with
-the original fetch clock and exact coverage bounds. It binds to the source UUID and a URL
-fingerprint, reapplies current presentation/filter settings at restore, and refuses ended events or
-times outside saved coverage. It never expands old recurrence rules into new future events. Cache
-restore is neither a successful source observation nor a “Last synced” update.
+[CalendarCacheSnapshot](../Sources/NowCore/Calendar/CalendarCacheSnapshot.swift) stores materialized
+occurrences with the original fetch clock and exact coverage bounds. It binds to the source UUID and
+a URL fingerprint, reapplies current presentation/filter settings at restore, and refuses ended
+events or times outside saved coverage. It never expands old recurrence rules into new future
+events. Cache restore is neither a successful source observation nor a “Last synced” update.
 
-The cache serializes writes/removals, limits snapshots to 16 MB and the aggregate to 64 MB, and uses
-a 0700 directory with 0600 files and atomic replacement. Transient read errors preserve files. A
-failed replacement quarantines the obsolete snapshot as a recovery file that is never auto-restored;
-this prevents an accepted empty feed from resurrecting old meetings after restart. Source
-disable/removal/URL changes invalidate pending restore and queued state through
-[AppStore](../Sources/AppStore.swift). Profile-recovery protection is described in
-[application state](application.md).
+The [POSIX cache adapter](../Sources/NowCore/Storage/CalendarEventCache.swift) serializes
+writes/removals, limits snapshots to 16 MB and the aggregate to 64 MB, and uses a 0700 directory
+with 0600 files and atomic replacement. Transient read errors preserve files. A failed replacement
+quarantines the obsolete snapshot as a recovery file that is never auto-restored; this prevents an
+accepted empty feed from resurrecting old meetings after restart. Source disable/removal/URL changes
+invalidate pending restore and queued state through [AppStore](../Sources/AppStore.swift).
+Profile-recovery protection is described in [application state](application.md).
+
+The adapter requires an explicit directory.
+[The macOS convenience initializer](../Sources/CalendarEventCache.swift) retains Application
+Support/bundle-ID selection. Linux tests use disposable directories and real subprocess restarts,
+including failed empty replacements and recovery quarantine. The POSIX adapter is compiled only on
+macOS/Linux; Windows filesystem support remains to be designed and verified. URL fingerprints use
+[StableDigest](../Sources/NowCore/Support/StableDigest.swift): exact UTF-8 SHA-256 and lowercase
+hex, using CryptoKit on macOS and pinned Swift Crypto on Linux/Windows.
 
 ## Diagnose missing events
 

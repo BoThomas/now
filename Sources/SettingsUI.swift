@@ -1,4 +1,5 @@
 import SwiftUI
+import NowCore
 import AppKit
 
 enum Links {

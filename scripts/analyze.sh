@@ -32,31 +32,13 @@ if [[ -d "$DEVELOPER_DIR_PATH/usr/lib/sourcekitdInProc.framework" ]]; then
 fi
 SDK_PATH="${SDK_PATH:-$(xcrun --show-sdk-path)}"
 swiftc --version > .build/analysis/toolchain.txt 2>&1
-print "Strict concurrency typecheck (Swift 5, arm64, macOS 13)…"
-if ! swiftc -typecheck -parse-as-library -swift-version 5 -strict-concurrency=complete \
-  -sdk "$SDK_PATH" -target arm64-apple-macos13.0 \
-  -module-cache-path "$PWD/.build/analysis/ModuleCache" -D NOW_TESTING -D NOW_SELFTEST_TESTS Sources/*.swift Tests/NowTests/*.swift \
-  > .build/analysis/concurrency.log 2>&1; then
-  cat .build/analysis/concurrency.log
-  exit 1
-fi
-if ! swiftc -typecheck -parse-as-library -swift-version 5 -strict-concurrency=complete \
-  -sdk "$SDK_PATH" -target arm64-apple-macos13.0 \
-  -module-cache-path "$PWD/.build/analysis/ModuleCache" Sources/*.swift \
-  > .build/analysis/concurrency-production.log 2>&1; then
-  cat .build/analysis/concurrency-production.log
-  exit 1
-fi
+print "Strict concurrency module checks (Swift 5, arm64, macOS 13)…"
+python3 scripts/typecheck-modules.py --sdk "$SDK_PATH" --target arm64-apple-macos13.0
 RESULT=0
-if ! swiftc -typecheck -parse-as-library -swift-version 5 -strict-concurrency=complete \
-  -sdk "$SDK_PATH" -target arm64-apple-macos13.0 \
-  -module-cache-path "$PWD/.build/analysis/ModuleCache" -D NOW_TESTING -D NOW_UPDATER_TESTS \
-  Sources/*.swift Tests/Updater/*.swift > .build/analysis/concurrency-updater.log 2>&1; then
-  cat .build/analysis/concurrency-updater.log
-  exit 1
-fi
 if [[ "$REPORT" == true ]]; then
   cat .build/analysis/concurrency.log
+  python3 scripts/check-concurrency.py --core --report
+  python3 scripts/check-concurrency.py --core-tests --report
   python3 scripts/check-concurrency.py --production --report
   python3 scripts/check-concurrency.py --updater --report
   python3 scripts/check-concurrency.py --report
@@ -65,6 +47,8 @@ if [[ "$REPORT" == true ]]; then
   "$SWIFTLINT" lint --config .swiftlint.yml --no-cache --quiet --lenient \
     --baseline .build/analysis/empty-baseline.json > .build/analysis/swiftlint.log || RESULT=1
 else
+  python3 scripts/check-concurrency.py --core || RESULT=1
+  python3 scripts/check-concurrency.py --core-tests || RESULT=1
   python3 scripts/check-concurrency.py --production || RESULT=1
   python3 scripts/check-concurrency.py --updater || RESULT=1
   python3 scripts/check-concurrency.py || RESULT=1

@@ -1,11 +1,9 @@
 import Foundation
+import NowCore
 import CryptoKit
 
-// Only the standalone historical-parser comparison needs this settings stub.
-// The SwiftPM runner links production types but never constructs AppStore/EventKit.
-#if !NOW_TESTING
-enum AppStore { static let soundNames = ["Hero"] }
-#endif
+// Both current and historical comparisons build their complete SwiftPM targets.
+// Neither runner constructs AppStore/EventKit.
 
 @main enum ParserPerformanceSmoke {
     static func main() {
