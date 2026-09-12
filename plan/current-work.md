@@ -1,8 +1,9 @@
 # Current work target: cross-platform groundwork via core extraction
 
-Status: shared calendar/cache/reminder policy and POSIX storage are implemented and Linux-validated.
-Native integration, macOS acceptance and platform shell decisions remain before merge/release or a
-shipping port.
+Status: shared calendar/cache/reminder policy and POSIX storage are implemented and validated on
+Linux and macOS. The macOS acceptance gates pass after two native compile fixes and one analysis
+tooling fix. Product/platform shell decisions remain before a shipping port; no merge or release was
+performed.
 
 Branch: `feat/cross-platform-core`. Starting point: build/test modernization merged through PR #16,
 merge commit `d01dbd786159bc63b088dfc1254c880d088eccd9`.
@@ -100,7 +101,7 @@ the macOS UI, and a general platform-service abstraction without a concrete cons
       aliases; test against known saved-state fixtures. Never substitute Swift `Hasher`.
 - [x] Move cache snapshot/coverage/recovery decisions and the serial POSIX adapter with required
       directory injection. Linux permission, replacement, quarantine and restart cases pass.
-- [ ] Verify the moved POSIX adapter and failed-empty-save behavior on macOS via the existing signed
+- [x] Verify the moved POSIX adapter and failed-empty-save behavior on macOS via the existing signed
       cache/notification regression suites. Windows storage remains a separate unimplemented
       adapter.
 - [x] Move `NotificationLogic` routing/identity, `ReminderLedger`, catch-up/omission tracking,
@@ -120,14 +121,14 @@ access. The Linux devbox cannot replace signing, AppKit, EventKit, notification,
 
 Before accepting the extraction on macOS:
 
-- [ ] Signed release/debug builds and debug/optimized selftests pass.
-- [ ] All notification/startup/focus, reminder, cache, fetch, workload, parser and updater suites
+- [x] Signed release/debug builds and debug/optimized selftests pass.
+- [x] All notification/startup/focus, reminder, cache, fetch, workload, parser and updater suites
       pass, including a parser digest comparison to the pinned pre-extraction revision.
-- [ ] Analysis and its failure probes pass across core, shipping, selftest and updater
+- [x] Analysis and its failure probes pass across core, shipping, selftest and updater
       configurations; inspect `--report` for relocated flagged functions.
-- [ ] GUI launch/liveness and permission-prompt behavior are unchanged; signed updater smoke passes
+- [x] GUI launch/liveness and permission-prompt behavior are unchanged; signed updater smoke passes
       against the pinned identity.
-- [ ] Record artifact sizes/build timings as observations only.
+- [x] Record artifact sizes/build timings as observations only.
 - [x] Run `npm ci`, `npm run format-docs`, and `npm run check-docs` after Markdown edits.
 
 Keep selftests deterministic and EventKit-free: never construct `AppStore` or another
@@ -295,3 +296,65 @@ After that, decide the first port's minimum feature set and run actual target-pl
 native text URL discovery, tray/menu, background reminder focus, notification actions after restart,
 wake/autostart and packaging/update trust. Windows needs its own toolchain and filesystem
 validation. These remain explicit next-stage work, not a claimed shipping Linux/Windows app.
+
+### macOS acceptance results — 2026-09-13
+
+Validated branch checkpoint `cbd9f89` plus the local fixes below on macOS 26.6.2 (25G83), Apple
+Silicon, Apple Swift 6.3.3 (`swiftlang-6.3.3.1.3`), Swift 5 language mode and the arm64/macOS 13
+build target. This host run does not establish runtime testing on macOS 13 or Windows compatibility.
+
+Fixes required by actual macOS failures:
+
+- `Sources/AppStore.swift`: qualify `NowCore.FetchRequest` to resolve the name collision with
+  SwiftUI's imported `FetchRequest`. Request ownership and fetch behavior are unchanged.
+- `Sources/NativeCalendars.swift`: compute the existing occurrence string and notification identity
+  before the `MeetingEvent` initializer to avoid the compiler's expression-checking timeout.
+  Identity bytes and EventKit mapping are unchanged.
+- `scripts/analysis-smoke.py`: in standalone lint mode, discover the Command Line Tools SourceKit
+  framework on macOS, matching the existing analyzer setup and preserving any existing framework
+  search path. Linux behavior is unchanged. The initial clean-source probe crashed without this
+  lookup; all four lint probes now pass.
+
+Acceptance evidence:
+
+| Gate                     | Commands and outcome                                                                                                                                                                                                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Signed builds            | `./build-app.sh --require-identity` and `./build-app.sh --require-identity --debug`: pass; both bundles satisfy their designated requirement with the pinned identity. CryptoKit and native adapter code compile.                                                                                      |
+| Selftest                 | `./scripts/test.sh` and `NOW_TEST_CONFIGURATION=release ./scripts/test.sh`: pass, all suites green, including native model/color boundary fixtures.                                                                                                                                                    |
+| Core parity              | `./scripts/test-core.sh` and `NOW_TEST_CONFIGURATION=release ./scripts/test-core.sh`: **217 checks each**, with strict concurrency and warnings as errors.                                                                                                                                             |
+| Analysis                 | `./scripts/setup-analysis.sh`, `./scripts/analyze.sh`, and `./scripts/analyze.sh --report`: pass; five compiler configurations have zero warnings; the report contains exactly the 16 reviewed lint findings, including builder complexity 24 / length 115. No baseline or threshold changes.          |
+| Failure probes           | `python3 scripts/analysis-smoke.py`: all 17 probes pass. `python3 scripts/analysis-smoke.py --lint-only`: all four probes pass after the SourceKit lookup fix.                                                                                                                                         |
+| Module ownership         | `python3 scripts/module-boundary-smoke.py --parse`: all ten configurations pass.                                                                                                                                                                                                                       |
+| Historical parser        | `python3 scripts/parser-performance-smoke.py --compare-revision d01dbd7`: pass; both full materialization digests match exactly.                                                                                                                                                                       |
+| Notification and startup | `python3 scripts/notification-smoke.py --all-smokes`: pass, including recovery, lifecycle/races, fresh/existing/legacy startup, background key focus and restored accessory policy.                                                                                                                    |
+| Reminder/menu            | `python3 scripts/reminder-state-smoke.py`: pass, including paused agenda, menu tracking, timer lifetime and quit/settings dialog checks.                                                                                                                                                               |
+| Cache                    | `python3 scripts/calendar-cache-smoke.py`: pass across all twelve phases, including real restarts, accepted-empty recovery, failed replacement quarantine, private permissions and AppKit quit draining writes.                                                                                        |
+| Transport/workload       | `python3 scripts/calendar-fetch-smoke.py` and `python3 scripts/feed-workload-smoke.py`: pass, including the real 60-second resource deadline, streaming limits/cancellation and deterministic cross-process diagnostics.                                                                               |
+| Signed updater           | `./scripts/update-smoke.sh --app outputs/now.app`: pass, all thirteen scenarios plus post-staging signature/version rejection.                                                                                                                                                                         |
+| GUI                      | Launched `outputs/now.app`; confirmed the release executable remains running, Settings responds, fullscreen preview opens/dismisses, and no permission prompt appeared during interaction. Quiet startup and native-menu/focus behavior are additionally verified by the isolated hosted suites above. |
+| Documentation            | `npm ci`, `npm run format-docs`, and `npm run check-docs`: pass after this evidence update.                                                                                                                                                                                                            |
+
+Observed artifacts: release executable **2,700,672 bytes**, release ZIP **2,043,602 bytes**, debug
+executable **9,964,912 bytes**. The successful incremental SwiftPM release/debug build steps
+reported **12.23 s / 4.57 s**, excluding icon generation, signing and ZIP assembly. These are host
+observations, not performance guarantees or clean-build comparisons.
+
+Historical and working parser digests:
+
+- 7,000 long-description events: `560605def0f8c9ae7791aefaca660eacc830be53a7cec48b970b553ad21f9b94`.
+- 5,000 coincident overrides: `3140f24598e0197abf36154a16a1a326eae74897b216e5f5f9205840274c032d`.
+
+Observed historical/current fixture times were 6.264/6.990 s and 0.464/0.376 s respectively;
+concurrent validation workloads make these unsuitable for a performance conclusion.
+
+Signed builds and signed/loopback fixtures ran outside the agent sandbox as required. The portable
+SwiftPM core/module commands also required unsandboxed execution because nested manifest sandboxing
+and user caches were blocked; their unchanged commands passed there. An initial SDK mismatch message
+was secondary to denied module-cache writes, not an incompatible compiler. GUI automation initially
+timed out, then successfully attached to the running release bundle. Synthetic suites used
+disposable data; no installed calendar or preference data was seeded. The GUI check used the
+existing profile without editing its settings or calendars.
+
+All requested macOS acceptance gates pass. Changes remain local on the feature branch; no commit,
+push, PR, merge or release was performed in this validation stage. Product/shell decisions above are
+the user's next step.

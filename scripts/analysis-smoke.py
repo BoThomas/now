@@ -38,6 +38,12 @@ with tempfile.TemporaryDirectory(prefix="now-analysis-") as directory:
     if LINT_ONLY:
         # Portable linter probes use the same pinned configuration and empty
         # disposable baseline, without requiring an Apple SDK typecheck.
+        if sys.platform == "darwin":
+            developer = Path(subprocess.check_output(["xcode-select", "-p"], text=True).strip())
+            frameworks = developer / "usr/lib"
+            if (frameworks / "sourcekitdInProc.framework").is_dir():
+                existing = environment.get("DYLD_FRAMEWORK_PATH")
+                environment["DYLD_FRAMEWORK_PATH"] = str(frameworks) + (":" + existing if existing else "")
         linter = environment["SWIFTLINT"]
         assert subprocess.check_output([linter, "version"], text=True).strip() == "0.65.1"
 

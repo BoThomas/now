@@ -606,7 +606,7 @@ final class AppStore: ObservableObject {
         let requestID = fetchTracker.begin(subscriptionID: subscriptionID)
         Task { [weak self] in
             await self?.restoreCachedEvents()
-            let results = await Self.performFetch(requests: [FetchRequest(subscription: subscription, requestID: requestID)])
+            let results = await Self.performFetch(requests: [NowCore.FetchRequest(subscription: subscription, requestID: requestID)])
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.merge(results: results)
@@ -825,7 +825,7 @@ final class AppStore: ObservableObject {
         let requestID = beginFullRefresh(subscriptionIDs: enabled.map(\.id))
         Task { [weak self] in
             await self?.restoreCachedEvents()
-            _ = await Self.performFetch(requests: enabled.map { FetchRequest(subscription: $0, requestID: requestID) }) { [weak self] result in
+            _ = await Self.performFetch(requests: enabled.map { NowCore.FetchRequest(subscription: $0, requestID: requestID) }) { [weak self] result in
                 await self?.merge(results: [result])
             }
             await MainActor.run { [weak self] in
@@ -844,7 +844,7 @@ final class AppStore: ObservableObject {
 
     /// A rolling group bounds parsing work; the shared download gate also
     /// bounds overlap between full refreshes and targeted resyncs.
-    nonisolated static func performFetch(requests: [FetchRequest], onResult: @escaping @Sendable (FetchResult) async -> Void = { _ in }) async -> [FetchResult] {
+    nonisolated static func performFetch(requests: [NowCore.FetchRequest], onResult: @escaping @Sendable (FetchResult) async -> Void = { _ in }) async -> [FetchResult] {
         await withTaskGroup(of: FetchResult.self) { group in
             var remaining = requests.makeIterator()
             for _ in 0..<maxConcurrentFeeds {
@@ -864,7 +864,7 @@ final class AppStore: ObservableObject {
         }
     }
 
-    nonisolated private static func fetch(_ request: FetchRequest) async -> FetchResult {
+    nonisolated private static func fetch(_ request: NowCore.FetchRequest) async -> FetchResult {
         let transport = await fetchTransport(request.subscription.url)
         let (data, error) = (transport.data, transport.error)
         if let error { return FetchResult(subscription: request.subscription, events: [], error: error, requestID: request.requestID, isOffline: transport.isOffline) }
@@ -873,7 +873,7 @@ final class AppStore: ObservableObject {
     }
 
     /// Shared by network ingestion and the pure fetch-to-merge regression tests.
-    nonisolated static func decodeFeed(_ data: Data, request: FetchRequest, now: Date) -> FetchResult {
+    nonisolated static func decodeFeed(_ data: Data, request: NowCore.FetchRequest, now: Date) -> FetchResult {
         let sub = request.subscription
         guard data.count <= maxFeedBytes else {
             return FetchResult(subscription: sub, events: [], error: "Feed larger than \(maxFeedBytes / 1_000_000) MB", requestID: request.requestID)
