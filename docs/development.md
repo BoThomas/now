@@ -161,3 +161,21 @@ gap/overlap expansion, exact work budgets, and link policy with injected candida
 access live preferences, calendars, network or UI. Linux compiler and system-library versions must
 be recorded with validation evidence; Linux success does not establish Windows support or macOS
 GUI/signing health. Full macOS validation still runs on the signing Mac.
+
+The first Linux gate passed with Swift 6.3.3 (official Ubuntu 22.04 x86_64 distribution) on Debian
+12, glibc 2.36 and tzdata 2026b. This devbox has the toolchain at
+`/opt/swift-6.3.3-RELEASE-ubuntu22.04`, with `swift`/`swiftc` on PATH through `/usr/local/bin`. The
+[official archive](https://download.swift.org/swift-6.3.3-release/ubuntu2204/swift-6.3.3-RELEASE/swift-6.3.3-RELEASE-ubuntu22.04.tar.gz)
+was verified using its detached `.sig` and [Swift signing keys](https://swift.org/keys/all-keys.asc)
+before extraction. System build/runtime dependencies were installed with:
+
+```bash
+apt-get update
+apt-get install -y --no-install-recommends build-essential binutils gnupg ca-certificates \
+  libcurl4-openssl-dev libedit-dev libicu-dev libncurses-dev libpython3.11 \
+  libsqlite3-dev libxml2-dev zlib1g-dev pkg-config tzdata zsh
+```
+
+Use an appropriate official Swift distribution and dependencies on other hosts. The recorded run
+proves this core slice on that devbox; it is not a supported-Linux-desktop matrix. No toolchain,
+download archive or signing key is checked into the repository.

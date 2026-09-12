@@ -1,6 +1,7 @@
 # Current work target: cross-platform groundwork via core extraction
 
-Status: first core slice implemented; initial Linux execution and macOS acceptance gates pending.
+Status: first core slice committed/pushed; initial Linux gate passed. macOS acceptance gates remain
+pending before merge or release.
 
 Branch: `feat/cross-platform-core`. Starting point: build/test modernization merged through PR #16,
 merge commit `d01dbd786159bc63b088dfc1254c880d088eccd9`.
@@ -71,20 +72,20 @@ the macOS UI, and a general platform-service abstraction without a concrete cons
 - [x] Keep historical parser comparison usable across the file split, comparing an explicitly pinned
       pre-extraction revision against current full materialization output.
 - [x] Update development instructions and affected AutoWiki architecture pages.
-- [ ] Run available groundwork checks, document unavailable macOS gates, then commit and push as
+- [x] Run available groundwork checks, document unavailable macOS gates, then commit and push as
       requested. A pushed branch is not a verified macOS release or permission to merge.
 
 ## Early headless Linux gate
 
-- [ ] Install a supported official Swift Linux toolchain and system dependencies in the devbox;
-      record compiler/OS/architecture and reproducible commands. Keep toolchain artifacts ignored or
+- [x] Install an official Swift Linux toolchain and system dependencies in the devbox; record
+      compiler/OS/architecture and reproducible commands. Keep toolchain artifacts ignored or
       outside the repository. Do not use the macOS `xcrun`/arm64 wrapper for Linux.
-- [ ] Build and run the core-only target in debug and release, in Swift 5 mode, with complete strict
+- [x] Build and run the core-only target in debug and release, in Swift 5 mode, with complete strict
       concurrency checking. Compiler warnings are failures; no unsafe annotations to silence them.
-- [ ] Exercise complete/truncated envelopes, CRLF/folding, parser limits, timezone mapping, DST gaps
+- [x] Exercise complete/truncated envelopes, CRLF/folding, parser limits, timezone mapping, DST gaps
       and overlaps, exact recurrence budget boundaries, raw override identities and link policy with
       synthetic input and explicit clocks/zones. Compare expected results rather than timing claims.
-- [ ] Record unsupported APIs or platform differences as findings, fix only justified seams, and
+- [x] Record unsupported APIs or platform differences as findings, fix only justified seams, and
       document the actual boundary proven. Native text URL detection and full feed materialization
       are not established by this runner.
 
@@ -157,3 +158,35 @@ selftest, analysis report and full analysis smoke were attempted but cannot star
 x86_64 devbox (initially no zsh or Swift; no macOS SDK, AppKit, GUI or signing keychain). No macOS
 build, runtime equivalence or lint pass is claimed. Core compilation/execution follows the requested
 groundwork commit/push checkpoint.
+
+### First Linux results
+
+Groundwork commit `686b3e9` was pushed to `origin/feat/cross-platform-core` before these runs.
+
+- Host: Debian GNU/Linux 12, x86_64; glibc `2.36-9+deb12u14`, system ICU `72.1-3+deb12u1`, tzdata
+  `2026b-0+deb12u1`.
+- Compiler: official Swift `6.3.3` (`swift-6.3.3-RELEASE`, Ubuntu 22.04 x86_64 distribution),
+  reporting target `x86_64-unknown-linux-gnu`, compiling this package in Swift 5 mode. This records
+  the tested Debian/Ubuntu-toolchain combination, not general distribution support.
+- Toolchain detached signature verified against Swift's official keys; signing fingerprint
+  `52BB7E3DE28A71BE22EC05FFEF80A866B47A981F`. Installed outside the repository at
+  `/opt/swift-6.3.3-RELEASE-ubuntu22.04`; `swift` and `swiftc` are available via `/usr/local/bin`.
+- `./scripts/test-core.sh`: passed all 53 checks, with complete strict concurrency and warnings as
+  errors. `NOW_TEST_CONFIGURATION=release ./scripts/test-core.sh`: also passed all 53.
+- `python3 scripts/analysis-smoke.py --compiler-only`: all 12 probes passed, including core/shell
+  warning rejection, inaccessible core API rejection, fixture discovery, baseline line shifts and
+  report-mode compiler failures.
+- `swift package describe --type json` was checked for shipping, core, selftest, notification,
+  reminder, cache, fetch, workload, parser and updater selections. All ten have exactly one core
+  target/dependency and no core source in their consumer target; the core runner contains only its
+  own fixture. No manifest warnings were emitted.
+- No Linux-specific algorithm fix, unsafe concurrency annotation or baseline relaxation was needed.
+  Apple's text detector remains an explicit adapter; full `ICSBuilder` output, app models,
+  notifications and disk recovery are still outside the proven Linux boundary.
+- With zsh installed, required macOS checks were attempted again: the signed build stops at missing
+  `xcrun`; the selftest wrapper also needs `xcrun` and the Apple arm64 toolchain; analysis stops at
+  missing pinned SwiftLint. macOS SDK/GUI/signing, full lint smoke, and historical materialization
+  digest comparison remain unverified. Installing Linux tools cannot provide those gates.
+
+Next implementation slice: models/filtering and their color/default-decoding seams. Complete the
+macOS acceptance checklist on the signing Mac before merging this extraction.
