@@ -1,12 +1,16 @@
 # Current work target: cross-platform groundwork via core extraction
 
-Status: shared calendar/cache/reminder policy and POSIX storage are implemented and validated on
-Linux and macOS. The macOS acceptance gates pass after two native compile fixes and one analysis
-tooling fix. Product/platform shell decisions remain before a shipping port; no merge or release was
-performed.
+Status: complete and merged into `main` through PR #17, merge commit `21a8452`. Shared
+calendar/cache/reminder policy and POSIX storage are implemented and validated on Linux and macOS.
+All macOS acceptance gates passed. No portability prerequisite blocks new macOS features; remaining
+product/platform shell decisions and implementation belong to a future shipping port.
 
-Branch: `feat/cross-platform-core`. Starting point: build/test modernization merged through PR #16,
-merge commit `d01dbd786159bc63b088dfc1254c880d088eccd9`.
+Completed branch: `feat/cross-platform-core`. Starting point: build/test modernization merged
+through PR #16, merge commit `d01dbd786159bc63b088dfc1254c880d088eccd9`.
+
+The implementation and validation notes below preserve the sequence and authorization at each
+historical checkpoint. Their references to pending commits or merges describe that stage, not the
+current repository state.
 
 ## Objective and sequence
 
@@ -149,8 +153,12 @@ Windows/Linux shell is added in this stage.
 
 ## Handoff
 
-Implementation and validation evidence will be recorded here as work proceeds. Commit and push are
-authorized by the current request; no merge or release is authorized.
+Groundwork and macOS acceptance are complete and merged. Continue macOS feature development with
+shared policy in `NowCore` and native integration in the macOS shell, following the required checks
+in `AGENTS.md`. Core changes also require debug/release core tests and module-boundary validation.
+Windows toolchain/storage validation and Linux/Windows shell, notification, packaging and update
+work remain future port tasks; they do not block macOS features. No release is part of this status
+update.
 
 ### Groundwork checkpoint
 
@@ -287,10 +295,11 @@ typechecking against the actual built `NowCore` module with complete concurrency
 errors. This verifies the extracted cache API/convenience initializer boundary without pretending to
 typecheck AppKit/EventKit code on Linux.
 
-The Linux-verifiable shared-policy groundwork is complete for this plan. Before another live-state
-ownership refactor or merge, run the macOS acceptance checklist, including old/new full parser
-digests, cache recovery, notification lifecycle, focus/liveness and signed updater smoke. Those
-tests guard platform ordering that a Linux-only model cannot prove.
+The Linux-verifiable shared-policy groundwork is complete for this plan. The macOS acceptance
+checklist was subsequently completed as recorded below, including old/new full parser digests, cache
+recovery, notification lifecycle, focus/liveness and signed updater smoke. Future live-state
+ownership refactors must retain the relevant checks: they guard platform ordering that a Linux-only
+model cannot prove.
 
 After that, decide the first port's minimum feature set and run actual target-platform spikes:
 native text URL discovery, tray/menu, background reminder focus, notification actions after restart,
@@ -355,6 +364,7 @@ timed out, then successfully attached to the running release bundle. Synthetic s
 disposable data; no installed calendar or preference data was seeded. The GUI check used the
 existing profile without editing its settings or calendars.
 
-All requested macOS acceptance gates pass. Changes remain local on the feature branch; no commit,
-push, PR, merge or release was performed in this validation stage. Product/shell decisions above are
-the user's next step.
+All requested macOS acceptance gates passed. At this validation checkpoint, changes were local on
+the feature branch and no commit, push, PR, merge or release had been performed in that stage. The
+fixes and acceptance record were subsequently committed as `80e932e` and merged through PR #17
+(`21a8452`). Product/shell decisions above remain next steps when port development resumes.
