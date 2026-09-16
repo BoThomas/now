@@ -1768,6 +1768,15 @@ enum SelfTest {
         c.expect(!AlertController.keystrokeGuardActive(presentedAt: now.addingTimeInterval(-1.0), now: now, interval: 1.0), "guard expired at the boundary")
         c.expect(!AlertController.keystrokeGuardActive(presentedAt: now.addingTimeInterval(-4), now: now, interval: 1.0), "guard long expired")
 
+        // Fullscreen display choice: focused follows the key-window display
+        // (already the main display whenever nothing has focus); the pinned
+        // preference prefers the main display with focused as its fallback.
+        c.expect(AlertController.preferredDisplay(preference: .focused, focused: 1, main: 2) == 1, "focused preference follows the focused display")
+        c.expect(AlertController.preferredDisplay(preference: .focused, focused: nil, main: 2) == 2, "focused preference degrades to the main display")
+        c.expect(AlertController.preferredDisplay(preference: .mainDisplay, focused: 1, main: 2) == 2, "pinned preference uses the main display")
+        c.expect(AlertController.preferredDisplay(preference: .mainDisplay, focused: 1, main: nil) == 1, "pinned preference falls back to the focused display")
+        c.expect(AlertController.preferredDisplay(preference: .focused, focused: nil, main: nil) == nil, "no display means no panel frame")
+
         // Tomorrow 09:00 across both DST transitions (Berlin): calendar
         // arithmetic, not +86,400 s.
         let berlin = TimeZone(identifier: "Europe/Berlin")!
@@ -1808,6 +1817,20 @@ enum SelfTest {
             let decoded = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"menuMeetingLimit\":\(limit)}".utf8))
             c.expect(decoded?.menuMeetingLimit == 5, "unsupported menu limit falls back to five")
         }
+        var screenChoice = AppSettings()
+        screenChoice.reminderScreen = .mainDisplay
+        let screenData = try? JSONEncoder().encode(screenChoice)
+        let screenBack = screenData.flatMap { try? JSONDecoder().decode(AppSettings.self, from: $0) }
+        c.expect(screenBack?.reminderScreen == .mainDisplay, "fullscreen display choice round trips")
+        let legacyScreen = try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        c.expect(legacyScreen?.reminderScreen == .focused, "existing installs keep the focused display default")
+        let junkScreen = try? JSONDecoder().decode(AppSettings.self, from: Data("{\"reminderScreen\":\"sideways\"}".utf8))
+        c.expect(junkScreen?.reminderScreen == .focused, "unknown display choice falls back to focused")
+        var displaySetup = AppSettings()
+        displaySetup.reminderDelivery = .fullscreen
+        displaySetup.reminderScreen = .mainDisplay
+        c.expect(SetupAssistantState.applying(displaySetup, to: AppSettings()).reminderScreen == .mainDisplay, "setup commits the chosen fullscreen display")
+        c.expect(SetupAssistantState.applying(AppSettings(), to: displaySetup).reminderScreen == .focused, "setup without the display question keeps the focused default")
         let emptyCases: [(Int, Int, Bool, Bool, Bool, String)] = [
             (0, 0, false, false, false, "No calendars added"),
             (2, 0, false, false, false, "No calendars enabled"),

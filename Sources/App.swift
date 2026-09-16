@@ -350,7 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.contentView = NSHostingView(rootView: SetupAssistantView(assistant: setupAssistant, store: store,
-                alerts: alertController, notifications: notifications, onFinish: { [weak self] in
+                alerts: alertController, notifications: notifications, multiDisplay: NSScreen.screens.count > 1, onFinish: { [weak self] in
                     self?.finishInitialSetup()
                 }))
             window.center()
@@ -446,7 +446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         if updateWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 424), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 520), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: UpdateView(controller: updateController))
             window.delegate = self

@@ -32,6 +32,8 @@ final class NotificationPreview: NSObject, NSApplicationDelegate {
         window.contentView = host
         host.frame = NSRect(origin: .zero, size: size)
         host.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        host.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
         guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { fatalError("No render bitmap") }
         host.cacheDisplay(in: host.bounds, to: bitmap)
@@ -39,6 +41,54 @@ final class NotificationPreview: NSObject, NSApplicationDelegate {
         try! FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         try! bitmap.representation(using: .png, properties: [:])!.write(to: output.appendingPathComponent(name + ".png"))
     }
+    static func verifyPopupLayout() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 520),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        func fixture(rows: Int) -> some View {
+            VStack {
+                PopupScrollView(maximumHeight: 200) {
+                    VStack(alignment: .leading) {
+                        ForEach(0..<rows, id: \.self) { Text("Overflow test row \($0)") }
+                    }
+                }
+                Text("Pinned footer").frame(height: 30)
+            }
+            .padding(20).frame(width: 460).fixedSize(horizontal: false, vertical: true)
+            .background(PopupWindowSizing())
+        }
+        let host = NSHostingView(rootView: fixture(rows: 60))
+        window.contentView = host
+        func settle() {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            host.layoutSubtreeIfNeeded()
+        }
+        func scrollView(in view: NSView) -> PopupScrollContainer? {
+            if let scroll = view as? PopupScrollContainer { return scroll }
+            return view.subviews.compactMap { scrollView(in: $0) }.first
+        }
+        settle()
+        guard let scroll = scrollView(in: host), let document = scroll.documentView else {
+            fatalError("Popup must expose its native scroll view")
+        }
+        precondition(scroll.scrollerStyle == .legacy && scroll.autohidesScrollers)
+        precondition(scroll.verticalScroller?.isHidden == false, "Overflow scrollbar must be visible before interaction")
+        precondition(document.frame.height > scroll.contentSize.height)
+        precondition(abs(window.contentLayoutRect.height - 278) < 4, "Popup must cap content and keep footer visible")
+        let tallHeight = window.frame.height
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: document.frame.height - scroll.contentSize.height))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        precondition(abs(scroll.documentVisibleRect.maxY - document.frame.maxY) < 2, "Final row must be reachable")
+        host.rootView = fixture(rows: 2)
+        settle()
+        precondition(window.frame.height < tallHeight - 100, "Short content must shrink its window")
+        precondition(scroll.verticalScroller?.isHidden == true, "Short content must hide the scroll track")
+        precondition(scroll.documentVisibleRect.minY == 0, "Shrinking content must clamp the old scroll offset")
+        window.close()
+        print("POPUP LAYOUT OK — bounded height, visible scrollbar, reachable last row, content resizing")
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         var settings = AppSettings()
         settings.reminderDelivery = .notification
@@ -77,6 +127,333 @@ final class NotificationPreview: NSObject, NSApplicationDelegate {
         }
     }
     func show() { NSApp.setActivationPolicy(.regular); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+}
+
+/// Manual, offline review of every update-window state: the GUI counterpart
+/// to the guide/update assertions in notification-smoke.swift. Fake transport,
+/// synthetic store, scripted guide history: no network, no Notification
+/// Center, no real preferences. The full staging/install/relaunch flow stays
+/// with scripts/update-ui-demo.sh.
+@MainActor
+final class UpdateScreensPreview: NSObject, NSApplicationDelegate {
+    private let root: URL
+    private var store: AppStore!
+    private var updates: UpdateController!
+    private var preview: NSWindow!
+    private var panel: NSWindow!
+
+    init(root: URL) { self.root = root }
+
+    /// The preview bundle is LSUIElement (no menu bar for ⌘Q). Closing both
+    /// windows ends the tour (and the wrapper's cleanup).
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    static func run(root: URL) {
+        let app = NSApplication.shared
+        let delegate = UpdateScreensPreview(root: root)
+        app.delegate = delegate
+        app.run()
+        withExtendedLifetime(delegate) {}
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        store = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("update-screens-cache")),
+                         initialState: Persisted())
+        let transport = FakeNotifications()
+        store.connectNotifications(ReminderNotificationController(transport: transport))
+        updates = UpdateController(store: store)
+        NSApp.setActivationPolicy(.regular)
+        preview = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 520),
+                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        preview.isReleasedWhenClosed = false
+        preview.title = "now · Update window preview"
+        preview.contentView = NSHostingView(rootView: UpdateView(controller: updates).environment(\.controlActiveState, .active))
+        preview.center()
+        let previewFrame = preview.frame
+        panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 560),
+                         styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.title = "Update screens"
+        panel.setFrameOrigin(NSPoint(x: previewFrame.minX - 340, y: previewFrame.minY))
+        panel.contentView = NSHostingView(rootView: UpdateScreensPanel(updates: updates) { [weak self] content, guides, fluff in
+            self?.present(content, guides: guides, fluff: fluff)
+        })
+        present(.installed(version: "9.9.9"), guides: .notificationsAndInfo)
+        panel.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func present(_ content: UpdateWindowContent, guides: UpdateScreensPanel.GuideCombo) {
+        present(content, guides: guides, fluff: false)
+    }
+
+    private func present(_ content: UpdateWindowContent, guides: UpdateScreensPanel.GuideCombo, fluff: Bool) {
+        // Scripted guide history in a throwaway domain: which cards count as
+        // newly introduced decides what the What's New window shows.
+        let domain = "now-update-screens-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: domain)!
+        var history = FeatureGuideState()
+        switch guides {
+        case .none: history.encountered = [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID]
+        case .infoOnly: history.encountered = [FeatureGuideCatalog.notificationsID]
+        case .notificationsAndInfo: history.encountered = []
+        }
+        StoredPreferences.save(history, key: FeatureGuideController.storageKey, label: "Scripted guide history", defaults: defaults)
+        // Playground-only overflow fixture: a deliberately tall card appended
+        // to the catalog so the page scroll and persistent scrollbar can be
+        // verified. Never part of FeatureGuideCatalog itself.
+        let catalog = fluff ? FeatureGuideCatalog.entries + [
+            FeatureGuideDefinition(id: "playground-scroll-fluff", content: .information(
+                title: "Overflow test card",
+                message: (0..<9).map { "Fluff paragraph \($0 + 1). This paragraph exists only to push this card past the page height so scrolling and the persistent scrollbar can be checked by hand. Scroll to the end: this last line must be fully visible, and the navigation buttons must remain in place." }.joined(separator: "\n\n")
+            ))
+        ] : FeatureGuideCatalog.entries
+        let controller = FeatureGuideController(defaults: defaults, catalog: catalog)
+        controller.startupHealthAcknowledged(installedUpdate: true)
+        store.featureGuides = controller
+        defaults.removePersistentDomain(forName: domain)
+        updates.windowContent = content
+        preview.makeKeyAndOrderFront(nil)
+    }
+}
+
+/// State picker for the manual update-window preview. See UpdateScreensPreview.
+struct UpdateScreensPanel: View {
+    enum GuideCombo: String, CaseIterable, Identifiable {
+        case none = "No cards"
+        case infoOnly = "Display card only"
+        case notificationsAndInfo = "Notifications + display"
+        var id: String { rawValue }
+    }
+
+    @ObservedObject var updates: UpdateController
+    let show: (UpdateWindowContent, GuideCombo, Bool) -> Void
+    @State private var guides: GuideCombo = .notificationsAndInfo
+    @State private var scrollFluff = false
+    @State private var longReleaseNotes = false
+
+    private var manifest: UpdateManifest {
+        UpdateManifest(version: "9.9.9",
+                       zipURL: URL(string: "http://127.0.0.1:1/now-v9.9.9.zip")!,
+                       assetSize: 12_000_000,
+                       publishedAt: Date().addingTimeInterval(-2 * 86_400),
+                       notes: releaseNotes)
+    }
+
+    private var releaseNotes: String {
+        let summary = "A short intro paragraph that spans the summary line.\n\n### Added\n- Pick your reminder display\n- Release notes render headings and lists\n\n### Fixed\n- Install row in Settings wraps when narrow"
+        guard longReleaseNotes else { return summary }
+        let sections = ["Added", "Improved", "Fixed"].map { heading in
+            "### \(heading)\n" + (1...12).map { index in
+                "- Overflow example \(index): A longer release-note entry that wraps across multiple lines so you can check the changelog scroll area while the update status and action buttons stay visible."
+            }.joined(separator: "\n")
+        }
+        return summary + "\n\n" + sections.joined(separator: "\n\n")
+            + "\n\nEnd of long test changelog. This final line should be fully reachable."
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Guide cards (installed / What’s New)").font(.headline)
+                Picker("Guide cards", selection: $guides) {
+                    ForEach(GuideCombo.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Text("Update available").font(.headline)
+                Toggle("Use long test changelog", isOn: $longReleaseNotes)
+                    .help("Adds long release notes to all three update-available states. Updates the current preview immediately.")
+                    .onChange(of: longReleaseNotes) { _ in
+                        if case .available = updates.windowContent {
+                            updates.windowContent = .available(manifest)
+                        }
+                    }
+                scene("Preparing the update…") {
+                    updates.smokeStagedVersion = nil
+                    updates.smokeIsVerifyingInstall = false
+                    show(.available(manifest), guides, scrollFluff)
+                }
+                scene("Signature verified · ready to install") {
+                    updates.smokeStagedVersion = manifest.version
+                    updates.smokeIsVerifyingInstall = false
+                    show(.available(manifest), guides, scrollFluff)
+                }
+                scene("Verifying update… (buttons disabled)") {
+                    updates.smokeStagedVersion = manifest.version
+                    updates.smokeIsVerifyingInstall = true
+                    show(.available(manifest), guides, scrollFluff)
+                }
+                Text("Result windows").font(.headline)
+                Toggle("Append tall overflow test card", isOn: $scrollFluff)
+                    .help("Adds a deliberately long card page so scrolling and the persistent scrollbar can be checked.")
+                scene("You're up to date") { show(.upToDate, guides, scrollFluff) }
+                scene("Update installed") { show(.installed(version: "9.9.9"), guides, scrollFluff) }
+                scene("What’s New (manual)") { show(.features(version: UpdateLogic.currentVersion), guides, scrollFluff) }
+                Text("Problems").font(.headline)
+                scene("Check failed (Try Again)") {
+                    show(.problem(title: "Couldn’t check for updates",
+                                  message: "The update server couldn’t be reached. Check your internet connection and try again.",
+                                  retry: .check), guides, scrollFluff)
+                }
+                scene("Preparation failed") {
+                    show(.problem(title: "Couldn’t prepare the update",
+                                  message: "The downloaded update didn’t pass its signature check.",
+                                  retry: .preparation), guides, scrollFluff)
+                }
+                scene("Install refused (no retry)") {
+                    show(.problem(title: "Update not installed",
+                                  message: "The new version didn’t start correctly. The previous version keeps running.",
+                                  retry: nil), guides, scrollFluff)
+                }
+                Text("Interactions are real (fake transport): the in-card Enable Notifications… runs the permission flow, Next/Complete apply the current card, Skip This Version writes settings. The real staging/install/relaunch tour lives in scripts/update-ui-demo.sh.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+        }
+        .frame(width: 320, height: 560)
+    }
+
+    private func scene(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Text(title).frame(maxWidth: .infinity, alignment: .leading) }
+            .buttonStyle(.bordered)
+    }
+}
+
+/// Manual, offline walk-through of first-run setup: the real SetupAssistantView
+/// on a disposable store with fake notification transport. The panel flips the
+/// two dimensions setup reacts to (multiple displays, notification permission)
+/// and restarts the assistant at any time. Finishing opens the sandboxed
+/// Settings so the committed choices can be reviewed. Nothing here touches
+/// real preferences, calendars, or Notification Center.
+@MainActor
+final class SetupScreensPreview: NSObject, ObservableObject, NSApplicationDelegate {
+    private let root: URL
+    private var store: AppStore!
+    private var transport: FakeNotifications!
+    private var notifications: ReminderNotificationController!
+    private var alerts: AlertController!
+    private var assistant: SetupAssistantController!
+    private var assistantWindow: NSWindow?
+    private var settingsWindow: NSWindow?
+    private var panel: NSWindow!
+
+    /// Mirrors the real Mac at launch; flip to review the conditional row.
+    @Published var multiDisplay: Bool = NSScreen.screens.count > 1 {
+        didSet { if oldValue != multiDisplay { showAssistant() } }
+    }
+    @Published var notificationsAllowed = false {
+        didSet {
+            if oldValue != notificationsAllowed {
+                transport.status.authorization = notificationsAllowed ? .allowed : .notRequested
+                notifications.refreshPermission(force: true)
+            }
+        }
+    }
+
+    init(root: URL) { self.root = root }
+
+    static func run(root: URL) {
+        let app = NSApplication.shared
+        let delegate = SetupScreensPreview(root: root)
+        app.delegate = delegate
+        app.run()
+        withExtendedLifetime(delegate) {}
+    }
+
+    /// The preview bundle is LSUIElement (no menu bar for ⌘Q). Closing the
+    /// windows ends the tour (and the wrapper's cleanup).
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        restart()
+        panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 300),
+                         styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.title = "Fresh install"
+        panel.contentView = NSHostingView(rootView: SetupScreensPanel(preview: self))
+        if let frame = assistantWindow?.frame {
+            panel.setFrameOrigin(NSPoint(x: frame.minX - 340, y: frame.minY))
+        } else {
+            panel.center()
+        }
+        panel.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Fresh disposable state: new store, new draft, assistant back to step 1.
+    func restart() {
+        settingsWindow?.close()
+        settingsWindow = nil
+        let domain = "now-setup-screens-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: domain)!
+        store = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("setup-screens-cache")),
+                         initialState: Persisted())
+        transport = FakeNotifications()
+        transport.status.authorization = notificationsAllowed ? .allowed : .notRequested
+        notifications = ReminderNotificationController(transport: transport)
+        store.connectNotifications(notifications)
+        alerts = AlertController()
+        alerts.store = store
+        store.alertController = alerts
+        store.onAlert = { [weak self] in self?.alerts.present($0) }
+        assistant = SetupAssistantController(isNewProfile: true, settings: AppSettings(), defaults: defaults)
+        showAssistant()
+    }
+
+    func showAssistant() {
+        assistantWindow?.close()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 430),
+                              styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        // Closed windows must stay alive: restart reopens or replaces them,
+        // and the default release-on-close would leave dangling references.
+        window.isReleasedWhenClosed = false
+        window.title = "Set up now (preview)"
+        window.contentView = NSHostingView(rootView: SetupAssistantView(assistant: assistant, store: store,
+            alerts: alerts, notifications: notifications, multiDisplay: multiDisplay, onFinish: { [weak self] in
+                self?.setupFinished()
+            }))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        assistantWindow = window
+    }
+
+    /// Completing setup opens the sandboxed Settings, like the real finish
+    /// path opens source Settings.
+    private func setupFinished() {
+        let window = settingsWindow ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 940, height: 720),
+                                                styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.title = "now · Settings (sandbox)"
+        window.contentView = NSHostingView(rootView: SettingsView().environmentObject(store).environmentObject(alerts)
+            .environmentObject(UpdateController(store: store)))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        settingsWindow = window
+        if panel != nil { panel.orderFrontRegardless() }
+    }
+}
+
+/// Controls for the manual first-run preview. See SetupScreensPreview.
+struct SetupScreensPanel: View {
+    @ObservedObject var preview: SetupScreensPreview
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Environment").font(.headline)
+            Toggle("Multi-display Mac", isOn: $preview.multiDisplay)
+                .help("Shows the conditional Show on question on the reminders step (only appears with Fullscreen selected).")
+            Toggle("Notifications allowed", isOn: $preview.notificationsAllowed)
+                .help("Flips the sandboxed permission state the setup reacts to.")
+            Button("Restart fresh setup") { preview.restart() }
+                .buttonStyle(.bordered)
+            Text("Everything is sandboxed: fake transport, throwaway preferences. Completing setup opens the sandboxed Settings with your choices applied. Close all windows to quit.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(width: 320)
+    }
 }
 
 /// Runs the actual AppDelegate in a disposable domain with the build harness's

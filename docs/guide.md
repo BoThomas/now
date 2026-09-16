@@ -22,6 +22,9 @@ Open **Settings → Reminder**.
 
 Meetings starting together can share a notification. **Choose Meeting…** opens your agenda.
 
+With two displays, fullscreen reminders cover the one you are working on. **Show on → Main Display**
+pins them to your main display instead — handy when a large monitor is your home base.
+
 You can also use notifications only during another meeting, or for meetings already running when
 your Mac wakes. **Hide meeting details** keeps notification text private.
 

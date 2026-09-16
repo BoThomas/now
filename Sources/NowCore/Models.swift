@@ -36,6 +36,9 @@ package struct CalendarSubscription: Codable, Identifiable, Equatable, Sendable 
 }
 
 package enum ReminderDelivery: String, Codable, CaseIterable, Sendable { case fullscreen, notification }
+/// Which display a fullscreen reminder covers: the one receiving keyboard
+/// focus or the main display (`NSScreen.screens.first`).
+package enum ReminderScreen: String, Codable, CaseIterable, Sendable { case focused, mainDisplay }
 package enum CatchUpDelivery: String, Codable, CaseIterable, Sendable { case normal, notification, skip }
 package enum InMeetingDelivery: String, Codable, CaseIterable, Sendable { case normal, notification, suppress }
 
@@ -66,6 +69,10 @@ package struct AppSettings: Codable, Equatable, Sendable {
     package var suppressRemindersDuringMeetings = false
     package var includeBrowserMeetings = false
     package var reminderDelivery: ReminderDelivery = .fullscreen
+    /// Display choice for fullscreen reminders: the display receiving keyboard
+    /// focus, or the main display. Absent/unknown values (new installs,
+    /// updating versions, damaged keys) decode back to `.focused`.
+    package var reminderScreen: ReminderScreen = .focused
     package var notifyDuringMeetings = false
     package var notifyOnCatchUp = false
     package var skipMeetingsOnCatchUp = false
@@ -118,7 +125,7 @@ package struct AppSettings: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case reminderDelivery, notifyDuringMeetings, notifyOnCatchUp, skipMeetingsOnCatchUp, hideNotificationDetails, notifySyncErrors, notifyUpdates
+        case reminderDelivery, reminderScreen, notifyDuringMeetings, notifyOnCatchUp, skipMeetingsOnCatchUp, hideNotificationDetails, notifySyncErrors, notifyUpdates
         case menuMeetingLimit, leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
     }
 
@@ -162,6 +169,7 @@ package struct AppSettings: Codable, Equatable, Sendable {
         suppressRemindersDuringMeetings = c.recover(Bool.self, forKey: .suppressRemindersDuringMeetings, decoder: decoder) ?? false
         includeBrowserMeetings = c.recover(Bool.self, forKey: .includeBrowserMeetings, decoder: decoder) ?? false
         reminderDelivery = c.recover(ReminderDelivery.self, forKey: .reminderDelivery, decoder: decoder) ?? .fullscreen
+        reminderScreen = c.recover(ReminderScreen.self, forKey: .reminderScreen, decoder: decoder) ?? .focused
         notifyDuringMeetings = c.recover(Bool.self, forKey: .notifyDuringMeetings, decoder: decoder) ?? false
         if notifyDuringMeetings { suppressRemindersDuringMeetings = false }
         notifyOnCatchUp = c.recover(Bool.self, forKey: .notifyOnCatchUp, decoder: decoder) ?? false

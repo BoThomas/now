@@ -2,8 +2,10 @@
 from harness import build
 """Production notification routing and async transport with synthetic calendars.
 No Calendar queries or live preferences. --gui uses real Notification Center;
---activation-smoke / --all-smokes require an interactive, unlocked macOS desktop
-and briefly present a synthetic fullscreen reminder to verify keyboard focus.
+--update-screens opens the manual update-window preview and --setup-screens the
+manual first-run preview (both offline, fake transport); --activation-smoke /
+--all-smokes require an interactive, unlocked macOS desktop and briefly present
+a synthetic fullscreen reminder to verify keyboard focus.
 """
 import pathlib
 import plistlib
@@ -26,7 +28,10 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
     executable = contents / "MacOS/notification-smoke"
     build("notification", executable)
     gui = "--gui" in sys.argv
-    if gui or "--activation-smoke" in sys.argv or "--all-smokes" in sys.argv:
+    screens = "--update-screens" in sys.argv
+    setup = "--setup-screens" in sys.argv
+    manual = screens or setup
+    if gui or manual or "--activation-smoke" in sys.argv or "--all-smokes" in sys.argv:
         subprocess.run(["codesign", "--force", "--sign", "A505B08900C56A28709479297A049525A2A187C6", str(contents.parent)], check=True)
         subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", "-f", str(contents.parent)], check=True)
         print("Isolated notification preview: " + str(contents.parent), flush=True)
@@ -36,7 +41,9 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
             args = [str(executable), str(directory)] + ([mode] if mode else [])
             if activation:
                 args.append("--activation-smoke")
-            subprocess.run(args, check=True, timeout=1800 if gui else 60)
+            # Interactive previews run until the user quits them; only the
+            # scripted smokes get a hang guard.
+            subprocess.run(args, check=True, timeout=None if (gui or manual) else 60)
         if "--all-smokes" in sys.argv:
             run("--recovery-smoke")
             run()
@@ -45,6 +52,10 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
             run("--startup-existing", activation=True)
         elif "--activation-smoke" in sys.argv:
             run("--startup-existing", activation=True)
+        elif screens:
+            run("--update-screens")
+        elif setup:
+            run("--setup-screens")
         elif "--startup-smoke" in sys.argv:
             for mode in ["--startup-new", "--startup-existing", "--startup-legacy"]:
                 run(mode)
@@ -53,7 +64,7 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
                 run("--recovery-smoke")
             run("--gui" if gui else None)
     finally:
-        if gui or "--activation-smoke" in sys.argv or "--all-smokes" in sys.argv:
+        if gui or manual or "--activation-smoke" in sys.argv or "--all-smokes" in sys.argv:
             subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", "-u", str(contents.parent)], capture_output=True)
         subprocess.run(["defaults", "delete", identifier], capture_output=True)
         subprocess.run(["defaults", "delete", identifier + ".legacy"], capture_output=True)

@@ -68,7 +68,11 @@ final class AlertController: ObservableObject {
         let host = NSHostingView(rootView: AlertView().environmentObject(self))
         host.autoresizingMask = [.width, .height]
         panel.contentView = host
-        if let screen = NSScreen.main {
+        // The panel covers the display the user is working on (already the
+        // main display whenever nothing has keyboard focus), or is pinned to
+        // the main display when the setting says so. `screens.first`
+        // is always the primary display.
+        if let screen = Self.preferredDisplay(preference: displayPreference, focused: NSScreen.main, main: NSScreen.screens.first) {
             panel.setFrame(screen.frame, display: true)
         }
         self.panel = panel
@@ -146,6 +150,9 @@ final class AlertController: ObservableObject {
 
     /// The configured default (0 = just in time; otherwise seconds).
     var defaultSnoozeSeconds: Int { previewSettings?.snoozeSeconds ?? store?.settings.snoozeSeconds ?? 60 }
+    /// Which display the fullscreen reminder covers; a preview uses its own
+    /// settings snapshot (previews must show real behavior).
+    var displayPreference: ReminderScreen { previewSettings?.reminderScreen ?? store?.settings.reminderScreen ?? .focused }
 
     private func applySnooze(_ plan: SnoozePlan) {
         let now = Date()
@@ -193,6 +200,18 @@ final class AlertController: ObservableObject {
         return isPreview ? .dismissPreview : .open(url)
     }
 
+    /// Which display the fullscreen panel should cover. `.focused` follows the
+    /// screen with keyboard focus, degrading to the main display when nothing
+    /// has focus (AFK, lock screen); `.mainDisplay` pins to the primary
+    /// display with the focused one as fallback. Pure — unit-testable without
+    /// NSScreen.
+    nonisolated static func preferredDisplay<T>(preference: ReminderScreen, focused: T?, main: T?) -> T? {
+        switch preference {
+        case .focused: return focused ?? main
+        case .mainDisplay: return main ?? focused
+        }
+    }
+
     /// Merges newly due events into the cards already on screen (deduped by
     /// id, deterministically ordered). Pure — unit-testable without a panel.
     nonisolated static func mergedShown(existing: [MeetingEvent], new: [MeetingEvent]) -> [MeetingEvent] {
@@ -237,9 +256,16 @@ final class AlertController: ObservableObject {
                     MainActor.assumeIsolated {
                         guard let self, let panel, self.panel === panel else { return }
                         let screens = NSScreen.screens
+                        // A display change keeps the panel glued to its screen
+                        // while that screen still exists; the fallback honors
+                        // the display preference instead of assuming "focused".
                         let destination = panel.screen.flatMap { current in
                             screens.first { $0 == current }
-                        } ?? NSScreen.main ?? screens.first
+                        } ?? Self.preferredDisplay(
+                            preference: self.displayPreference,
+                            focused: NSScreen.main,
+                            main: screens.first
+                        )
                         guard let destination else { return }
                         if panel.frame != destination.frame {
                             panel.setFrame(destination.frame, display: true)

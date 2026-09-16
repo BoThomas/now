@@ -1528,6 +1528,10 @@ extension UpdateController {
         get { stagedVersion }
         set { stagedVersion = newValue }
     }
+    var smokeIsVerifyingInstall: Bool {
+        get { isVerifyingInstall }
+        set { isVerifyingInstall = newValue }
+    }
     var smokeState: UpdateState {
         get { state }
         set { state = newValue }

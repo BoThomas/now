@@ -7,6 +7,7 @@ import SwiftUI
 struct FeatureGuideDefinition: Identifiable, Equatable {
     enum Content: Equatable {
         case notifications
+        case displayChoice
         case information(title: String, message: String)
     }
     let id: String
@@ -15,7 +16,15 @@ struct FeatureGuideDefinition: Identifiable, Equatable {
 
 enum FeatureGuideCatalog {
     static let notificationsID = "notification-setup-v1"
-    static let entries = [FeatureGuideDefinition(id: notificationsID, content: .notifications)]
+    static let displayID = "fullscreen-display-v1"
+    static let entries = [
+        FeatureGuideDefinition(id: notificationsID, content: .notifications),
+        // Interactive: the card's Show on choice applies on Continue; closing
+        // it keeps the focused default. Deliberately not gated on the current
+        // screen count: a user who updates while docked to one display may
+        // still use several.
+        FeatureGuideDefinition(id: displayID, content: .displayChoice)
+    ]
 }
 
 struct FeatureGuideState: Codable, Equatable {
@@ -102,50 +111,125 @@ final class FeatureGuideController: ObservableObject {
 
 /// Update-success feature guides. Future informational
 /// cards require only a catalog entry; interactive features add a content case.
+/// Multiple newly introduced features are paged ONE CARD AT A TIME with dot
+/// indicators: a shared scroll area is easy to miss (overlay scrollbars only
+/// appear while scrolling), so a second card stacked below the first would
+/// effectively be invisible. The footer is pure navigation (Next, and
+/// Back + Complete from page two on); card-specific actions like the
+/// notifications permission flow live inside their card. Closing the window
+/// (traffic light / ⌘W) is the "not now" path and counts the guides as seen.
 struct FeatureGuideView: View {
     @ObservedObject var store: AppStore
+    @ObservedObject var notifications: ReminderNotificationController
     @ObservedObject var guides: FeatureGuideController
     let ids: [String]
     var onFinish: () -> Void = {}
     var usesKeyboardShortcuts: Bool
     @State private var choices: NotificationSetupChoices
+    @State private var displayChoice: ReminderScreen
     @State private var busy = false
     @State private var problem: String?
     @State private var permissionBlocked = false
     @State private var generation = UUID()
+    @State private var page = 0
 
-    init(store: AppStore, guides: FeatureGuideController, ids: [String], usesKeyboardShortcuts: Bool = false, onFinish: @escaping () -> Void = {}) {
+    init(store: AppStore, notifications: ReminderNotificationController, guides: FeatureGuideController, ids: [String], usesKeyboardShortcuts: Bool = false, onFinish: @escaping () -> Void = {}) {
         self.store = store
+        self.notifications = notifications
         self.guides = guides
         self.ids = ids
         self.onFinish = onFinish
         self.usesKeyboardShortcuts = usesKeyboardShortcuts
         _choices = State(initialValue: NotificationSetupChoices(settings: store.settings))
+        _displayChoice = State(initialValue: store.settings.reminderScreen)
     }
-    private var hasNotifications: Bool { guides.definitions(for: ids).contains { $0.content == .notifications } }
+
+    private var cards: [FeatureGuideDefinition] { guides.definitions(for: ids) }
+    private var isLastPage: Bool { page >= cards.count - 1 }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            ForEach(guides.definitions(for: ids)) { guide in
-                switch guide.content {
-                case .notifications:
-                    Text("New in this version: Notifications").font(.headline)
-                    Text("Notifications can remind you about meetings and let you know about calendar sync problems and available updates. Choose which ones you want below.")
-                        .font(.callout).foregroundStyle(.secondary)
-                    Toggle("During another meeting", isOn: $choices.duringMeetings)
-                        .disabled(!MeetingActivityProbe.platformPotentiallySupported || busy)
-                    Toggle("Meetings in progress after launch or wake", isOn: $choices.catchUp).disabled(busy)
-                    Toggle("Calendar sync problems", isOn: $choices.syncErrors).disabled(busy)
-                    Toggle("New updates available", isOn: $choices.updates).disabled(busy || !store.settings.automaticUpdateChecks)
-                    if !store.settings.automaticUpdateChecks {
-                        Text("Update notifications require automatic update checks, which are currently off.").font(.caption).foregroundStyle(.secondary)
+            if cards.count > 1 {
+                HStack(spacing: 6) {
+                    ForEach(cards.indices, id: \.self) { index in
+                        Circle().fill(index == page ? Color.accentColor : Color.secondary.opacity(0.4))
+                            .frame(width: 7, height: 7)
                     }
-                    if !MeetingActivityProbe.platformPotentiallySupported {
-                        Text("Meeting detection requires macOS 14 or later.").font(.caption).foregroundStyle(.secondary)
-                    }
-                case .information(let title, let message):
-                    Text(title).font(.headline)
-                    Text(message).font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
+                .accessibilityElement()
+                .accessibilityLabel("Feature \(page + 1) of \(cards.count)")
+            }
+            if cards.indices.contains(page) {
+                let card = cards[page]
+                PopupScrollView {
+                    cardContent(card)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .id(card.id)
+                HStack {
+                    if busy { ProgressView().controlSize(.small) }
+                    Spacer(minLength: 0)
+                    if page > 0 {
+                        Button("Back") { page -= 1 }
+                            .disabled(busy)
+                    }
+                    Button(isLastPage ? "Complete" : "Next") { advance(from: card) }
+                        .keyboardShortcut(usesKeyboardShortcuts ? .defaultAction : nil)
+                        .disabled(busy)
+                }
+            }
+        }
+        .onDisappear { generation = UUID() }
+    }
+
+    @ViewBuilder
+    private func cardContent(_ card: FeatureGuideDefinition) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            switch card.content {
+            case .notifications:
+                Text("New in this version: Notifications").font(.headline)
+                Text("Notifications can remind you about meetings and let you know about calendar sync problems and available updates. Choose which ones you want below.")
+                    .font(.callout).foregroundStyle(.secondary)
+                if !notifications.permission.canSubmit {
+                    // Same gating as Settings: options stay unavailable until
+                    // notification access is enabled. The button requests
+                    // permission only (no page change, no applying); the
+                    // unlocked toggles plus Next/Complete do the rest.
+                    Button(permissionBlocked ? "Check Permission & Enable" : "Enable Notifications…") { enableNotifications() }
+                        .disabled(busy)
+                }
+                Toggle("During another meeting", isOn: $choices.duringMeetings)
+                    .disabled(!notifications.permission.canSubmit || !MeetingActivityProbe.platformPotentiallySupported || busy)
+                Toggle("Meetings in progress after launch or wake", isOn: $choices.catchUp)
+                    .disabled(!notifications.permission.canSubmit || busy)
+                Toggle("Calendar sync problems", isOn: $choices.syncErrors)
+                    .disabled(!notifications.permission.canSubmit || busy)
+                Toggle("New updates available", isOn: $choices.updates)
+                    .disabled(!notifications.permission.canSubmit || busy || !store.settings.automaticUpdateChecks)
+                if !store.settings.automaticUpdateChecks {
+                    Text("Update notifications require automatic update checks, which are currently off.").font(.caption).foregroundStyle(.secondary)
+                }
+                if !MeetingActivityProbe.platformPotentiallySupported {
+                    Text("Meeting detection requires macOS 14 or later.").font(.caption).foregroundStyle(.secondary)
+                }
+            case .displayChoice:
+                Text("New in this version: Pick your reminder display").font(.headline)
+                Text("Fullscreen reminders take over the display you are working on. Pick where they should appear. You can change this anytime in Settings → Reminder.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Text("Show on")
+                    Picker("", selection: $displayChoice) {
+                        Text("Focused Display").tag(ReminderScreen.focused)
+                        Text("Main Display").tag(ReminderScreen.mainDisplay)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 230)
+                    .accessibilityLabel("Fullscreen reminder display")
+                }
+            case .information(let title, let message):
+                Text(title).font(.headline)
+                Text(message).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
             if let problem {
                 Text(problem).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
@@ -153,58 +237,56 @@ struct FeatureGuideView: View {
             if permissionBlocked {
                 Button("Open Notification Settings…") { store.notifications?.openSettings() }
             }
-            HStack {
-                if busy { ProgressView().controlSize(.small) }
-                Spacer(minLength: 0)
-                Button(hasNotifications ? "Maybe Later" : "Close") { finish() }
-                    .keyboardShortcut(usesKeyboardShortcuts ? .cancelAction : nil)
-                Button(hasNotifications && choices.needsPermission ? (permissionBlocked ? "Check Permission & Enable" : "Enable Notifications…") : "Continue") { enable() }
-                    .keyboardShortcut(usesKeyboardShortcuts ? .defaultAction : nil)
-                    .disabled(busy)
-            }
         }
-        .onDisappear { generation = UUID() }
     }
-    private func finish() {
-        generation = UUID()
+
+    private func finish() {        generation = UUID()
         onFinish()
     }
-    private func enable() {
+
+    /// Advances to the next newly introduced feature, or finishes on the last.
+    private func advancePage() {
+        if page < cards.count - 1 { page += 1 } else { finish() }
+    }
+
+    /// Footer navigation: applies the current page's choice where one exists
+    /// and moves on. The notifications page applies its toggles once no
+    /// permission prompt would be needed (access granted or nothing on); the
+    /// in-card button owns the permission request itself.
+    private func advance(from card: FeatureGuideDefinition) {
+        switch card.content {
+        case .notifications:
+            if notifications.permission.canSubmit || !choices.needsPermission {
+                store.applyNotificationSetup(choices, owners: nil)
+            }
+            advancePage()
+        case .displayChoice:
+            store.settings.reminderScreen = displayChoice
+            advancePage()
+        case .information:
+            advancePage()
+        }
+    }
+
+    /// In-card action while notification access is missing: requests
+    /// permission only. The page stays put; the grant unlocks the toggles, and
+    /// Next/Complete applies the choices (capability checks run through the
+    /// standard settings path).
+    private func enableNotifications() {
         guard !busy else { return }
-        guard hasNotifications else { finish(); return }
         let token = generation
-        let original = store.settings
-        let selected = choices
         busy = true
         problem = nil
         Task { @MainActor in
             defer { busy = false }
-            if selected.needsPermission {
-                guard let notifications = store.notifications, await notifications.authorizeForSetup() else {
-                    guard generation == token else { return }
-                    permissionBlocked = true
-                    problem = "Your settings are unchanged. Allow now in System Settings → Notifications, then check permission here to finish setup."
-                    return
-                }
-            }
-            guard generation == token else { return }
-            var owners: [MeetingAudioOwner]?
-            if selected.duringMeetings {
-                let result = await Task.detached(priority: .utility) { MeetingActivityProbe.snapshot() }.value
+            guard let notifications = store.notifications, await notifications.authorizeForSetup() else {
                 guard generation == token else { return }
-                switch result {
-                case .success(let snapshot): owners = snapshot
-                case .failure(let error):
-                    problem = "Your settings are unchanged. \(error.message) You can try again or turn off ‘During another meeting’."
-                    return
-                }
-            }
-            guard generation == token, store.settings == original else {
-                problem = "Settings changed while setup was open. Review your choices and try again."
+                permissionBlocked = true
+                problem = "Your settings are unchanged. Allow now in System Settings → Notifications, then check permission here to finish setup."
                 return
             }
-            store.applyNotificationSetup(selected, owners: owners)
-            finish()
+            guard generation == token else { return }
+            permissionBlocked = false
         }
     }
 }

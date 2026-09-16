@@ -45,6 +45,7 @@ struct SetupAssistantState: Codable, Equatable {
         var result = current
         result.leadSeconds = draft.leadSeconds
         result.reminderDelivery = draft.reminderDelivery
+        result.reminderScreen = draft.reminderScreen
         result.inMeetingDelivery = draft.inMeetingDelivery
         result.catchUpDelivery = draft.catchUpDelivery
         result.hideNotificationDetails = draft.hideNotificationDetails
@@ -149,6 +150,11 @@ struct SetupAssistantView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var alerts: AlertController
     @ObservedObject var notifications: ReminderNotificationController
+    /// Injected (not read from NSScreen here) so renders and smokes stay
+    /// deterministic. The display question only makes sense for fullscreen
+    /// reminders on a multi-display Mac; everyone else keeps the focused
+    /// default without being asked.
+    var multiDisplay: Bool = false
     let onFinish: () -> Void
     @State private var customLead = false
     @State private var showNotificationHelp = false
@@ -180,7 +186,7 @@ struct SetupAssistantView: View {
             } else if assistant.state.step != .ready {
                 Text(assistant.state.step.title).font(.system(size: 24, weight: .semibold))
             }
-            ScrollView {
+            PopupScrollView {
                 VStack(alignment: .leading, spacing: 18) { content }
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -206,7 +212,9 @@ struct SetupAssistantView: View {
             }
         }
         .padding(28)
-        .frame(width: 560, height: 430)
+        .frame(width: 560)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(PopupWindowSizing())
         .background(VisualEffectBackground())
         .onAppear { notifications.refreshPermission(force: true) }
         .onDisappear { assistant.cancelPendingWork() }
@@ -255,6 +263,20 @@ struct SetupAssistantView: View {
                     Label("Preview", systemImage: effective.reminderDelivery == .notification ? "bell" : "eye")
                 }
                 .help("Preview the selected reminder style")
+            }
+            if effective.reminderDelivery == .fullscreen && multiDisplay {
+                HStack {
+                    Text("Show on")
+                    Picker("", selection: Binding(get: { assistant.draft.reminderScreen }, set: { assistant.draft.reminderScreen = $0 })) {
+                        Text("Focused Display").tag(ReminderScreen.focused)
+                        Text("Main Display").tag(ReminderScreen.mainDisplay)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 230)
+                    .accessibilityLabel("Fullscreen reminder display")
+                    .help("Focused Display takes over whichever display you are working on. Main Display always uses your main display, even when you are working on another one.")
+                }
             }
             Picker("Remind me", selection: Binding(get: { assistant.draft.leadSeconds }, set: {
                 if $0 == -1 { customLead = true } else { assistant.draft.leadSeconds = $0 }

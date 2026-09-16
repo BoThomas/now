@@ -3,6 +3,9 @@
 # scripts/update-smoke.sh. Serves a dynamically newer release locally, resets
 # update state, and launches the REAL app pointed at it. Blocks until Ctrl-C.
 #
+# For an instant offline look at every update-window STATE (no server, no
+# install): python3 scripts/notification-smoke.py --update-screens
+#
 # Normal tour (every window below opens through a click):
 #   1. Wait ~12 s (launch + 10 s auto-check) → the menu dropdown gains
 #      "Update to vX…" replaces Check for Updates… below Settings….
