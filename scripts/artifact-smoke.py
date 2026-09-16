@@ -32,7 +32,7 @@ load_commands = subprocess.check_output(["vtool", "-show-build", str(executable)
 assert "minos 13.0" in load_commands, load_commands
 binary = executable.read_bytes()
 for fixture in (b"SELFTEST OK", b"SELFTEST FAILED", b"SMOKE: old app", b"smokeCommitEvents",
-                b"SelfTestRunner", b"UpdaterTestRunner", b"NOW_TEST_PREFERENCES_DOMAIN"):
+                b"SelfTestRunner", b"UpdaterTestRunner", b"NOW_TEST_PREFERENCES_DOMAIN", b"NOW_TEST_DEMO_ROOT"):
     assert fixture not in binary, "shipping fixture: " + repr(fixture)
 for flag in ("--selftest", "--update-smoke"):
     result = subprocess.run([str(executable), flag], capture_output=True, text=True, timeout=10)

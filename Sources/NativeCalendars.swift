@@ -60,6 +60,9 @@ final class NativeCalendarSource {
     /// read. The legacy `requestAccess(to:)` would silently grant **write-only** when
     /// called on macOS 14, so branch on availability.
     func requestAccess() async -> Bool {
+        #if NOW_UPDATER_TESTS
+        return false
+        #else
         if #available(macOS 14.0, *) {
             return (try? await store.requestFullAccessToEvents()) ?? false
         }
@@ -68,6 +71,7 @@ final class NativeCalendarSource {
                 continuation.resume(returning: granted)
             }
         }
+        #endif
     }
 
     /// Every calendar EventKit can see (iCloud, Google/Exchange via CalDAV, local,

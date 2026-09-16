@@ -526,31 +526,41 @@ dot indicators in `FeatureGuideView`: the footer is pure navigation (Next, then 
 card-specific actions live inside their card, and the notification toggles are permission-gated
 exactly like Settings (disabled, with an Enable Notifications… button on top that requests
 permission only and disappears once granted). Next applies a card's choice when no permission prompt
-would be needed; closing the window (⌘W, same as the former Later button) counts the guides as seen.
-Keep one guide per page so later introductions cannot be hidden below earlier cards.
-`PopupLayout.swift` shares content-sized scrolling between guides, release notes, update problems,
-and setup steps. Content grows to a 320 pt cap; navigation stays outside the scroll area and the
-window follows its intrinsic height. The native legacy scrollbar stays visible for overflow even
-with macOS overlay-scrollbar preferences, and disappears entirely when the content fits. Keep the
-full document height independent of the viewport, reset guide scroll position on page changes, and
-forward wheel events to the native scroll owner. The notification harness checks overflow,
-reachability of the final row, shrinking windows, and removal of the scroll track for short content.
-Notification guidance explains meetings, sync problems, and updates; its visible sync-problem
-checkbox recommends on for unconfigured notification users and preserves the value for existing
-notification users. Sync-only selections still require permission before applying. Record history
-only at `startupHealthAcknowledged`, after the helper health commit, never during init/start. Newly
-introduced update guides persist in `pendingPresentation` until their Update Complete or What’s New
-window actually becomes visible; an ordinary restart resumes unseen guides. Displayed/closed guides
-never repeat. A skipped/closed guide must not repeat next update; Setup commits its choices only
-after authorization and capability validation, with a cancellation/settings-change guard. Update
-notifications use `UpdateState.lastNotificationVersion`, independently of the existing
-window/failed-install marker; obey automatic-check preference and age gate, notify silently
-once/version, remove withdrawn/installed/disabled notices, and never show automatic delayed update
-windows while notifyUpdates is selected. Manual checks retain their window.
-`scripts/notification-smoke.py` injects fake transport and stubs archive staging only in its
-disposable compilation, testing production update routing and health-committed guide history without
-network. Manual window review has three lanes: `scripts/update-ui-demo.sh` drives the REAL staging →
-install → relaunch → up-to-date tour against a locally served forged release,
+would be needed. `NotificationGuideSubmission` validates a newly enabled meeting-detection mode
+before committing, then rechecks notification permission without prompting. Failed validation stays
+on the current card with an error; closure and concurrent settings edits invalidate the pending
+commit. An unchanged detection mode retains its live check/retry. The notification guide smoke
+covers failure, retry, cancellation, permission loss and competing settings edits. Closing the
+window (⌘W, same as the former Later button) counts the guides as seen. Keep one guide per page so
+later introductions cannot be hidden below earlier cards. `PopupLayout.swift` shares content-sized
+scrolling between guides, release notes, update problems, and setup steps. Content grows to a 320 pt
+cap; navigation stays outside the scroll area and the window follows its intrinsic height. The
+native legacy scrollbar stays visible for overflow even with macOS overlay-scrollbar preferences,
+and disappears entirely when the content fits. Keep the full document height independent of the
+viewport, reset guide scroll position on page changes, and forward wheel events to the native scroll
+owner. The notification harness checks overflow, reachability of the final row, shrinking windows,
+and removal of the scroll track for short content. Notification guidance explains meetings, sync
+problems, and updates; its visible sync-problem checkbox recommends on for unconfigured notification
+users and preserves the value for existing notification users. Sync-only selections still require
+permission before applying. Record history only at `startupHealthAcknowledged`, after the helper
+health commit, never during init/start. Newly introduced update guides persist in
+`pendingPresentation` until their Update Complete or What’s New window actually becomes visible; an
+ordinary restart resumes unseen guides. Displayed/closed guides never repeat. A skipped/closed guide
+must not repeat next update; Setup commits its choices only after authorization and capability
+validation, with a cancellation/settings-change guard. Update notifications use
+`UpdateState.lastNotificationVersion`, independently of the existing window/failed-install marker;
+obey automatic-check preference and age gate, notify silently once/version, remove
+withdrawn/installed/disabled notices, and never show automatic delayed update windows while
+notifyUpdates is selected. Manual checks retain their window. `scripts/notification-smoke.py`
+injects fake transport and stubs archive staging only in its disposable compilation, testing
+production update routing and health-committed guide history without network. Manual window review
+has three lanes: `scripts/update-ui-demo.sh` drives the production staging → install → GUI relaunch
+→ up-to-date path in the signed updater fixture against a locally served forged release. Its app
+copy, preference suite, cache and Trash are disposable; notifications and login items are simulated
+and Calendar authorization is disabled. The old fixture omits the display introduction to exercise
+guide discovery after the update. `--smoke` verifies that GUI handoff and unchanged installed
+preferences; neither mode replaces a published-binary upgrade test. Process discovery fails closed,
+uses absolute executables, and never assigns zsh's `path` variable. For the other two lanes,
 `python3 scripts/notification-smoke.py --update-screens` opens an offline state switcher (fake
 transport, scripted guide history) for every update-window shape including guide-card combinations,
 and `python3 scripts/notification-smoke.py --setup-screens` walks first-run setup offline with

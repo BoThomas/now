@@ -733,6 +733,7 @@ struct NotificationSmoke {
                 "unsupported capability preserves preference without endless retries")
         probeStore.setInMeetingDelivery(.normal)
         await lifecycleTests(root: root)
+        await guideSubmissionTests(root: root)
         print("NOTIFICATION SMOKE OK — async races, permission recovery, routing, privacy, snooze, restart, wake grouping, cleanup, update notices, feature migration")
     }
 }

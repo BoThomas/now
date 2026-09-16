@@ -17,6 +17,10 @@ fi
 python3 scripts/artifact-smoke.py "$APP_PATH"
 NOW_TEST_CONFIGURATION=debug ./scripts/test.sh
 NOW_TEST_CONFIGURATION=release ./scripts/test.sh
+NOW_TEST_CONFIGURATION=debug ./scripts/test-core.sh
+NOW_TEST_CONFIGURATION=release ./scripts/test-core.sh
+python3 scripts/module-boundary-smoke.py --parse
+python3 scripts/update-demo-tests.py
 export NOW_TEST_CONFIGURATION=release
 python3 scripts/notification-smoke.py --all-smokes
 python3 scripts/reminder-state-smoke.py
@@ -25,4 +29,5 @@ python3 scripts/calendar-fetch-smoke.py
 python3 scripts/feed-workload-smoke.py
 python3 scripts/parser-performance-smoke.py
 ./scripts/update-smoke.sh --app "$APP_PATH"
+./scripts/update-ui-demo.sh --smoke
 print "RELEASE PREFLIGHT OK"

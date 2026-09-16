@@ -579,6 +579,11 @@ enum UpdateStaging {
     /// Launch cleanup removes only old staging roots and retries moving valid
     /// rollback bundles to Trash. Active helper-owned paths are excluded.
     static func cleanupLaunchArtifacts(bundlePath: String, now: Date = Date(), trashDirectory: URL? = nil, signatureCheck: (URL) -> Bool = verifySignature) {
+        #if NOW_UPDATER_TESTS
+        let effectiveTrash = trashDirectory ?? UpdaterTestRunner.demoTrash
+        #else
+        let effectiveTrash = trashDirectory
+        #endif
         let bundleURL = URL(fileURLWithPath: bundlePath)
         let dir = bundleURL.deletingLastPathComponent()
         let name = bundleURL.lastPathComponent // "now.app"
@@ -603,13 +608,13 @@ enum UpdateStaging {
                 let values = try? entry.resourceValues(forKeys: Set(keys))
                 guard shouldRemoveStaging(path: entry.path, timestamp: values?.contentModificationDate ?? values?.creationDate, activePaths: activePaths, now: now),
                       signatureCheck(bundleURL) else { continue }
-                let trash = trashDirectory ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
+                let trash = effectiveTrash ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
                 try? FileManager.default.moveItem(at: entry, to: trash.appendingPathComponent("now-failed-\(UUID().uuidString).app"))
             case .backup:
                 guard signatureCheck(entry),
                       let info = NSDictionary(contentsOf: entry.appendingPathComponent("Contents/Info.plist")) as? [String: Any],
                       info["CFBundleIdentifier"] as? String == UpdateLogic.updateBundleIdentifier else { continue }
-                let trash = trashDirectory ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
+                let trash = effectiveTrash ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
                 let destination = trash.appendingPathComponent("now-old-\(UUID().uuidString).app")
                 try? FileManager.default.moveItem(at: entry, to: destination)
             }
@@ -954,12 +959,20 @@ enum UpdateInstaller {
         environment["NOW_UPDATE_ACTIVE_BACKUP"] = backupPath
         environment["NOW_UPDATE_ACTIVE_STAGING"] = stagingRoot
         environment["NOW_RELEASES_URL"] = releasesURL
+        #if NOW_UPDATER_TESTS
+        if let trash = UpdaterTestRunner.demoTrash { environment["HOME"] = trash.deletingLastPathComponent().path }
+        #endif
         if let home = extraEnv["NOW_SMOKE_HOME"] { environment["HOME"] = home }
         process.environment = environment
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
+            #if NOW_UPDATER_TESTS
+            if let root = UpdaterTestRunner.demoRoot {
+                try? Data(String(process.processIdentifier).utf8).write(to: root.appendingPathComponent("helper-pid"))
+            }
+            #endif
             return true
         } catch {
             return false

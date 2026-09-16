@@ -74,6 +74,52 @@ struct NotificationSetupChoices: Equatable {
     }
 }
 
+/// A guide commits once, after validation, while its page and settings are still current.
+@MainActor
+final class NotificationGuideSubmission: ObservableObject {
+    @Published private(set) var busy = false
+    @Published private(set) var problem: String?
+    private var generation = UUID()
+
+    func cancel() { generation = UUID(); problem = nil }
+
+    func apply(_ choices: NotificationSetupChoices, to store: AppStore,
+               permission: () async -> Bool,
+               probe: () async -> Result<[MeetingAudioOwner], MeetingActivityProbeError>) async -> Bool {
+        guard !busy else { return false }
+        busy = true
+        problem = nil
+        let token = generation
+        let original = store.settings
+        defer { busy = false }
+        var owners: [MeetingAudioOwner]?
+        // Keep an existing detection session/retry intact when only other choices change.
+        if choices.duringMeetings && original.inMeetingDelivery != .notification {
+            let result = await probe()
+            guard generation == token else { return false }
+            switch result {
+            case .success(let value): owners = value
+            case .failure(let error):
+                problem = "Your settings are unchanged. \(error.message) Try again or turn off ‘During another meeting’."
+                return false
+            }
+        }
+        // Recheck without prompting, including after a suspended capability check.
+        let allowed = choices.needsPermission ? await permission() : true
+        guard generation == token else { return false }
+        guard store.settings == original else {
+            problem = "Settings changed while setup was open. Review your choices and try again."
+            return false
+        }
+        guard allowed else {
+            problem = "Your settings are unchanged. Allow notifications or turn off the notification choices."
+            return false
+        }
+        store.applyNotificationSetup(choices, owners: owners)
+        return true
+    }
+}
+
 @MainActor
 final class FeatureGuideController: ObservableObject {
     static let storageKey = "local.tboch.now.feature-guides.v1"
@@ -132,6 +178,9 @@ struct FeatureGuideView: View {
     @State private var permissionBlocked = false
     @State private var generation = UUID()
     @State private var page = 0
+    @StateObject private var submission = NotificationGuideSubmission()
+
+    private var isBusy: Bool { busy || submission.busy }
 
     init(store: AppStore, notifications: ReminderNotificationController, guides: FeatureGuideController, ids: [String], usesKeyboardShortcuts: Bool = false, onFinish: @escaping () -> Void = {}) {
         self.store = store
@@ -167,19 +216,19 @@ struct FeatureGuideView: View {
                 }
                 .id(card.id)
                 HStack {
-                    if busy { ProgressView().controlSize(.small) }
+                    if isBusy { ProgressView().controlSize(.small) }
                     Spacer(minLength: 0)
                     if page > 0 {
-                        Button("Back") { page -= 1 }
-                            .disabled(busy)
+                        Button("Back") { generation = UUID(); page -= 1 }
+                            .disabled(isBusy)
                     }
                     Button(isLastPage ? "Complete" : "Next") { advance(from: card) }
                         .keyboardShortcut(usesKeyboardShortcuts ? .defaultAction : nil)
-                        .disabled(busy)
+                        .disabled(isBusy)
                 }
             }
         }
-        .onDisappear { generation = UUID() }
+        .onDisappear { generation = UUID(); submission.cancel() }
     }
 
     @ViewBuilder
@@ -196,16 +245,16 @@ struct FeatureGuideView: View {
                     // permission only (no page change, no applying); the
                     // unlocked toggles plus Next/Complete do the rest.
                     Button(permissionBlocked ? "Check Permission & Enable" : "Enable Notifications…") { enableNotifications() }
-                        .disabled(busy)
+                        .disabled(isBusy)
                 }
                 Toggle("During another meeting", isOn: $choices.duringMeetings)
-                    .disabled(!notifications.permission.canSubmit || !MeetingActivityProbe.platformPotentiallySupported || busy)
+                    .disabled(!notifications.permission.canSubmit || !MeetingActivityProbe.platformPotentiallySupported || isBusy)
                 Toggle("Meetings in progress after launch or wake", isOn: $choices.catchUp)
-                    .disabled(!notifications.permission.canSubmit || busy)
+                    .disabled(!notifications.permission.canSubmit || isBusy)
                 Toggle("Calendar sync problems", isOn: $choices.syncErrors)
-                    .disabled(!notifications.permission.canSubmit || busy)
+                    .disabled(!notifications.permission.canSubmit || isBusy)
                 Toggle("New updates available", isOn: $choices.updates)
-                    .disabled(!notifications.permission.canSubmit || busy || !store.settings.automaticUpdateChecks)
+                    .disabled(!notifications.permission.canSubmit || isBusy || !store.settings.automaticUpdateChecks)
                 if !store.settings.automaticUpdateChecks {
                     Text("Update notifications require automatic update checks, which are currently off.").font(.caption).foregroundStyle(.secondary)
                 }
@@ -231,7 +280,7 @@ struct FeatureGuideView: View {
                 Text(title).font(.headline)
                 Text(message).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
-            if let problem {
+            if let problem = problem ?? submission.problem {
                 Text(problem).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
             if permissionBlocked {
@@ -240,12 +289,18 @@ struct FeatureGuideView: View {
         }
     }
 
-    private func finish() {        generation = UUID()
+    private func finish() {
+        generation = UUID()
+        submission.cancel()
         onFinish()
     }
 
     /// Advances to the next newly introduced feature, or finishes on the last.
     private func advancePage() {
+        generation = UUID()
+        submission.cancel()
+        problem = nil
+        permissionBlocked = false
         if page < cards.count - 1 { page += 1 } else { finish() }
     }
 
@@ -254,12 +309,24 @@ struct FeatureGuideView: View {
     /// permission prompt would be needed (access granted or nothing on); the
     /// in-card button owns the permission request itself.
     private func advance(from card: FeatureGuideDefinition) {
+        guard !isBusy else { return }
         switch card.content {
         case .notifications:
-            if notifications.permission.canSubmit || !choices.needsPermission {
-                store.applyNotificationSetup(choices, owners: nil)
+            guard notifications.permission.canSubmit || !choices.needsPermission else {
+                advancePage()
+                return
             }
-            advancePage()
+            problem = nil
+            permissionBlocked = false
+            let token = generation
+            let selected = choices
+            Task { @MainActor in
+                guard generation == token else { return }
+                let applied = await submission.apply(selected, to: store,
+                    permission: { await notifications.checkPermission().canSubmit },
+                    probe: { await Task.detached(priority: .utility) { MeetingActivityProbe.snapshot() }.value })
+                if applied { advancePage() }
+            }
         case .displayChoice:
             store.settings.reminderScreen = displayChoice
             advancePage()
@@ -273,7 +340,7 @@ struct FeatureGuideView: View {
     /// Next/Complete applies the choices (capability checks run through the
     /// standard settings path).
     private func enableNotifications() {
-        guard !busy else { return }
+        guard !isBusy else { return }
         let token = generation
         busy = true
         problem = nil
