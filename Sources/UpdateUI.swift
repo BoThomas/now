@@ -98,12 +98,17 @@ struct UpdateView: View {
                     .textSelection(.enabled)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                    ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                         switch block {
                         case .heading(let level, let text):
                             Text(text)
-                                .font(.system(size: level == 1 ? 13 : 12, weight: .semibold))
+                                // Level 2 headings mark release boundaries in
+                                // consolidated multi-version notes — a step
+                                // larger, bolder, and with extra separation so
+                                // each release's section reads as a block.
+                                .font(.system(size: level == 3 ? 12 : 13, weight: level == 2 ? .bold : .semibold))
                                 .foregroundStyle(.primary)
+                                .padding(.top, level == 2 && index > 0 ? 8 : 0)
                                 .textSelection(.enabled)
                         case .bullet(let text):
                             HStack(alignment: .firstTextBaseline, spacing: 6) {

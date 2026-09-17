@@ -293,7 +293,9 @@ enum UpdateLogic {
         }
         func section(_ version: String, _ body: String) -> String? {
             let trimmed = displayNotes(body)
-            return trimmed.isEmpty ? nil : "### \(version)\n\(trimmed)"
+            // Level 2 marks a release boundary; the body's own `###`
+            // categories stay level 3 and render visually subordinate.
+            return trimmed.isEmpty ? nil : "## \(version)\n\(trimmed)"
         }
         var sections: [String] = []
         if let offered = section(targetVersion, targetBody) { sections.append(offered) }

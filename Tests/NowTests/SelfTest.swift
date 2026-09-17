@@ -2832,14 +2832,14 @@ enum SelfTest {
                 releaseNotes("1.9.0", "- Ancient"),
             ],
             pageSaturated: false)
-        c.expect(jump == "### 2.1.0\n### Added\n- Target feature\n\n"
-                 + "### 2.0.0\nIntro paragraph for 2.0.0.\n\n### Fixed\n- Intermediate fix\n### Added\n- Shared feature",
+        c.expect(jump == "## 2.1.0\n### Added\n- Target feature\n\n"
+                 + "## 2.0.0\nIntro paragraph for 2.0.0.\n\n### Fixed\n- Intermediate fix\n### Added\n- Shared feature",
                  "multi-version jump lists each release under its version heading, newest first (got \(jump ?? "nil"))")
         c.expect(UpdateLogic.noteBlocks(jump!) == [
-            .heading(level: 3, text: "2.1.0"),
+            .heading(level: 2, text: "2.1.0"),
             .heading(level: 3, text: "Added"),
             .bullet(text: "Target feature"),
-            .heading(level: 3, text: "2.0.0"),
+            .heading(level: 2, text: "2.0.0"),
             .paragraph(text: "Intro paragraph for 2.0.0."),
             .heading(level: 3, text: "Fixed"),
             .bullet(text: "Intermediate fix"),
@@ -2851,7 +2851,7 @@ enum SelfTest {
             runningVersion: "1.0.0", targetVersion: "1.2.0", targetBody: "Small fixes and improvements.",
             releases: [releaseNotes("1.1.0", "- raw bullet without heading")],
             pageSaturated: false)
-        c.expect(verbatim == "### 1.2.0\nSmall fixes and improvements.\n\n### 1.1.0\n- raw bullet without heading",
+        c.expect(verbatim == "## 1.2.0\nSmall fixes and improvements.\n\n## 1.1.0\n- raw bullet without heading",
                  "unrecognized structure stays in its release's section (got \(verbatim ?? "nil"))")
         // Releases whose bodies are all empty contribute nothing — fall back.
         c.expect(UpdateLogic.consolidatedNotes(runningVersion: "1.0.0", targetVersion: "1.2.0", targetBody: " \n",
@@ -2875,7 +2875,7 @@ enum SelfTest {
                 releaseNotes("1.0.0", "- lower bound"),
             ],
             pageSaturated: true)
-        c.expect(bounded == "### 1.3.0\n### Added\n- Target\n\n### 1.2.0\n### Fixed\n- two\n\n### 1.1.0\n### Fixed\n- one",
+        c.expect(bounded == "## 1.3.0\n### Added\n- Target\n\n## 1.2.0\n### Fixed\n- two\n\n## 1.1.0\n### Fixed\n- one",
                  "saturated page with a lower bound consolidates (got \(bounded ?? "nil"))")
         // Bounds: too many releases or too many characters fall back.
         let crowded = (1...(UpdateLogic.intermediateNotesReleaseCap + 1)).map { releaseNotes("1.\($0).0", "- item") }
