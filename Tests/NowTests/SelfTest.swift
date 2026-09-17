@@ -2818,8 +2818,9 @@ enum SelfTest {
         c.expect(UpdateLogic.consolidatedNotes(runningVersion: "1.10.0", targetVersion: "1.11.0", targetBody: "### Added\n- Only release",
                                                releases: singleList.entries, pageSaturated: false) == nil,
                  "single-release jump does not consolidate")
-        // Multi-version jump: everything since the running version, grouped
-        // under the recognized categories in canonical order, oldest first.
+        // Multi-version jump: the offered release leads, then every skipped
+        // intermediate back toward the running version, each under a version
+        // heading so release boundaries stay visible.
         let jump = UpdateLogic.consolidatedNotes(
             runningVersion: "1.10.0", targetVersion: "2.1.0",
             targetBody: "### Added\n- Target feature\n\nFull changelog: https://github.com/BoThomas/now/compare/x",
@@ -2831,34 +2832,31 @@ enum SelfTest {
                 releaseNotes("1.9.0", "- Ancient"),
             ],
             pageSaturated: false)
-        c.expect(jump == "Intro paragraph for 2.0.0.\n\n### Added\n- Shared feature\n- Target feature\n\n### Fixed\n- Intermediate fix",
-                 "multi-version jump merges grouped notes since the running version (got \(jump ?? "nil"))")
+        c.expect(jump == "### 2.1.0\n### Added\n- Target feature\n\n"
+                 + "### 2.0.0\nIntro paragraph for 2.0.0.\n\n### Fixed\n- Intermediate fix\n### Added\n- Shared feature",
+                 "multi-version jump lists each release under its version heading, newest first (got \(jump ?? "nil"))")
         c.expect(UpdateLogic.noteBlocks(jump!) == [
-            .paragraph(text: "Intro paragraph for 2.0.0."),
+            .heading(level: 3, text: "2.1.0"),
             .heading(level: 3, text: "Added"),
-            .bullet(text: "Shared feature"),
             .bullet(text: "Target feature"),
+            .heading(level: 3, text: "2.0.0"),
+            .paragraph(text: "Intro paragraph for 2.0.0."),
             .heading(level: 3, text: "Fixed"),
             .bullet(text: "Intermediate fix"),
+            .heading(level: 3, text: "Added"),
+            .bullet(text: "Shared feature"),
         ], "consolidated body renders through the shared note-blocks path")
-        // Duplicate categories across releases merge; repeated bullets stay —
-        // releases own their wording, no dedupe magic.
-        let merged = UpdateLogic.consolidatedNotes(
-            runningVersion: "1.0.0", targetVersion: "1.3.0", targetBody: "### Fixed\n- Same fix again\n### Added\n- Third",
-            releases: [
-                releaseNotes("1.2.0", "### Added\n- Second\n### Fixed\n- Same fix again"),
-                releaseNotes("1.1.0", "### Added\n- First"),
-            ],
-            pageSaturated: false)
-        c.expect(merged == "### Added\n- First\n- Second\n- Third\n\n### Fixed\n- Same fix again\n- Same fix again",
-                 "duplicate categories merge oldest-first; repeated bullets retained (got \(merged ?? "nil"))")
-        // Bodies without recognizable headers keep their content as preamble.
-        let unheaded = UpdateLogic.consolidatedNotes(
+        // Bodies keep their own structure verbatim, including unheaded text.
+        let verbatim = UpdateLogic.consolidatedNotes(
             runningVersion: "1.0.0", targetVersion: "1.2.0", targetBody: "Small fixes and improvements.",
             releases: [releaseNotes("1.1.0", "- raw bullet without heading")],
             pageSaturated: false)
-        c.expect(unheaded == "- raw bullet without heading\nSmall fixes and improvements.",
-                 "unrecognized structure falls back to preamble lines (got \(unheaded ?? "nil"))")
+        c.expect(verbatim == "### 1.2.0\nSmall fixes and improvements.\n\n### 1.1.0\n- raw bullet without heading",
+                 "unrecognized structure stays in its release's section (got \(verbatim ?? "nil"))")
+        // Releases whose bodies are all empty contribute nothing — fall back.
+        c.expect(UpdateLogic.consolidatedNotes(runningVersion: "1.0.0", targetVersion: "1.2.0", targetBody: " \n",
+                                               releases: [releaseNotes("1.1.0", "")], pageSaturated: false) == nil,
+                 "empty bodies fall back to the offered release's own rendering")
         // A saturated page that never reached the running version cannot prove
         // the span is complete — fall back rather than merge a partial view.
         // (Entries above the target don't count as intermediates, so this
@@ -2877,7 +2875,8 @@ enum SelfTest {
                 releaseNotes("1.0.0", "- lower bound"),
             ],
             pageSaturated: true)
-        c.expect(bounded == "### Added\n- Target\n\n### Fixed\n- one\n- two", "saturated page with a lower bound consolidates")
+        c.expect(bounded == "### 1.3.0\n### Added\n- Target\n\n### 1.2.0\n### Fixed\n- two\n\n### 1.1.0\n### Fixed\n- one",
+                 "saturated page with a lower bound consolidates (got \(bounded ?? "nil"))")
         // Bounds: too many releases or too many characters fall back.
         let crowded = (1...(UpdateLogic.intermediateNotesReleaseCap + 1)).map { releaseNotes("1.\($0).0", "- item") }
         c.expect(UpdateLogic.consolidatedNotes(runningVersion: "1.0.0", targetVersion: "2.0.0", targetBody: "- t",

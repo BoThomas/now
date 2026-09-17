@@ -131,9 +131,10 @@ final class NotificationPreview: NSObject, NSApplicationDelegate {
 
 /// Manual, offline review of every update-window state: the GUI counterpart
 /// to the guide/update assertions in notification-smoke.swift. Fake transport,
-/// synthetic store, scripted guide history: no network, no Notification
-/// Center, no real preferences. The full staging/install/relaunch flow stays
-/// with scripts/update-ui-demo.sh.
+/// synthetic store, scripted guide history: no Notification Center or real
+/// preferences; the multi-version toggle is the one opt-in live request (it
+/// loads the repository's real releases read-only). The full staging/install/
+/// relaunch flow stays with scripts/update-ui-demo.sh.
 @MainActor
 final class UpdateScreensPreview: NSObject, NSApplicationDelegate {
     private let root: URL
@@ -232,6 +233,7 @@ struct UpdateScreensPanel: View {
     @State private var scrollFluff = false
     @State private var longReleaseNotes = false
     @State private var multiVersionNotes = false
+    @State private var liveNotesStatus = ""
 
     private var manifest: UpdateManifest {
         UpdateManifest(version: "9.9.9",
@@ -253,8 +255,7 @@ struct UpdateScreensPanel: View {
             + "\n\nEnd of long test changelog. This final line should be fully reachable."
     }
 
-    /// Forged consolidated body for a jump like 1.10 → 2.1: grouped under
-    /// the recognized categories, plus ungrouped preamble content.
+    /// Forged offline fallback for the multi-version jump preview.
     private var multiVersionBody: String {
         """
         2.0 rebuilt reminders for the notification age.
@@ -270,6 +271,37 @@ struct UpdateScreensPanel: View {
         - Install row in Settings wraps when narrow
         - Fullscreen panel keeps keyboard focus in the background
         """
+    }
+
+    /// Loads the repository's real releases and consolidates a simulated
+    /// multi-version jump (newest release as target, three releases back as
+    /// the running version) through the production logic. Falls back to the
+    /// forged example when offline.
+    @MainActor private func loadLiveMultiVersionNotes() {
+        liveNotesStatus = "Loading live GitHub releases…"
+        var request = URLRequest(url: URL(string: "https://api.github.com/repos/BoThomas/now/releases?per_page=8")!)
+        request.setValue("now-update-screens-preview", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 15
+        let controller = updates
+        Task {
+            let outcome: String?
+            if let data = try? await URLSession.shared.data(for: request).0,
+               let parsed = UpdateLogic.parseReleaseNotes(data, pageLimit: 8), parsed.entries.count >= 4 {
+                let entries = parsed.entries
+                let target = entries[0]
+                let running = entries[3].version
+                outcome = UpdateLogic.consolidatedNotes(runningVersion: running, targetVersion: target.version,
+                                                        targetBody: target.body, releases: entries, pageSaturated: false)
+                liveNotesStatus = "Live: jump \(running) → \(target.version)"
+            } else {
+                outcome = nil
+                liveNotesStatus = "Live notes unavailable — showing the forged example"
+            }
+            controller.smokeConsolidatedNotes = outcome ?? multiVersionBody
+            if case .available = controller.windowContent {
+                controller.windowContent = .available(manifest)
+            }
+        }
     }
 
     var body: some View {
@@ -290,13 +322,23 @@ struct UpdateScreensPanel: View {
                         }
                     }
                 Toggle("Multi-version jump (consolidated What’s New)", isOn: $multiVersionNotes)
-                    .help("Shows the forged consolidated notes a multi-version jump (e.g. 1.10 → 2.1) renders: everything since your current version, grouped under the changelog categories.")
-                    .onChange(of: multiVersionNotes) { _ in
-                        updates.smokeConsolidatedNotes = multiVersionNotes ? multiVersionBody : nil
-                        if case .available = updates.windowContent {
-                            updates.windowContent = .available(manifest)
+                    .help("Consolidates everything since your current version across skipped releases. When enabled, loads the repository's real releases and simulates a jump (newest release, running three releases back).")
+                    .onChange(of: multiVersionNotes) { enabled in
+                        if enabled {
+                            loadLiveMultiVersionNotes()
+                        } else {
+                            liveNotesStatus = ""
+                            updates.smokeConsolidatedNotes = nil
+                            if case .available = updates.windowContent {
+                                updates.windowContent = .available(manifest)
+                            }
                         }
                     }
+                if !liveNotesStatus.isEmpty {
+                    Text(liveNotesStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 scene("Preparing the update…") {
                     updates.smokeStagedVersion = nil
                     updates.smokeIsVerifyingInstall = false

@@ -233,10 +233,6 @@ enum UpdateLogic {
 
     // MARK: Consolidated multi-version notes
 
-    /// The changelog categories a consolidated body groups under (the
-    /// release-notes convention in AGENTS.md), in display order.
-    static let noteCategories = ["Added", "Changed", "Improved", "Fixed", "Deprecated", "Removed", "Security"]
-
     /// Bounds for merging intermediate release bodies. Notes are cosmetic:
     /// exceeding either bound falls back to the latest release's own body.
     static let intermediateNotesReleaseCap = 8
@@ -261,12 +257,14 @@ enum UpdateLogic {
         return (entries, list.count >= pageLimit)
     }
 
-    /// Consolidated What's-New body for a multi-version jump: everything
-    /// strictly newer than `runningVersion` up to and including the offered
-    /// release, grouped under the recognized changelog categories. Returns
-    /// nil whenever the consolidated view can't be trusted — no intermediates,
-    /// an incomplete span, or a bound exceeded — and the caller keeps
-    /// rendering the latest release's own body.
+    /// Consolidated What's-New body for a multi-version jump: the offered
+    /// release's own body first, then every intermediate release newer than
+    /// the running version, newest → oldest — each under a version heading so
+    /// the reader sees where one release's notes end and the next begins
+    /// (real bodies already group their bullets under `###` categories).
+    /// Returns nil whenever the consolidated view can't be trusted — no
+    /// intermediates, an incomplete span, or a bound exceeded — and the
+    /// caller keeps rendering the latest release's own body.
     static func consolidatedNotes(runningVersion: String, targetVersion: String, targetBody: String,
                                   releases: [ReleaseNotes], pageSaturated: Bool) -> String? {
         guard let running = strictVersionComponents(runningVersion), running.count == 3,
@@ -288,45 +286,22 @@ enum UpdateLogic {
         // missing older intermediates — the merged view would silently lie.
         if pageSaturated && !sawRunningOrOlder { return nil }
         guard intermediates.count <= intermediateNotesReleaseCap else { return nil }
-        // Oldest → newest so entries read chronologically inside each group.
+        // Newest first: the release being offered leads, then the skipped
+        // releases back toward the version currently running.
         let ordered = intermediates.sorted {
-            orderedVersionComponents(strictVersionComponents($0.version) ?? [], strictVersionComponents($1.version) ?? []) < 0
+            orderedVersionComponents(strictVersionComponents($0.version) ?? [], strictVersionComponents($1.version) ?? []) > 0
         }
-        var bullets: [String: [String]] = [:]
-        var preamble: [String] = []
-        func absorb(_ body: String) {
-            var category: String?
-            for rawLine in displayNotes(body).split(separator: "\n", omittingEmptySubsequences: false) {
-                let line = rawLine.trimmingCharacters(in: .whitespaces)
-                if line.isEmpty { continue }
-                if line.hasPrefix("#") {
-                    let text = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
-                    category = noteCategories.first { $0.compare(text, options: .caseInsensitive) == .orderedSame }
-                    // Unrecognized headings keep their text as preamble; the
-                    // bullets under them follow as ungrouped lines.
-                    if category == nil, !text.isEmpty { preamble.append(text) }
-                } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
-                    let text = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-                    if let category {
-                        bullets[category, default: []].append(text)
-                    } else {
-                        preamble.append(line)
-                    }
-                } else {
-                    preamble.append(line)
-                }
-            }
+        func section(_ version: String, _ body: String) -> String? {
+            let trimmed = displayNotes(body)
+            return trimmed.isEmpty ? nil : "### \(version)\n\(trimmed)"
         }
-        for release in ordered { absorb(release.body) }
-        absorb(targetBody)
         var sections: [String] = []
-        for category in noteCategories {
-            guard let items = bullets[category], !items.isEmpty else { continue }
-            sections.append("### \(category)\n" + items.map { "- " + $0 }.joined(separator: "\n"))
+        if let offered = section(targetVersion, targetBody) { sections.append(offered) }
+        for release in ordered {
+            if let skipped = section(release.version, release.body) { sections.append(skipped) }
         }
-        var parts = sections
-        if !preamble.isEmpty { parts.insert(preamble.joined(separator: "\n"), at: 0) }
-        let merged = parts.joined(separator: "\n\n")
+        guard !sections.isEmpty else { return nil }
+        let merged = sections.joined(separator: "\n\n")
         guard merged.count <= intermediateNotesCharacterCap else { return nil }
         return merged
     }

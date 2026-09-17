@@ -436,7 +436,7 @@ grep -q "^- Intermediate release fix\$" "$WORK/log14" || fail "consolidated note
 grep -q "SMOKE: INSTALLED v$SMOKE_VERSION" "$WORK/log14" || fail "consolidated-notes run did not reach install"
 wait_for_file "$WORK/report14" "consolidated-notes child never reported"
 [[ "$(cat "$WORK/report14")" == "$SMOKE_VERSION" ]] || fail "consolidated-notes install reported $(cat "$WORK/report14")"
-print "  OK — What's New merged everything since the running version, install unaffected"
+print "  OK — What's New lists every skipped release under its version heading, install unaffected"
 
 print "• [15/15] Missing intermediate notes fall back and never block the install"
 reset_install
