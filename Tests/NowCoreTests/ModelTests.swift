@@ -90,9 +90,13 @@ extension CoreTests {
         let decoder = ModelDecoding.decoder(calendarColor: { _ in "#000000" })
         let restored = try decoder.decode(Persisted.self, from: data)
         let encoded = try JSONEncoder().encode(restored)
-        let expected = try JSONSerialization.jsonObject(with: data) as! NSDictionary
+        var expectedFields = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        var expectedSettings = expectedFields["settings"] as! [String: Any]
+        expectedSettings["reminderLeadSeconds"] = [300]
+        expectedFields["settings"] = expectedSettings
+        let expected = expectedFields as NSDictionary
         let actual = try JSONSerialization.jsonObject(with: encoded) as! NSDictionary
-        check.expect(actual == expected, "saved profile wire fields and values match pre-extraction shape")
+        check.expect(actual == expected, "saved profile retains legacy wire fields and adds normalized reminder list")
         let reread = try decoder.decode(Persisted.self, from: encoded)
         check.expect(reread.subscriptions == restored.subscriptions && reread.nativeCalendars == restored.nativeCalendars
                      && reread.settings == restored.settings && reread.pausedUntil == restored.pausedUntil, "profile round trip retains all persisted values")

@@ -5,6 +5,10 @@ import Foundation
 package enum ReminderIdentity {
     package static func key(_ id: String) -> String { StableDigest.sha256(id) }
 
+    package static func reminderKey(occurrence: String, member: String) -> String {
+        key("reminder-v1\n" + occurrence + "\n" + member)
+    }
+
     package static func eventKey(_ event: MeetingEvent) -> String {
         guard let identity = event.notificationIdentity else { return key(event.id) }
         return key(event.calendarID.uuidString + ":" + identity)

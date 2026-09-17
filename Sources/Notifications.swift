@@ -66,6 +66,16 @@ struct ReminderNotification: Codable, Equatable {
     var replacementReason: String? = nil
     var fingerprintVersion: Int? = nil
     var accepted: Bool? = nil
+    var deliveries: [String: ReminderDeliveryState]? = nil
+
+    var reservationKeys: Set<String> { Set(keys.flatMap { reservationKeys(for: $0) }) }
+
+    func reservationKeys(for key: String) -> Set<String> {
+        guard let delivery = deliveries?[key] else { return [key] }
+        return Set(delivery.leads.map { ReminderIdentity.reminderKey(occurrence: key, member: "lead:\($0)") }
+            + (delivery.snoozeToken.map { [ReminderIdentity.reminderKey(occurrence: key, member: "snooze:" + $0)] } ?? []))
+    }
+
 }
 
 enum NotificationReconciliation {
@@ -195,6 +205,15 @@ final class ReminderNotificationController: ObservableObject {
             }
         }
     }
+    func migrateReminderMembership(lead: Int) {
+        for (id, var item) in receipts where !item.sync && !item.test && item.updateVersion == nil && item.deliveries == nil {
+            item.deliveries = Dictionary(uniqueKeysWithValues: item.keys.map { ($0, ReminderDeliveryState(leads: [lead])) })
+            receipts[id] = item
+            if startupReceipts[id] != nil { startupReceipts[id] = item }
+        }
+        persist()
+    }
+
     func refreshPermission(force: Bool = false, now: Date = Date()) {
         guard !refreshing, force || now.timeIntervalSince(lastPermissionCheck) >= 30 else { return }
         refreshing = true
@@ -243,7 +262,7 @@ final class ReminderNotificationController: ObservableObject {
 
     private func submit(_ proposed: ReminderNotification, replacing old: ReminderNotification?, now: Date) {
         let retryKey = proposed.id
-        guard !receipts.values.contains(where: { $0.id != old?.id && !$0.keys.isEmpty && !Set($0.keys).isDisjoint(with: proposed.keys) }),
+        guard !receipts.values.contains(where: { $0.id != old?.id && !$0.keys.isEmpty && !$0.reservationKeys.isDisjoint(with: proposed.reservationKeys) }),
               !receipts.values.contains(where: { proposed.test && $0.test }), now >= retryAfter[retryKey, default: .distantPast] else { return }
         var item = proposed
         item.id += "." + UUID().uuidString
@@ -304,26 +323,35 @@ final class ReminderNotificationController: ObservableObject {
         if let old { receipts[old.id] = old; persist() }
     }
 
-    func removeMeetings(containing keys: Set<String>) {
+    func removeDelivery(_ item: ReminderNotification) {
+        removeMeetings(containing: Set(item.keys), matching: item.reservationKeys)
+    }
+
+    func removeMeetings(containing keys: Set<String>, matching reservations: Set<String>? = nil) {
+        func selectedKeys(_ item: ReminderNotification) -> Set<String> {
+            guard let reservations else { return keys }
+            return Set(item.keys.filter { keys.contains($0) && !item.reservationKeys(for: $0).isDisjoint(with: reservations) })
+        }
         for (id, item) in startupReceipts where !item.sync && item.updateVersion == nil {
-            let remaining = removing(keys, from: item)
+            let remaining = removing(selectedKeys(item), from: item)
             startupReceipts[id] = remaining.keys.isEmpty ? nil : remaining
         }
         for (id, alias) in responseAliases where !alias.item.sync && alias.item.updateVersion == nil {
-            let remaining = removing(keys, from: alias.item)
+            let remaining = removing(selectedKeys(alias.item), from: alias.item)
             responseAliases[id] = remaining.keys.isEmpty ? nil : (remaining, alias.expires)
         }
         for item in Array(receipts.values) where !item.sync && !Set(item.keys).isDisjoint(with: keys) {
+            guard !selectedKeys(item).isEmpty else { continue }
             if pending.contains(item.id) {
                 // Remove acted-on members from retry intent before cancelling an add.
                 if let origin = replacementOrigins[item.id] {
-                    let remaining = removing(keys, from: origin)
+                    let remaining = removing(selectedKeys(origin), from: origin)
                     replacementOrigins[item.id] = remaining.keys.isEmpty ? nil : remaining
                 }
                 retrySubmission(item.id)
                 continue
             }
-            let remaining = removing(keys, from: item)
+            let remaining = removing(selectedKeys(item), from: item)
             if remaining.keys.isEmpty { discard(item.id) }
             else { receipts[item.id] = remaining; persist() }
         }
@@ -335,6 +363,7 @@ final class ReminderNotificationController: ObservableObject {
         result.keys = pairs.map { $0.0 }
         result.fingerprints = pairs.map { $0.1 }
         result.visibleKeys = item.visibleKeys?.filter { !keys.contains($0) }
+        result.deliveries = item.deliveries?.filter { !keys.contains($0.key) }
         return result
     }
 
@@ -396,9 +425,9 @@ final class ReminderNotificationController: ObservableObject {
         let cold = startupActionsUntil.map { now() < $0 } ?? true
         let alias = responseAliases[id].flatMap { $0.expires > now() ? $0.item : nil }
         guard let item = receipts[id] ?? alias ?? (cold ? startupReceipts[id] : nil) else { return }
-        let actedKeys = Set(item.keys)
-        startupReceipts = startupReceipts.filter { $0.key != id && Set($0.value.keys).isDisjoint(with: actedKeys) }
-        responseAliases = responseAliases.filter { $0.key != id && Set($0.value.item.keys).isDisjoint(with: actedKeys) }
+        let actedKeys = item.reservationKeys
+        startupReceipts = startupReceipts.filter { $0.key != id && $0.value.reservationKeys.isDisjoint(with: actedKeys) }
+        responseAliases = responseAliases.filter { $0.key != id && $0.value.item.reservationKeys.isDisjoint(with: actedKeys) }
         if item.test { discard(id); return }
         onResponse?(item, action)
         discard(id)

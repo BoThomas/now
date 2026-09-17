@@ -522,7 +522,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func showEventDetails(_ event: MeetingEvent) { showMeetingDetails([event]) }
 
-    func showMeetingDetails(_ events: [MeetingEvent]) {
+    func showMeetingDetails(_ events: [MeetingEvent], allowSnooze: Bool = false) {
         guard !events.isEmpty else { return }
         guard let button = statusItem.button else { return }
         eventPopover?.close()
@@ -532,6 +532,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         popover.contentSize = NSSize(width: 360, height: events.count > 1 ? 380 : 340)
         popover.contentViewController = NSHostingController(rootView: MeetingDetailsPopover(
             events: events,
+            snoozeSeconds: allowSnooze ? store.settings.snoozeSeconds : nil,
+            snooze: { [weak self] event in
+                guard let self, self.store.snoozeMeeting(event) else { return }
+                self.eventPopover?.close()
+            },
             join: { [weak self] event in
                 guard let self, let current = self.store.events.first(where: { $0.id == event.id }),
                       current.end > Date(), let url = current.link else { return }
@@ -612,6 +617,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
 private struct MeetingDetailsPopover: View {
     let events: [MeetingEvent]
+    let snoozeSeconds: Int?
+    let snooze: (MeetingEvent) -> Void
     let join: (MeetingEvent) -> Void
     let close: () -> Void
     @State private var selectedID: String?
@@ -626,7 +633,8 @@ private struct MeetingDetailsPopover: View {
             }
             let event = events.first(where: { $0.id == selectedID }) ?? events[0]
             EventDetailsPopover(event: event, copyText: MenuBarController.eventDetailsText(for: event),
-                                join: { join(event) }, close: close)
+                                join: { join(event) }, snoozeSeconds: snoozeSeconds,
+                                snooze: { snooze(event) }, close: close)
         }
     }
 }
@@ -635,7 +643,16 @@ private struct EventDetailsPopover: View {
     let event: MeetingEvent
     let copyText: String
     let join: () -> Void
+    var snoozeSeconds: Int? = nil
+    var snooze: () -> Void = {}
     let close: () -> Void
+
+    private func snoozeLabel(_ plan: AlertController.SnoozePlan) -> String {
+        switch plan {
+        case .atStart: return "Snooze until " + Fmt.time.string(from: event.start)
+        case .duration(let seconds): return "Snooze for " + Fmt.leadTime(seconds)
+        }
+    }
 
     private var location: String? {
         guard let value = event.location?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
@@ -700,8 +717,18 @@ private struct EventDetailsPopover: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             Spacer(minLength: 0)
-            if event.link != nil {
-                Button("Join Meeting", action: join).buttonStyle(.borderedProminent)
+            HStack {
+                if event.link != nil {
+                    Button("Join Meeting", action: join).buttonStyle(.borderedProminent)
+                }
+                if let snoozeSeconds {
+                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                        if let plan = AlertController.primarySnoozePlan(options: AlertController.snoozeOptions(
+                            events: [event], now: timeline.date, customSeconds: snoozeSeconds), defaultSeconds: snoozeSeconds) {
+                            Button(snoozeLabel(plan), action: snooze)
+                        }
+                    }
+                }
             }
             HStack {
                 Button("Copy Details") {
@@ -723,6 +750,10 @@ private struct EventDetailsPopover: View {
 
 #if NOW_TESTING
 extension MenuBarController {
+    static func smokeDetailsView(_ event: MeetingEvent, snoozeSeconds: Int) -> some View {
+        EventDetailsPopover(event: event, copyText: eventDetailsText(for: event), join: {},
+                            snoozeSeconds: snoozeSeconds, snooze: {}, close: {})
+    }
     var smokeMenu: NSMenu { statusItem.menu! }
     func smokeBeginTracking() { menuIsTracking = true }
     func smokeEndTracking() { menuIsTracking = false }

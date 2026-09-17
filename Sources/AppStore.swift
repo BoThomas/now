@@ -132,8 +132,6 @@ final class AppStore: ObservableObject {
     private var meetingRetryAt: Date?
     private var meetingRetryAttempts = 0
 
-    private var alerted: Set<String> = []
-    private var snoozed: [String: Date] = [:]
     /// Missing observations are counted per calendar, not per merged commit.
     private var reminderSnapshots = ReminderSnapshotTracker()
     /// Muted state follows the same source-scoped retention as alert/snooze state.
@@ -186,6 +184,7 @@ final class AppStore: ObservableObject {
             reminderLedger = StoredPreferences.load(ReminderLedger.self, key: ledgerKey, label: "Reminder history", maxBytes: 8_000_000) ?? ReminderLedger()
             syncNotificationTracker = StoredPreferences.load(SyncNotificationTracker.self, key: syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000) ?? SyncNotificationTracker()
         }
+        reminderLedger.migrateLegacy(lead: settings.leadSeconds)
         previousNotificationSettings = settings
         previousEnabledIDs = Set(subscriptions.filter(\.isEnabled).map(\.id))
         knownNativeCalendarIDs = Set(nativeCalendars.map(\.id))
@@ -674,14 +673,13 @@ final class AppStore: ObservableObject {
     /// Snoozes each id to its own re-alert time. Duration snoozes share one
     /// fire date; a "just in time" snooze maps each event to its own start.
     func snooze(_ plan: [String: Date]) {
+        var keys = Set<String>()
         for (id, fireAt) in plan {
             guard let event = events.first(where: { $0.id == id }), !event.isMuted, fireAt < event.end else { continue }
-            alerted.insert(id)
-            snoozed[id] = fireAt
-            reminderLedger.record(event, snooze: fireAt)
+            reminderLedger.schedule(event, until: fireAt, leads: settings.reminderLeadSeconds)
+            keys.insert(NotificationLogic.eventKey(event))
         }
         persistReminderLedger()
-        let keys = Set(events.filter { plan[$0.id] != nil && snoozed[$0.id] != nil }.map(NotificationLogic.eventKey))
         notifications?.removeMeetings(containing: keys)
         notifications?.reconcile()
     }
@@ -808,6 +806,7 @@ final class AppStore: ObservableObject {
     }
 
     func refreshMeetingActivityAfterWake() {
+        meetingActivity = .unknown
         retryMeetingDetection(force: true)
         beginNotificationCatchUp()
         notifications?.refreshPermission(force: true)
@@ -935,25 +934,21 @@ final class AppStore: ObservableObject {
         let retainedIDs = reminderSnapshots.retainedIDs(current: sorted, observedCalendarIDs: observedCalendarIDs, enabledCalendarIDs: enabledIDs)
         // Stable notification identities survive edits. They must not make a
         // previously shown fullscreen reminder suppress a newly scheduled start.
-        let notificationKeys = Set(notifications?.receipts.values.flatMap(\.keys) ?? [])
-        let rearmableKeys = settings.reminderDelivery == .fullscreen
-            ? Set(sorted.map(NotificationLogic.eventKey)).subtracting(notificationKeys) : []
-        let rearmedIDs = reminderLedger.reconcile(events: sorted, enabled: enabledIDs, observed: observedCalendarIDs, now: now(),
-                                                  rearmOnReschedule: rearmableKeys, previousEvents: events)
-        let persistedIDs = Set(sorted.filter { reminderLedger.entries[NotificationLogic.eventKey($0)] != nil }.map(\.id))
-        let pruned = Self.prunedBookkeeping(alerted: alerted, snoozed: snoozed, retainedIDs: retainedIDs)
-        // Single funnel for EVERY event-list change — rule edits, ICS refreshes
-        // (a title edit keeps the same id and can flip muted→unmuted mid-window),
-        // and native rebuilds all pass through here, so the unmute ratchet lives
-        // here and nowhere else.
-        let ratcheted = Self.ratchetSilence(previous: events, fallbackMutedByID: recentMutedByID, current: sorted, alerted: pruned.alerted.subtracting(rearmedIDs), snoozed: pruned.snoozed.filter { !rearmedIDs.contains($0.key) }, leadSeconds: settings.leadSeconds, now: now())
-        alerted = ratcheted.alerted.union(persistedIDs)
-        snoozed = ratcheted.snoozed
-        for event in sorted {
-            if let entry = reminderLedger.entries[NotificationLogic.eventKey(event)], !ratcheted.alerted.contains(event.id) {
-                snoozed[event.id] = entry.snooze
+        var protectedLeads: [String: Set<Int>] = [:]
+        for item in notifications?.receipts.values.map({ $0 }) ?? [] where !item.sync && !item.test && item.updateVersion == nil {
+            for key in item.keys {
+                protectedLeads[key, default: []].formUnion(item.deliveries?[key]?.leads ?? [settings.leadSeconds])
             }
-            if alerted.contains(event.id) { reminderLedger.record(event, snooze: snoozed[event.id]) }
+        }
+        let rearmableKeys = settings.reminderDelivery == .fullscreen ? Set(sorted.map(NotificationLogic.eventKey)) : []
+        reminderLedger.reconcile(events: sorted, enabled: enabledIDs, observed: observedCalendarIDs, now: now(),
+                                 rearmOnReschedule: rearmableKeys, previousEvents: events,
+                                 leads: settings.reminderLeadSeconds, receiptLeads: protectedLeads)
+        var previousMuted = recentMutedByID
+        for event in events { previousMuted[event.id] = event.isMuted }
+        ReminderReconciliation.ratchetSilence(previousMutedByID: previousMuted, current: sorted,
+                                              ledger: &reminderLedger, leads: settings.reminderLeadSeconds, now: now())
+        for event in sorted {
             if let boundary = catchUpBoundary[event.calendarID], event.start <= boundary, event.end > now() { catchUpIDs.insert(event.id) }
         }
         catchUpIDs.formIntersection(retainedIDs)
@@ -983,18 +978,6 @@ final class AppStore: ObservableObject {
             syncNotificationTracker.notified.formIntersection(failed)
             persistSyncNotificationTracker()
         }
-    }
-
-    /// Pure unmute ratchet: an event that transitions muted→unmuted while its
-    /// lead window already started must never pop a surprise fullscreen alert
-    /// (the user deleted/edited a rule, or a title stopped matching on refresh).
-    /// Silencing means alerted[id] = true AND snoozed[id] removed — a snoozed +
-    /// alerted event re-fires once its snooze expires, so both are required.
-    /// Events unmuted before their window are untouched; brand-new events (no
-    /// previous id) are untouched — that is intended late-delivery behavior.
-    nonisolated static func ratchetSilence(previous: [MeetingEvent], fallbackMutedByID: [String: Bool] = [:], current: [MeetingEvent], alerted: Set<String>, snoozed: [String: Date], leadSeconds: Int, now: Date) -> (alerted: Set<String>, snoozed: [String: Date]) {
-        ReminderReconciliation.ratchetSilence(previous: previous, fallbackMutedByID: fallbackMutedByID, current: current,
-                                             alerted: alerted, snoozed: snoozed, leadSeconds: leadSeconds, now: now)
     }
 
     /// Keep muted state for the same source-scoped lifetime as alert/snooze state.
@@ -1053,7 +1036,7 @@ final class AppStore: ObservableObject {
         notifySyncProblems(at: now)
         updateNotificationTick?()
         if isPaused { return }
-        let due = Self.dueForAlert(events: events, alerted: alerted, snoozed: snoozed, leadSeconds: settings.leadSeconds, now: now)
+        let due = events.filter { !reminderLedger.due($0, leads: settings.reminderLeadSeconds, now: now).isEmpty }
         var fullscreen: [MeetingEvent] = []
         var ordinary: [MeetingEvent] = []
         var catchUp: [MeetingEvent] = []
@@ -1086,12 +1069,16 @@ final class AppStore: ObservableObject {
     }
 
     private func notificationRoute(_ event: MeetingEvent, at date: Date) -> ReminderRoute {
-        NotificationLogic.route(event: event, settings: settings, activity: meetingActivity,
-                                catchUp: catchUpIDs.contains(event.id), snoozed: snoozed[event.id] != nil, now: date)
+        if reminderLedger.suppressAfterJoin(event, detectionEnabled: settings.needsMeetingDetection, activity: meetingActivity) {
+            return .handled
+        }
+        return NotificationLogic.route(event: event, settings: settings, activity: meetingActivity,
+                                catchUp: catchUpIDs.contains(event.id), snoozed: reminderLedger.entries[NotificationLogic.eventKey(event)]?.snooze != nil, now: date)
     }
 
     func connectNotifications(_ controller: ReminderNotificationController) {
         notifications = controller
+        controller.migrateReminderMembership(lead: settings.leadSeconds)
         controller.onMeetingPreview = { [weak self] in self?.alertController?.cancelPreview() }
         controller.validate = { [weak self] item in self?.validNotification(item) ?? false }
         controller.reconcileDelivered = { [weak self] item in self?.reconcileDeliveredNotification(item) ?? .remove }
@@ -1103,7 +1090,7 @@ final class AppStore: ObservableObject {
                 self.syncNotificationTracker.notified.formUnion(item.keys.compactMap(UUID.init(uuidString:)))
                 self.persistSyncNotificationTracker()
             }
-            else if !item.test { self.acknowledge(self.eventsForNotification(item)) }
+            else if !item.test { self.acceptNotification(item) }
         }
         controller.onResponse = { [weak self] item, action in
             guard let self else { return }
@@ -1136,7 +1123,7 @@ final class AppStore: ObservableObject {
             let route = notificationRoute(event, at: now())
             return fingerprints[NotificationLogic.eventKey(event)] == NotificationLogic.fingerprint(event)
                 && (item.replacementReason != nil || route == .notification || route == .catchUp)
-                && (snoozed[event.id] == nil || snoozed[event.id]! <= now())
+                && validDelivery(item, event: event)
         }
     }
 
@@ -1148,6 +1135,11 @@ final class AppStore: ObservableObject {
                   String(first.timeIntervalSince1970) == fingerprint else { return nil }
             return key
         })
+    }
+
+    private func retainsDelivery(_ delivery: ReminderDeliveryState?) -> Bool {
+        guard let delivery else { return true }
+        return delivery.snoozeToken != nil || !delivery.leads.isDisjoint(with: settings.reminderLeadSeconds)
     }
 
     /// Accepted notifications have their own lifecycle. Merely acknowledging a
@@ -1169,8 +1161,10 @@ final class AppStore: ObservableObject {
         var changed = false
         for (oldKey, fingerprint) in zip(original.keys, original.fingerprints) {
             if let event = notificationEventsByKey[oldKey] {
-                guard enabled.contains(event.calendarID), !event.isMuted, event.end > now(), snoozed[event.id] == nil else { continue }
+                guard enabled.contains(event.calendarID), !event.isMuted, event.end > now(), reminderLedger.entries[NotificationLogic.eventKey(event)]?.snooze == nil else { continue }
                 let key = NotificationLogic.eventKey(event)
+                guard retainsDelivery(original.deliveries?[oldKey]) else { continue }
+                item.deliveries?[key] = original.deliveries?[oldKey]
                 guard seenKeys.insert(key).inserted else { continue }
                 if priorVisible.remove(oldKey) != nil { priorVisible.insert(key) }
                 keys.append(key)
@@ -1192,6 +1186,8 @@ final class AppStore: ObservableObject {
         }
         guard !keys.isEmpty else { return .remove }
         item.keys = keys; item.fingerprints = fingerprints; item.expires = expiration
+        let retainedKeys = Set(keys)
+        item.deliveries = item.deliveries?.filter { retainedKeys.contains($0.key) }
         item.fingerprintVersion = 2
         let visible = current.map(NotificationLogic.eventKey)
         item.visibleKeys = visible
@@ -1211,6 +1207,7 @@ final class AppStore: ObservableObject {
             guard var replacement = meetingNotification(current, catchUp: item.catchUp, at: now(), reason: reason) else { return .remove }
             // Preserve missing members so their later return can restore them too.
             let latest = Dictionary(uniqueKeysWithValues: zip(replacement.keys, replacement.fingerprints))
+            replacement.deliveries = item.deliveries
             replacement.keys = keys
             replacement.fingerprints = zip(keys, fingerprints).map { latest[$0.0] ?? $0.1 }
             replacement.visibleKeys = visible
@@ -1235,7 +1232,10 @@ final class AppStore: ObservableObject {
             category: !catchUp && sorted.count > 1 ? SystemNotificationTransport.chooseMeetingCategory
                 : SystemNotificationTransport.category(join: sorted.count == 1 && sorted[0].link != nil, snooze: canSnooze),
             sound: reason == nil && settings.soundEnabled && !(settings.notifyDuringMeetings && meetingActivity.isDetectedMeeting),
-            visibleKeys: keys, replacementReason: reason, fingerprintVersion: 2)
+            visibleKeys: keys, replacementReason: reason, fingerprintVersion: 2,
+            deliveries: Dictionary(uniqueKeysWithValues: sorted.map {
+                (NotificationLogic.eventKey($0), reminderLedger.due($0, leads: settings.reminderLeadSeconds, now: date))
+            }))
     }
 
     private func offerNotification(_ incoming: [MeetingEvent], catchUp: Bool, at date: Date) {
@@ -1246,18 +1246,43 @@ final class AppStore: ObservableObject {
     /// Persist an explicit acknowledgement or accepted reminder delivery.
     func acknowledge(_ handled: [MeetingEvent]) {
         for event in handled {
-            alerted.insert(event.id)
-            snoozed.removeValue(forKey: event.id)
-            reminderLedger.record(event)
+            reminderLedger.accept(reminderLedger.due(event, leads: settings.reminderLeadSeconds, now: now()), event: event)
         }
         persistReminderLedger()
     }
 
+    private func acceptNotification(_ item: ReminderNotification) {
+        for event in eventsForNotification(item) {
+            let key = NotificationLogic.eventKey(event)
+            if let delivery = item.deliveries?[key] { reminderLedger.accept(delivery, event: event) }
+        }
+        persistReminderLedger()
+    }
+
+    private func validDelivery(_ item: ReminderNotification, event: MeetingEvent) -> Bool {
+        let key = NotificationLogic.eventKey(event)
+        guard let delivery = item.deliveries?[key] else { return false }
+        if item.replacementReason != nil { return true }
+        let due = reminderLedger.due(event, leads: settings.reminderLeadSeconds, now: now())
+        return !delivery.isEmpty && delivery.actionToken == due.actionToken
+            && delivery.leads.isSubset(of: due.leads)
+            && (delivery.snoozeToken == nil || delivery.snoozeToken == due.snoozeToken)
+    }
+
     func joinedMeeting(_ event: MeetingEvent) {
-        guard let current = events.first(where: { $0.id == event.id }),
-              Self.joinHandlesReminder(current, leadSeconds: settings.leadSeconds, now: now()) else { return }
-        acknowledge([current])
+        guard let current = events.first(where: { $0.id == event.id }), current.end > now() else { return }
+        reminderLedger.join(current)
+        persistReminderLedger()
         notifications?.removeMeetings(containing: [NotificationLogic.eventKey(current), NotificationLogic.key(current.id), NotificationLogic.key(current.legacyID)])
+    }
+
+    func snoozeMeeting(_ event: MeetingEvent) -> Bool {
+        guard let current = events.first(where: { $0.id == event.id }), !current.isMuted, current.end > now(),
+              let plan = AlertController.primarySnoozePlan(options: AlertController.snoozeOptions(
+                events: [current], now: now(), customSeconds: settings.snoozeSeconds), defaultSeconds: settings.snoozeSeconds),
+              let schedule = AlertController.snoozeSchedule(plan: plan, events: [current], now: now()) else { return false }
+        snooze(schedule)
+        return true
     }
 
     nonisolated static func joinHandlesReminder(_ event: MeetingEvent, leadSeconds: Int, now: Date) -> Bool {
@@ -1287,10 +1312,11 @@ final class AppStore: ObservableObject {
             if let plan = AlertController.primarySnoozePlan(options: options, defaultSeconds: settings.snoozeSeconds),
                let schedule = AlertController.snoozeSchedule(plan: plan, events: current, now: now()) {
                 snooze(schedule)
-            } else { acknowledge(current); openNotificationMeetings?(current) }
+            } else { acceptNotification(item); openNotificationMeetings?(current) }
         } else {
-            acknowledge(current)
-            notifications?.removeMeetings(containing: Set(current.map(NotificationLogic.eventKey)))
+            acceptNotification(item)
+            notifications?.removeDelivery(item)
+            if action == "join" { current.forEach(joinedMeeting) }
             if action == "choose" || (!item.catchUp && item.keys.count > 1 && action != UNNotificationDismissActionIdentifier) { openNotificationAgenda?() }
             else if action == "join", current.count == 1, let url = current[0].link { openNotificationLink(url) }
             else if action != UNNotificationDismissActionIdentifier { openNotificationMeetings?(current) }
@@ -1356,6 +1382,10 @@ final class AppStore: ObservableObject {
     }
 
     private func settingsChanged() {
+        if let previous = previousNotificationSettings, previous.reminderLeadSeconds != settings.reminderLeadSeconds {
+            reminderLedger.changeLeads(from: previous.reminderLeadSeconds, to: settings.reminderLeadSeconds, at: now())
+            persistReminderLedger()
+        }
         persist()
         if let previous = previousNotificationSettings, previous != settings {
             previousNotificationSettings = settings

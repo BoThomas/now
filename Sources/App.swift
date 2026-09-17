@@ -103,7 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #else
         store.featureGuides = FeatureGuideController()
         #endif
-        store.openNotificationMeetings = { [weak self] events in self?.menuBarController?.showMeetingDetails(events) }
+        store.openNotificationMeetings = { [weak self] events in self?.menuBarController?.showMeetingDetails(events, allowSnooze: true) }
         store.openNotificationAgenda = { [weak self] in self?.openNotificationAgenda() }
         store.openNotificationSyncSettings = { [weak self] in self?.openSettings() }
     }

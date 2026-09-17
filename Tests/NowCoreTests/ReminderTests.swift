@@ -67,10 +67,14 @@ extension CoreTests {
         check.expect(ReminderTiming.dueForAlert(events: [item], alerted: [item.id], snoozed: [item.id: item.start], leadSeconds: 300, now: item.start).count == 1, "explicit snooze re-fires")
         var muted = item; muted.isMuted = true
         check.expect(ReminderTiming.dueForAlert(events: [muted], alerted: [], snoozed: [:], leadSeconds: 300, now: item.start).isEmpty, "muted event stays silent")
-        let ratchet = ReminderReconciliation.ratchetSilence(previous: [muted], current: [item], alerted: [], snoozed: [item.id: item.start], leadSeconds: 300, now: item.start)
-        check.expect(ratchet.alerted == [item.id] && ratchet.snoozed.isEmpty, "unmute inside lead window clears snooze and acknowledges")
-        let early = ReminderReconciliation.ratchetSilence(previous: [muted], current: [item], alerted: [], snoozed: [:], leadSeconds: 300, now: item.start.addingTimeInterval(-301))
-        check.expect(early.alerted.isEmpty, "early unmute retains future reminder")
+        var ratchet = ReminderLedger()
+        ratchet.schedule(item, until: item.start, leads: [300])
+        ReminderReconciliation.ratchetSilence(previousMutedByID: [muted.id: true], current: [item], ledger: &ratchet, leads: [300], now: item.start)
+        check.expect(ratchet.entries[ReminderIdentity.eventKey(item)]?.snooze == nil && ratchet.due(item, leads: [300], now: item.start).isEmpty,
+                     "unmute inside lead window clears snooze and acknowledges")
+        var early = ReminderLedger()
+        ReminderReconciliation.ratchetSilence(previousMutedByID: [muted.id: true], current: [item], ledger: &early, leads: [300], now: item.start.addingTimeInterval(-301))
+        check.expect(early.entries.isEmpty, "early unmute retains future reminder")
         check.expect(ReminderReconciliation.normalizedEvents([item, item]).count == 1, "commit normalization removes duplicate IDs")
 
         var settings = AppSettings(); settings.catchUpDelivery = .skip; settings.inMeetingDelivery = .suppress

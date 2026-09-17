@@ -4,19 +4,13 @@ import Foundation
 /// not own receipts or perform persistence; the transaction controls their order.
 package enum ReminderReconciliation {
     /// Unmuting inside the lead window must neither surprise-alert nor retain a snooze.
-    package static func ratchetSilence(previous: [MeetingEvent], fallbackMutedByID: [String: Bool] = [:], current: [MeetingEvent], alerted: Set<String>, snoozed: [String: Date], leadSeconds: Int, now: Date) -> (alerted: Set<String>, snoozed: [String: Date]) {
-        var wasMuted = fallbackMutedByID
-        for event in previous { wasMuted[event.id] = event.isMuted }
-        var alerted = alerted
-        var snoozed = snoozed
-        let lead = TimeInterval(leadSeconds)
+    package static func ratchetSilence(previousMutedByID: [String: Bool], current: [MeetingEvent],
+                                      ledger: inout ReminderLedger, leads: [Int], now: Date) {
         for event in current {
-            guard wasMuted[event.id] == true, !event.isMuted else { continue }
-            guard now >= event.start.addingTimeInterval(-lead), now < event.end else { continue }
-            alerted.insert(event.id)
-            snoozed.removeValue(forKey: event.id)
+            guard previousMutedByID[event.id] == true, !event.isMuted, now < event.end,
+                  leads.contains(where: { now >= event.start.addingTimeInterval(-Double($0)) }) else { continue }
+            ledger.silenceDue(event, leads: leads, now: now)
         }
-        return (alerted, snoozed)
     }
 
     package static func retainedMutedStates(previous: [String: Bool], current: [MeetingEvent], retainedIDs: Set<String>) -> [String: Bool] {

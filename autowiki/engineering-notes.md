@@ -87,9 +87,20 @@ must stay EventKit-free).
 
 ### Reminder timing
 
-reminders fire from the lead window until the meeting ENDS (`dueForAlert`, pure) — late delivery
-after sleep/delayed launch still alerts; ended meetings never do. A due reminder MERGES into an open
-panel (`AlertController.mergedShown`), never replaces it. `commitEvents` →
+Multiple reminders use per-lead handled membership inside each occurrence's ledger entry. Snooze and
+Join are occurrence-wide actions with latest-action precedence. Snooze consumes intermediate leads;
+Join checks detection once for each due delivery, suppressing unless enabled detection reports
+inactive. Moving the start shifts an active Snooze by the same delta and resets Join. Keep the saved
+start anchor to avoid applying a shift twice. Settings lead activation cutoffs survive restart and
+apply to unloaded occurrences; ordinary late-launch catch-up remains available for existing leads.
+Accepted notifications reserve concrete lead/Snooze membership, not entire occurrences. Dismissal
+must cancel matching replacement intent without removing another lead's notification. The legacy
+scalar timing field is still encoded for old binaries; a downgrade uses that single representative
+lead and cannot retain multiple-reminder semantics if it rewrites settings/history.
+
+reminders fire from each lead window until the meeting ENDS (`ReminderLedger.due`, pure) — late
+delivery after sleep/delayed launch still alerts; ended meetings never do. A due reminder MERGES
+into an open panel (`AlertController.mergedShown`), never replaces it. `commitEvents` →
 `alertController.reconcile` drops cards whose events vanished (preview alerts exempt). Pause
 (`pausedUntil`, incl. indefinite) persists via `Persisted`; snoozes/alerted memory now persist
 through ReminderLedger. All AppStore/MenuBar/EventKit-debounce timers run in `.common` run-loop mode
@@ -608,9 +619,11 @@ a meeting preview, not a redundant generic test button.
 
 ### Join and paused notification Snooze
 
-agenda/menu joins acknowledge only from the lead-window boundary until event end; early link opening
-preserves the reminder. Explicit notification Snooze re-arms even while paused (including
-refresh-deferred responses), but delivery stays paused and ended meetings never re-fire.
+Join from any real meeting surface records occurrence-wide Join state, including early link opening;
+pending reminders are consumed at their due times unless enabled detection confirms no meeting. A
+later explicit Snooze clears that Join condition. Explicit notification Snooze re-arms even while
+paused (including refresh-deferred responses), but delivery stays paused and ended meetings never
+re-fire.
 
 ### Accepted notification lifecycle
 

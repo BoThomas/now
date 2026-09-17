@@ -309,6 +309,7 @@ struct NotificationSmoke {
         if case .installed = updater.windowContent {} else { require(false, "success dialog follows health commit") }
         NotificationPreview.verifyPopupLayout()
         if let directory = ProcessInfo.processInfo.environment["NOW_NOTIFICATION_RENDER_DIR"] {
+            NotificationPreview.renderReminderControls(directory: directory)
             // Render production views with untouched default choices, entirely
             // offline. Never construct SystemNotificationTransport here.
             let previewDomain = "now-initial-guide-" + UUID().uuidString
@@ -524,6 +525,8 @@ struct NotificationSmoke {
         permissionWait!.resume(returning: true)
         let cancelled = await pendingSetup.value
         require(!cancelled && resumed.pending && store.settings == unchanged, "assistant closing during validation cancels commit")
+        // Setup predates the following synthetic meetings; lead edits intentionally do not backfill.
+        clock = base.addingTimeInterval(-86400)
         let finished = await resumed.complete(store: store, permission: { true }, probe: { .success([]) })
         require(finished && !resumed.pending && store.settings.leadSeconds == 90, "assistant completes and applies selected reminder timing")
         require(store.settings.notifySyncErrors, "assistant enables sync-problem notifications after confirmed permission, including resumed setup")
@@ -614,7 +617,7 @@ struct NotificationSmoke {
         // Restore the first store's synthetic profile for the restart assertions below.
         store.settings.reminderDelivery = .fullscreen
 
-        // Explicit joins only acknowledge within the lead window; both choices survive reload.
+        // Join state survives reload, including early Join; disabled detection consumes due work.
         store.settings.catchUpDelivery = .normal
         let early = meeting("review-early", start: 86400, end: 90000)
         let dueJoin = meeting("review-due-join", start: 86400, end: 90000)
@@ -628,7 +631,7 @@ struct NotificationSmoke {
         var joinAlerts: [String] = []
         joinRestart.onAlert = { joinAlerts += $0.map(\.id) }
         joinRestart.smokeTick(); await settle()
-        require(joinAlerts == [early.id], "early join preserves reminder; lead-window join remains handled after restart")
+        require(joinAlerts.isEmpty, "early and lead-window Join suppress after restart with detection disabled")
 
         clock = base
         store.settings.reminderDelivery = .notification

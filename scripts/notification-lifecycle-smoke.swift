@@ -53,6 +53,7 @@ private final class LifecycleFixture {
 
 extension NotificationSmoke {
     @MainActor static func lifecycleTests(root: URL) async {
+        await multipleReminderLifecycle(root: root)
         func require(_ value: @autoclosure () -> Bool, _ message: String) {
             guard value() else { print("FAIL lifecycle: " + message); exit(1) }
         }
@@ -83,7 +84,9 @@ extension NotificationSmoke {
             f.commit([snoozedMove]); await f.tick()
             require(shown.count == 3, "fullscreen reschedule preserves an explicit snooze")
             f.clock = deadline; await f.tick()
-            require(shown.last == snoozedMove.id && shown.count == 4, "moved fullscreen snooze fires at its chosen deadline")
+            require(shown.count == 3, "moved snooze does not fire at obsolete deadline")
+            f.clock = deadline.addingTimeInterval(snoozedMove.start.timeIntervalSince(original.start)); await f.tick()
+            require(shown.last == snoozedMove.id && shown.count == 4, "moved fullscreen snooze follows the start shift")
         }
         do {
             let f = LifecycleFixture(root: root); defer { f.cleanup() }
@@ -257,7 +260,9 @@ extension NotificationSmoke {
             f.commit([f.event("private", title: "Changed while snoozed", start: 240)]); await f.tick()
             require(f.transport.submissions.count == 2, "editing a snoozed occurrence preserves the deadline")
             f.clock = f.base.addingTimeInterval(500); await f.tick()
-            require(f.transport.submissions.count == 3, "moved occurrence snooze fires at original deadline")
+            require(f.transport.submissions.count == 2, "moved occurrence skips obsolete snooze deadline")
+            f.clock = f.base.addingTimeInterval(620); await f.tick()
+            require(f.transport.submissions.count == 3, "moved occurrence snooze follows start delta")
         }
         do {
             let f = LifecycleFixture(root: root); defer { f.cleanup() }
@@ -338,6 +343,8 @@ extension NotificationSmoke {
             f.commit([event]); restored.reconcile(); await settle()
             require(restored.receipts[legacy.id]?.keys == [NotificationLogic.eventKey(event)] && f.transport.submissions.isEmpty,
                     "pre-v2 recurring receipt migrates without a spurious meeting-updated notification")
+            require(Set(restored.receipts[legacy.id]?.deliveries?.keys.map { $0 } ?? []) == [NotificationLogic.eventKey(event)],
+                    "identity migration prunes obsolete receipt membership keys")
             restored.receive(id: legacy.id, action: UNNotificationDefaultActionIdentifier)
             require(f.details.map(\.id) == [event.id], "migrated recurring receipt resolves its live meeting")
         }
@@ -390,5 +397,88 @@ extension NotificationSmoke {
             store.prepareForTermination({})
         }
         print("NOTIFICATION LIFECYCLE OK — snooze lifetime, group retention, edits/restoration, explicit actions, retries/races, cold actions, detection recovery")
+    }
+}
+
+
+extension NotificationSmoke {
+    @MainActor static func multipleReminderLifecycle(root: URL) async {
+        func require(_ value: @autoclosure () -> Bool, _ message: String) {
+            guard value() else { print("FAIL multiple reminders: " + message); exit(1) }
+        }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            f.store.settings.reminderLeadSeconds = [0, 300, 600]
+            let event = f.event("three", start: 900)
+            f.commit([event])
+            f.clock = f.base.addingTimeInterval(300); await f.tick()
+            require(f.transport.submissions.count == 1, "first lead delivered")
+            let first = f.transport.submissions.last!
+            f.clock = f.base.addingTimeInterval(600); await f.tick()
+            require(f.transport.submissions.count == 2, "accepted earlier receipt does not reserve future lead")
+            let second = f.transport.submissions.last!
+            require(first.id != second.id && first.keys == second.keys, "distinct deliveries retain same occurrence")
+            f.controller.receive(id: first.id, action: UNNotificationDismissActionIdentifier)
+            require(f.controller.receipts[second.id] != nil, "old dismissal does not retract later receipt")
+            f.clock = event.start; await f.tick()
+            require(f.transport.submissions.count == 3, "zero lead remains independent")
+        }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            f.store.settings.reminderLeadSeconds = [0, 300, 600]
+            let event = f.event("snooze-all", start: 900)
+            f.commit([event]); f.clock = f.base.addingTimeInterval(300); await f.tick()
+            f.store.snooze([event.id: event.start])
+            f.clock = f.base.addingTimeInterval(600); await f.tick()
+            require(f.transport.submissions.count == 1, "Snooze silences intermediate reminder")
+            f.store.settings.reminderLeadSeconds = [0, 300]
+            f.clock = event.start; await f.tick()
+            require(f.transport.submissions.count == 2, "removed source lead preserves Snooze and start collision coalesces")
+            await f.tick()
+            require(f.transport.submissions.count == 2, "coalesced reminder acknowledged once")
+        }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            f.store.settings.reminderLeadSeconds = [0, 300, 600]
+            let event = f.event("join-latest", start: 900)
+            f.commit([event]); f.clock = f.base.addingTimeInterval(300); await f.tick()
+            f.store.snooze([event.id: f.base.addingTimeInterval(600)])
+            f.store.joinedMeeting(event)
+            f.clock = f.base.addingTimeInterval(600); await f.tick()
+            require(f.transport.submissions.count == 1, "Join after Snooze consumes when detection disabled")
+            f.store.settings.snoozeSeconds = 60
+            require(f.store.snoozeMeeting(event), "details Snooze can re-arm after Join")
+            f.clock = f.base.addingTimeInterval(660); await f.tick()
+            require(f.transport.submissions.count == 2, "latest Snooze overrides prior Join")
+        }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            let event = f.event("details", start: 120)
+            f.commit([event]); await f.tick()
+            let receipt = f.transport.submissions.last!
+            f.controller.receive(id: receipt.id, action: UNNotificationDefaultActionIdentifier)
+            require(f.details.map(\.id) == [event.id], "body click opens meeting details")
+            f.store.settings.snoozeSeconds = 60
+            require(f.store.snoozeMeeting(event), "details action schedules without original receipt or URL")
+            f.clock = f.base.addingTimeInterval(60); await f.tick()
+            require(f.transport.submissions.count == 2, "details Snooze delivers")
+            f.clock = event.end
+            require(!f.store.snoozeMeeting(event), "stale details cannot Snooze ended meeting")
+        }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            let event = f.event("edit", start: 900)
+            f.commit([event]); f.clock = f.base.addingTimeInterval(400)
+            f.store.settings.reminderLeadSeconds = [0, 300, 600]
+            await f.tick()
+            require(f.transport.submissions.isEmpty, "added past lead is not backfilled")
+            f.clock = f.base.addingTimeInterval(700); await f.tick()
+            require(f.transport.submissions.count == 1, "existing overdue lead still catches up")
+        }
     }
 }

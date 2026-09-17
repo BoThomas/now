@@ -28,6 +28,30 @@ pins them to your main display instead — handy when a large monitor is your ho
 You can also use notifications only during another meeting, or for meetings already running when
 your Mac wakes. **Hide meeting details** keeps notification text private.
 
+## Multiple reminder times
+
+In **Settings → Reminder**, use **+** beside **Remind me** to add up to three times, including
+**Just in time**. Choose a time to activate a new row; duplicate times are combined. **−** removes
+an extra time. The **ⓘ** button explains how multiple reminders work. Setup keeps one timing choice.
+
+- **Snooze** silences this meeting until your chosen time. Earlier reminder times are skipped; later
+  times remain active. An existing Snooze survives removing a reminder time from Settings.
+- **Join** makes outstanding reminders conditional: they appear only if enabled meeting detection
+  confirms you are not in a meeting. With detection off or unavailable, they are skipped. This
+  detects activity, not attendance in a particular meeting. The latest Join or Snooze action wins.
+- **Close** dismisses only the current reminder; later reminders remain active.
+- Several overdue reminders are combined. An already open fullscreen card absorbs further reminders
+  for that meeting without another sound or focus change.
+
+Newly added times are not applied retroactively. Existing reminders still catch up after sleep. When
+a meeting moves, its Snooze shifts by the same amount and its previous Join state is cleared. If
+moving earlier makes the Snooze overdue, it catches up once while the meeting is still active. These
+Join and Snooze rules also apply when you configure only one reminder.
+
+Click a meeting notification's body to open its details. **Snooze** there uses your configured
+Snooze preference and works even without a Join link. In a detail view with several meetings, it
+applies to the selected meeting. Group notifications offering **Choose Meeting…** open the agenda.
+
 ## Everyday controls
 
 | To…                      | Use…                                                          |
