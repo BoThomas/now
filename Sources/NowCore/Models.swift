@@ -46,10 +46,21 @@ package struct AppSettings: Codable, Equatable, Sendable {
     /// Persisted macOS sound identifiers: a compatibility vocabulary, not playback APIs.
     package static let soundNames = ["Basso", "Blow", "Bottle", "Funk", "Glass", "Hero", "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"]
 
-    package var leadSeconds = 300 {
+    package var reminderLeadSeconds = [300] {
         didSet {
-            if leadSeconds == 0 && snoozeSeconds == 0 { snoozeSeconds = 60 }
+            reminderLeadSeconds = Self.normalizedLeads(reminderLeadSeconds)
+            if !reminderLeadSeconds.contains(where: { $0 > 0 }) && snoozeSeconds == 0 { snoozeSeconds = 60 }
         }
+    }
+    /// Single-select adapter for setup, legacy consumers and downgrade encoding.
+    package var leadSeconds: Int {
+        get { reminderLeadSeconds.max() ?? 300 }
+        set { reminderLeadSeconds = [newValue] }
+    }
+
+    package static func normalizedLeads(_ values: [Int]) -> [Int] {
+        let unique = Set(values.map { min(max($0, 0), 7200) }).sorted()
+        return unique.isEmpty ? [300] : Array(unique.prefix(3))
     }
     package var refreshMinutes = 15
     package var soundEnabled = true
@@ -126,7 +137,34 @@ package struct AppSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case reminderDelivery, reminderScreen, notifyDuringMeetings, notifyOnCatchUp, skipMeetingsOnCatchUp, hideNotificationDetails, notifySyncErrors, notifyUpdates
-        case menuMeetingLimit, leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
+        case reminderLeadSeconds, menuMeetingLimit, leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
+    }
+
+    package func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(reminderDelivery, forKey: .reminderDelivery)
+        try c.encode(reminderScreen, forKey: .reminderScreen)
+        try c.encode(notifyDuringMeetings, forKey: .notifyDuringMeetings)
+        try c.encode(notifyOnCatchUp, forKey: .notifyOnCatchUp)
+        try c.encode(skipMeetingsOnCatchUp, forKey: .skipMeetingsOnCatchUp)
+        try c.encode(hideNotificationDetails, forKey: .hideNotificationDetails)
+        try c.encode(notifySyncErrors, forKey: .notifySyncErrors)
+        try c.encode(notifyUpdates, forKey: .notifyUpdates)
+        try c.encode(reminderLeadSeconds, forKey: .reminderLeadSeconds)
+        try c.encode(menuMeetingLimit, forKey: .menuMeetingLimit)
+        try c.encode(leadSeconds, forKey: .leadSeconds)
+        try c.encode(refreshMinutes, forKey: .refreshMinutes)
+        try c.encode(soundEnabled, forKey: .soundEnabled)
+        try c.encode(soundName, forKey: .soundName)
+        try c.encode(showMenuBarCountdown, forKey: .showMenuBarCountdown)
+        try c.encode(launchAtLogin, forKey: .launchAtLogin)
+        try c.encode(elapsedStartMinutes, forKey: .elapsedStartMinutes)
+        try c.encode(skipDeclined, forKey: .skipDeclined)
+        try c.encode(snoozeSeconds, forKey: .snoozeSeconds)
+        try c.encode(automaticUpdateChecks, forKey: .automaticUpdateChecks)
+        try c.encode(suppressRemindersDuringMeetings, forKey: .suppressRemindersDuringMeetings)
+        try c.encode(includeBrowserMeetings, forKey: .includeBrowserMeetings)
+        try c.encodeIfPresent(skippedUpdateVersion, forKey: .skippedUpdateVersion)
     }
 
     package init() {}
@@ -140,8 +178,14 @@ package struct AppSettings: Codable, Equatable, Sendable {
 
     package init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let lead = c.recover(Int.self, forKey: .leadSeconds, decoder: decoder) ?? 300
-        leadSeconds = min(max(lead, Self.leadSecondsRange.lowerBound), Self.leadSecondsRange.upperBound)
+        if c.contains(.reminderLeadSeconds),
+           let values = c.recover([Int].self, forKey: .reminderLeadSeconds, decoder: decoder), !values.isEmpty {
+            reminderLeadSeconds = Self.normalizedLeads(values)
+        } else {
+            if c.contains(.reminderLeadSeconds) { PreferenceDecoding.note(decoder) }
+            let lead = c.recover(Int.self, forKey: .leadSeconds, decoder: decoder) ?? 300
+            reminderLeadSeconds = Self.normalizedLeads([lead])
+        }
         let refresh = c.recover(Int.self, forKey: .refreshMinutes, decoder: decoder) ?? 15
         refreshMinutes = Self.nearest(refresh, in: Self.allowedRefreshMinutes, default: 15)
         soundEnabled = c.recover(Bool.self, forKey: .soundEnabled, decoder: decoder) ?? true

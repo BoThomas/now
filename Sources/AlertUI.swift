@@ -45,6 +45,8 @@ final class AlertController: ObservableObject {
     var isOpen: Bool { panel != nil }
 
     func present(_ events: [MeetingEvent], playSound: Bool = true, preview: Bool = false) {
+        let repeatsVisibleMeeting = isOpen && !isPreview && !preview
+            && events.allSatisfy { incoming in shownEvents.contains { $0.id == incoming.id } }
         let next = Self.nextPresentation(existing: isOpen ? shownEvents : [], existingIsPreview: isOpen && isPreview,
                                          incoming: events, incomingIsPreview: preview)
         guard next.acceptsDelivery else { return }
@@ -55,7 +57,7 @@ final class AlertController: ObservableObject {
         // fabricated preview cards and immediately restores reconciliation.
         if isOpen {
             reconcileSnoozeMenu(options: snoozeOptions(at: Date()))
-            if playSound { store?.playSound() }
+            if playSound && !repeatsVisibleMeeting { store?.playSound() }
             return
         }
         let panel = AlertPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -170,11 +172,13 @@ final class AlertController: ObservableObject {
         }
     }
 
-    func join(_ url: URL) {
+    func join(_ event: MeetingEvent) {
+        guard let current = shownEvents.first(where: { $0.id == event.id }), let url = current.link else { return }
         switch Self.joinAction(for: url, shown: shownEvents, isPreview: isPreview) {
         case .ignore: return
         case .dismissPreview: close()
         case .open(let url):
+            store?.joinedMeeting(current)
             NSWorkspace.shared.open(url)
             close()
         }
@@ -515,8 +519,8 @@ final class AlertController: ObservableObject {
                 self.close()
                 return nil
             case .joinOrClose:
-                if let url = Self.primaryJoinURL(in: self.shownEvents) {
-                    self.join(url)
+                if let event = self.shownEvents.first(where: { $0.link != nil }) {
+                    self.join(event)
                 } else {
                     self.close()
                 }
@@ -524,8 +528,8 @@ final class AlertController: ObservableObject {
             case .joinIndex(let number):
                 // "3" joins the third card; out of range or link-less events
                 // are swallowed quietly.
-                if let url = Self.indexedJoinURL(in: self.shownEvents, number: number) {
-                    self.join(url)
+                if self.shownEvents.indices.contains(number - 1) {
+                    self.join(self.shownEvents[number - 1])
                 }
                 return nil
             case .pressFocused:
@@ -807,9 +811,9 @@ struct SingleEventView: View {
             }
             .font(.system(size: 19, weight: .medium))
             .foregroundStyle(.white.opacity(0.75))
-            if let link = event.link {
+            if event.link != nil {
                 Button {
-                    controller.join(link)
+                    controller.join(event)
                 } label: {
                     Label("Join Meeting", systemImage: "video.fill")
                 }
@@ -897,9 +901,9 @@ struct MultiEventView: View {
                                     .foregroundStyle(.white.opacity(0.6))
                             }
                             Spacer()
-                            if let link = event.link {
+                            if event.link != nil {
                                 Button {
-                                    controller.join(link)
+                                    controller.join(event)
                                 } label: {
                                     Label("Join", systemImage: "video.fill")
                                 }

@@ -1189,7 +1189,6 @@ struct SettingsView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var alerts: AlertController
     @EnvironmentObject var updates: UpdateController
-    @State private var showCustomReminderTime = false
     @State private var showCustomSnoozeTime = false
     @State private var showAddSheet = false
     @State private var showBrowserMeetingInfo = false
@@ -1706,27 +1705,8 @@ struct SettingsView: View {
                     .help("Focused Display takes over whichever display you are working on. Main Display always uses your main display, even when you are working on another one.")
                 }
             }
-            Picker("Remind me", selection: Binding(
-                get: { store.settings.leadSeconds },
-                set: { value in
-                    if value == -1 { showCustomReminderTime = true }
-                    else { store.settings.leadSeconds = value }
-                }
-            )) {
-                ForEach(AppSettings.leadDurations(including: store.settings.leadSeconds), id: \.self) { seconds in
-                    Text(Fmt.reminderTiming(seconds)).tag(seconds)
-                }
-                Divider()
-                Text("Custom…").tag(-1)
-            }
-            .pickerStyle(.menu)
-            .frame(maxWidth: 280, alignment: .leading)
-            .accessibilityLabel("Reminder timing")
-            .popover(isPresented: $showCustomReminderTime, arrowEdge: .bottom) {
-                CustomTimingEditor(title: "Remind me before start", seconds: store.settings.leadSeconds, range: AppSettings.leadSecondsRange,
-                    onApply: { store.settings.leadSeconds = $0; showCustomReminderTime = false },
-                    onCancel: { showCustomReminderTime = false })
-            }
+            ReminderLeadEditor(leads: Binding(get: { store.settings.reminderLeadSeconds },
+                                              set: { store.settings.reminderLeadSeconds = $0 }))
             Picker("Snooze", selection: Binding(
                 get: { store.settings.snoozeSeconds },
                 set: { value in

@@ -6,10 +6,10 @@
 
 The one-second `AppStore.tick` in [AppStore.swift](../Sources/AppStore.swift) waits for cache
 restore, reconciles notifications, processes diagnostic notices, then respects Pause before finding
-due meetings. `dueForAlert` is a pure predicate: an unmuted, unhandled event is eligible from
-`start - leadSeconds` until its exclusive end. An expired explicit snooze can re-fire in that same
-end bound. Late launch or wake can therefore remind about an ongoing meeting; menu countdown limits
-do not shorten this delivery window.
+due meetings. `ReminderLedger.due` returns unhandled lead membership for an unmuted occurrence from
+each `start - lead` until its exclusive end; several due members share one presentation. An expired
+explicit snooze can re-fire in that same end bound. Late launch or wake can therefore remind about
+an ongoing meeting; menu countdown limits do not shorten this delivery window.
 
 [NotificationLogic.route](../Sources/NowCore/Reminders/NotificationRouting.swift) applies
 during-meeting policy first, catch-up policy second (except for explicit snoozes), then the normal
@@ -61,8 +61,9 @@ intent and short-lived old-token aliases preserve action handling through races.
 from a group retains its original banner text while actions resolve the remaining live meetings.
 
 Actions enter `AppStore.handleNotificationResponse`, resolving live event keys after cold
-restore/initial refresh. Missing-meeting actions fall back to the menu-bar agenda. Early agenda Join
-preserves a future reminder; Join from the lead boundary until event end acknowledges it. An
+restore/initial refresh. Missing-meeting actions fall back to the menu-bar agenda. Join records
+occurrence-wide state even before the first lead. At each due time, further reminders are suppressed
+unless enabled meeting detection confirms no meeting. A later explicit Snooze overrides Join. An
 explicit notification Snooze can re-arm while paused, but Pause still prevents delivery. The
 [notification lifecycle fixtures](../scripts/notification-lifecycle-smoke.swift) exercise production
 state through the [fake-transport harness](../scripts/notification-smoke.py).

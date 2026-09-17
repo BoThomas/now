@@ -1,0 +1,87 @@
+import SwiftUI
+import NowCore
+
+/// Empty rows and custom-editor targets are transient UI state, never scheduling identities.
+struct ReminderLeadEditor: View {
+    @Binding var leads: [Int]
+    @State private var adding = false
+    @State private var showInformation = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(leads, id: \.self) { lead in
+                HStack {
+                    ReminderLeadPicker(value: lead) { value in
+                        guard leads.contains(lead) else { return }
+                        leads = AppSettings.normalizedLeads(leads.filter { $0 != lead } + [value])
+                    }
+                    if leads.count > 1 {
+                        Button { leads.removeAll { $0 == lead } } label: { Image(systemName: "minus.circle") }
+                            .accessibilityLabel("Remove " + Fmt.reminderTiming(lead) + " reminder")
+                    }
+                    if lead == leads.first {
+                        Button { adding = true } label: { Image(systemName: "plus.circle") }
+                            .disabled(leads.count >= 3 || adding)
+                            .accessibilityLabel("Add reminder time")
+                        if leads.count > 1 {
+                            Button { showInformation.toggle() } label: { Image(systemName: "info.circle") }
+                                .accessibilityLabel("How multiple reminders work")
+                                .popover(isPresented: $showInformation) { information }
+                        }
+                    }
+                }
+                .buttonStyle(.borderless)
+            }
+            if adding {
+                HStack {
+                    ReminderLeadPicker(value: nil) { value in
+                        leads = AppSettings.normalizedLeads(leads + [value])
+                        adding = false
+                    }
+                    Button { adding = false } label: { Image(systemName: "minus.circle") }
+                        .accessibilityLabel("Cancel adding reminder")
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private var information: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Multiple reminders").font(.headline)
+            Text("Snooze pauses all reminders for this meeting until the chosen time. Later reminder times remain active.")
+            Text("After Join, reminders only appear again if enabled meeting detection confirms you are not in a meeting. Your latest Join or Snooze action takes precedence.")
+            Text("Closing a reminder leaves later reminders active. Simultaneous reminders are combined; an open fullscreen reminder absorbs further reminders silently.")
+            Text("New reminder times are not applied retroactively. Existing snoozes survive changes to reminder settings and move with a rescheduled meeting.")
+        }
+        .font(.callout)
+        .padding(16)
+        .frame(width: 350)
+    }
+}
+
+private struct ReminderLeadPicker: View {
+    let value: Int?
+    let apply: (Int) -> Void
+    @State private var custom = false
+
+    var body: some View {
+        Picker("Remind me", selection: Binding(get: { value ?? -2 }, set: {
+            if $0 == -1 { custom = true } else if $0 >= 0 { apply($0) }
+        })) {
+            if value == nil { Text("Choose time…").tag(-2) }
+            ForEach(AppSettings.leadDurations(including: value ?? 300), id: \.self) { seconds in
+                Text(Fmt.reminderTiming(seconds)).tag(seconds)
+            }
+            Divider()
+            Text("Custom…").tag(-1)
+        }
+        .pickerStyle(.menu)
+        .frame(maxWidth: 280, alignment: .leading)
+        .accessibilityLabel("Reminder timing")
+        .popover(isPresented: $custom, arrowEdge: .bottom) {
+            CustomTimingEditor(title: "Remind me before start", seconds: value ?? 300, range: AppSettings.leadSecondsRange,
+                               onApply: { apply($0); custom = false }, onCancel: { custom = false })
+        }
+    }
+}

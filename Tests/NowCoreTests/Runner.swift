@@ -36,6 +36,7 @@ import NowCore
             try await cacheStorage(&check)
             #endif
             try ledgerLifecycle(&check)
+            try multipleReminders(&check)
             reminderDecisions(&check)
             observationOwnership(&check)
             snoozeDecisions(&check)

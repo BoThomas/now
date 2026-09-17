@@ -2447,26 +2447,36 @@ enum SelfTest {
         let mutedRunning = ratchetEvent("r", muted: true, startIn: -60)
         let unmutedRunning = ratchetEvent("r", muted: false, startIn: -60)
         c.expect(mutedRunning.id == unmutedRunning.id, "same uid/calendar/start share an id (title-edit refresh keeps id)")
-        let ratcheted = AppStore.ratchetSilence(previous: [mutedRunning], current: [unmutedRunning], alerted: [], snoozed: [unmutedRunning.id: now.addingTimeInterval(-5)], leadSeconds: 300, now: now)
-        c.expect(ratcheted.alerted == [unmutedRunning.id] && ratcheted.snoozed[unmutedRunning.id] == nil, "muted→unmuted inside the window is silenced and its snooze cleared")
+        func ratchet(_ previous: [MeetingEvent], _ current: [MeetingEvent], ledger: ReminderLedger = ReminderLedger(),
+                     fallback: [String: Bool] = [:]) -> ReminderLedger {
+            var result = ledger
+            var previousMuted = fallback
+            for event in previous { previousMuted[event.id] = event.isMuted }
+            ReminderReconciliation.ratchetSilence(previousMutedByID: previousMuted, current: current,
+                                                  ledger: &result, leads: [300], now: now)
+            return result
+        }
+        let runningKey = ReminderIdentity.eventKey(unmutedRunning)
+        var snoozedLedger = ReminderLedger()
+        snoozedLedger.schedule(unmutedRunning, until: now.addingTimeInterval(-5), leads: [300])
+        let ratcheted = ratchet([mutedRunning], [unmutedRunning], ledger: snoozedLedger)
+        c.expect(ratcheted.entries[runningKey]?.handledLeads == [300] && ratcheted.entries[runningKey]?.snooze == nil,
+                 "muted→unmuted inside the window is silenced and its snooze cleared")
         let unmutedFuture = ratchetEvent("f", muted: false, startIn: 3600)
-        let futureOutcome = AppStore.ratchetSilence(previous: [ratchetEvent("f", muted: true, startIn: 3600)], current: [unmutedFuture], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
-        c.expect(!futureOutcome.alerted.contains(unmutedFuture.id), "unmute before the lead window alerts normally")
-        let endedOutcome = AppStore.ratchetSilence(previous: [ratchetEvent("e", muted: true, startIn: -3600)], current: [ratchetEvent("e", muted: false, startIn: -3600)], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
-        c.expect(endedOutcome.alerted.isEmpty, "ended event is not ratcheted")
-        let freshOutcome = AppStore.ratchetSilence(previous: [], current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
-        c.expect(freshOutcome.alerted.isEmpty, "brand-new unmuted events keep late-delivery behavior")
-        let stableOutcome = AppStore.ratchetSilence(previous: [unmutedRunning], current: [unmutedRunning], alerted: [unmutedRunning.id], snoozed: [:], leadSeconds: 300, now: now)
-        c.expect(stableOutcome.alerted == [unmutedRunning.id] && stableOutcome.snoozed.isEmpty, "repeated commits leave the ratchet stable")
+        let futureOutcome = ratchet([ratchetEvent("f", muted: true, startIn: 3600)], [unmutedFuture])
+        c.expect(futureOutcome.entries.isEmpty, "unmute before the lead window alerts normally")
+        let endedOutcome = ratchet([ratchetEvent("e", muted: true, startIn: -3600)], [ratchetEvent("e", muted: false, startIn: -3600)])
+        c.expect(endedOutcome.entries.isEmpty, "ended event is not ratcheted")
+        c.expect(ratchet([], [unmutedRunning]).entries.isEmpty, "brand-new unmuted events keep late-delivery behavior")
+        c.expect(ratchet([unmutedRunning], [unmutedRunning], ledger: ratcheted) == ratcheted, "repeated commits leave the ratchet stable")
 
         var retainedMuted: [String: Bool] = [:]
         retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [mutedRunning], retainedIDs: [mutedRunning.id])
         retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], retainedIDs: [mutedRunning.id])
-        let afterOneMiss = AppStore.ratchetSilence(previous: [], fallbackMutedByID: retainedMuted, current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
-        c.expect(afterOneMiss.alerted == [unmutedRunning.id], "one transient omission preserves muted state for the unmute ratchet")
+        let afterOneMiss = ratchet([], [unmutedRunning], fallback: retainedMuted)
+        c.expect(afterOneMiss.entries[runningKey]?.handledLeads == [300], "one transient omission preserves muted state for the unmute ratchet")
         retainedMuted = AppStore.retainedMutedStates(previous: retainedMuted, current: [], retainedIDs: [])
-        let afterTwoMisses = AppStore.ratchetSilence(previous: [], fallbackMutedByID: retainedMuted, current: [unmutedRunning], alerted: [], snoozed: [:], leadSeconds: 300, now: now)
-        c.expect(afterTwoMisses.alerted.isEmpty, "two consecutive omissions expire retained muted state")
+        c.expect(ratchet([], [unmutedRunning], fallback: retainedMuted).entries.isEmpty, "two consecutive omissions expire retained muted state")
 
         func focusEvent(_ uid: String, startIn: TimeInterval, endIn: TimeInterval, muted: Bool = false, colorIndex: Int = 0) -> MeetingEvent {
             MeetingEvent(uid: uid, title: uid, start: now.addingTimeInterval(startIn), end: now.addingTimeInterval(endIn),
@@ -2539,10 +2549,12 @@ enum SelfTest {
         // unmute mid-window → still no reminder.
         var sequence = ratchetEvent("seq", muted: false, startIn: -120)
         let sequenceMuted = ratchetEvent("seq", muted: true, startIn: -120)
-        var step = AppStore.ratchetSilence(previous: [sequence], current: [sequenceMuted], alerted: [sequence.id], snoozed: [sequence.id: now.addingTimeInterval(-5)], leadSeconds: 300, now: now)
-        step = AppStore.ratchetSilence(previous: [sequenceMuted], current: [sequence], alerted: step.alerted, snoozed: step.snoozed, leadSeconds: 300, now: now)
+        var sequenceLedger = ReminderLedger()
+        sequenceLedger.schedule(sequence, until: now.addingTimeInterval(-5), leads: [300])
+        var step = ratchet([sequence], [sequenceMuted], ledger: sequenceLedger)
+        step = ratchet([sequenceMuted], [sequence], ledger: step)
         sequence.isMuted = false
-        c.expect(AppStore.dueForAlert(events: [sequence], alerted: step.alerted, snoozed: step.snoozed, leadSeconds: 300, now: now).isEmpty, "snoozed→muted→unmuted mid-window never re-fires")
+        c.expect(step.due(sequence, leads: [300], now: now).isEmpty, "snoozed→muted→unmuted mid-window never re-fires")
 
         // An open alert panel drops cards whose events became muted.
         let shownMuted = ratchetEvent("shown", muted: false, startIn: 120)

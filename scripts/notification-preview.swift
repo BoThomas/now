@@ -21,6 +21,16 @@ final class NotificationPreview: NSObject, NSApplicationDelegate {
         app.run()
         withExtendedLifetime(delegate) {}
     }
+    static func renderReminderControls(directory: String) {
+        render(ReminderLeadEditor(leads: .constant([0, 300, 600])).padding(),
+               size: NSSize(width: 420, height: 160), name: "multiple-reminder-controls", directory: directory)
+        let event = MeetingEvent(uid: "details-render", title: "Team Sync", start: Date().addingTimeInterval(300),
+            end: Date().addingTimeInterval(2100), location: "Conference room", notes: "Review the next milestone.",
+            link: URL(string: "https://zoom.us/j/123"), calendarID: UUID(), calendarName: "Synthetic", colorIndex: 0)
+        render(MenuBarController.smokeDetailsView(event, snoozeSeconds: 0), size: NSSize(width: 360, height: 340),
+               name: "notification-details-snooze", directory: directory)
+    }
+
     static func renderSettings(store: AppStore, alerts: AlertController, updates: UpdateController, directory: String) {
         render(SettingsView().environmentObject(store).environmentObject(alerts).environmentObject(updates),
                size: NSSize(width: 940, height: 720), name: "new-install-guide", directory: directory)
@@ -673,7 +683,10 @@ final class SetupAppSmoke {
                     delegate.store.smokeCommitEvents(meetings)
                     let group = ReminderNotification(id: "now.meeting.agenda-smoke", keys: meetings.map(NotificationLogic.eventKey),
                         fingerprints: ["first", "second"], expires: date.addingTimeInterval(1800), catchUp: false,
-                        title: "", body: "", category: "", sound: false)
+                        title: "", body: "", category: "", sound: false,
+                        deliveries: Dictionary(uniqueKeysWithValues: meetings.map {
+                            (NotificationLogic.eventKey($0), ReminderDeliveryState(leads: [delegate.store.settings.leadSeconds]))
+                        }))
                     delegate.notificationInteraction()
                     delegate.store.notifications?.onResponse?(group, "choose")
                     try? await Task.sleep(nanoseconds: 500_000_000)

@@ -10,6 +10,11 @@ package struct ReminderLedger: Codable, Equatable, Sendable {
         package var misses = 0
         /// Older ledgers did not retain the scheduled start.
         package var start: Date?
+        /// nil identifies pre-multiple-reminder history.
+        package var handledLeads: Set<Int>?
+        package var joined: Bool?
+        package var snoozeToken: String?
+        package var actionToken: String?
 
         package init(calendarID: UUID, end: Date, snooze: Date? = nil, misses: Int = 0, start: Date? = nil) {
             self.calendarID = calendarID; self.end = end; self.snooze = snooze
@@ -17,6 +22,8 @@ package struct ReminderLedger: Codable, Equatable, Sendable {
         }
     }
     package var entries: [String: Entry] = [:]
+    /// Lead activation cutoffs also cover temporarily missing and not-yet-loaded occurrences.
+    package var leadActivatedAt: [Int: Date]?
     package init() {}
 
     package mutating func record(_ event: MeetingEvent, snooze: Date? = nil) {
@@ -25,7 +32,8 @@ package struct ReminderLedger: Codable, Equatable, Sendable {
 
     @discardableResult
     package mutating func reconcile(events: [MeetingEvent], enabled: Set<UUID>, observed: Set<UUID>, now: Date,
-                                    rearmOnReschedule: Set<String> = [], previousEvents: [MeetingEvent] = []) -> Set<String> {
+                                    rearmOnReschedule: Set<String> = [], previousEvents: [MeetingEvent] = [],
+                                    leads: [Int]? = nil, receiptLeads: [String: Set<Int>] = [:]) -> Set<String> {
         var rearmedIDs: Set<String> = []
         let previousByKey = Dictionary(previousEvents.map { (ReminderIdentity.eventKey($0), $0) }, uniquingKeysWith: { first, _ in first })
         // Upgrade old occurrence-ID entries only when that exact occurrence is present.
@@ -39,9 +47,14 @@ package struct ReminderLedger: Codable, Equatable, Sendable {
         let live = Dictionary(events.map { (ReminderIdentity.eventKey($0), $0) }, uniquingKeysWith: { first, _ in first })
         for (key, var entry) in entries {
             if let event = live[key] {
+                if let leads {
+                    entry = reconciledEntry(entry, event: event, legacyLead: leads.max() ?? 300,
+                                            rearm: rearmOnReschedule.contains(key), protected: receiptLeads[key] ?? [])
+                    entries[key] = entry
+                }
                 // Receipts own notification edits; only eligible fullscreen reminders re-arm.
                 let previousStart = entry.start ?? previousByKey[key]?.start
-                if rearmOnReschedule.contains(key), entry.snooze == nil,
+                if leads == nil, rearmOnReschedule.contains(key), entry.snooze == nil,
                    let previousStart, previousStart != event.start {
                     entries.removeValue(forKey: key)
                     rearmedIDs.insert(event.id)
