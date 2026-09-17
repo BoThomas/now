@@ -30,9 +30,10 @@ your Mac wakes. **Hide meeting details** keeps notification text private.
 
 ## Multiple reminder times
 
-In **Settings → Reminder**, use **+** beside **Remind me** to add up to three times, including
-**Just in time**. Choose a time to activate a new row; duplicate times are combined. **−** removes
-an extra time. The **ⓘ** button explains how multiple reminders work. Setup keeps one timing choice.
+In **Settings → Reminder**, use **+** below the **Remind me** rows to add up to three times,
+including **Just in time**. Choose a time to activate a new row; duplicate times are combined. **−**
+in front of a row removes an extra time. The **ⓘ** button explains how multiple reminders work.
+Setup keeps one timing choice.
 
 - **Snooze** silences this meeting until your chosen time. Earlier reminder times are skipped; later
   times remain active. An existing Snooze survives removing a reminder time from Settings.

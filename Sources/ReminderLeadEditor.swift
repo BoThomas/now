@@ -3,6 +3,9 @@ import NowCore
 
 /// Empty rows and custom-editor targets are transient UI state, never scheduling identities.
 struct ReminderLeadEditor: View {
+    /// Matches the three-entry cap in `AppSettings.normalizedLeads`.
+    private static let maximumLeads = 3
+
     @Binding var leads: [Int]
     @State private var adding = false
     @State private var showInformation = false
@@ -11,37 +14,42 @@ struct ReminderLeadEditor: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(leads, id: \.self) { lead in
                 HStack {
+                    // The topmost reminder stays: removing rows top-down would
+                    // reorder the list the user reads. Borderless stays on each
+                    // icon button: on the row it would also strip the popup
+                    // button's bevel (an NSPopUpButton is a button).
+                    if leads.count > 1, lead != leads.first {
+                        Button { leads.removeAll { $0 == lead } } label: { Image(systemName: "minus.circle") }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Remove " + Fmt.reminderTiming(lead) + " reminder")
+                    }
                     ReminderLeadPicker(value: lead) { value in
                         guard leads.contains(lead) else { return }
                         leads = AppSettings.normalizedLeads(leads.filter { $0 != lead } + [value])
                     }
-                    if leads.count > 1 {
-                        Button { leads.removeAll { $0 == lead } } label: { Image(systemName: "minus.circle") }
-                            .accessibilityLabel("Remove " + Fmt.reminderTiming(lead) + " reminder")
-                    }
-                    if lead == leads.first {
-                        Button { adding = true } label: { Image(systemName: "plus.circle") }
-                            .disabled(leads.count >= 3 || adding)
-                            .accessibilityLabel("Add reminder time")
-                        if leads.count > 1 {
-                            Button { showInformation.toggle() } label: { Image(systemName: "info.circle") }
-                                .accessibilityLabel("How multiple reminders work")
-                                .popover(isPresented: $showInformation) { information }
-                        }
-                    }
                 }
-                .buttonStyle(.borderless)
             }
             if adding {
                 HStack {
+                    Button { adding = false } label: { Image(systemName: "minus.circle") }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Cancel adding reminder")
                     ReminderLeadPicker(value: nil) { value in
                         leads = AppSettings.normalizedLeads(leads + [value])
                         adding = false
                     }
-                    Button { adding = false } label: { Image(systemName: "minus.circle") }
-                        .accessibilityLabel("Cancel adding reminder")
                 }
-                .buttonStyle(.borderless)
+            }
+            HStack {
+                if !adding, leads.count < Self.maximumLeads {
+                    Button { adding = true } label: { Image(systemName: "plus.circle") }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Add reminder time")
+                }
+                Button { showInformation.toggle() } label: { Image(systemName: "info.circle") }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("How multiple reminders work")
+                    .popover(isPresented: $showInformation) { information }
             }
         }
     }
@@ -49,14 +57,13 @@ struct ReminderLeadEditor: View {
     private var information: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Multiple reminders").font(.headline)
-            Text("Snooze pauses all reminders for this meeting until the chosen time. Later reminder times remain active.")
-            Text("After Join, reminders only appear again if enabled meeting detection confirms you are not in a meeting. Your latest Join or Snooze action takes precedence.")
-            Text("Closing a reminder leaves later reminders active. Simultaneous reminders are combined; an open fullscreen reminder absorbs further reminders silently.")
-            Text("New reminder times are not applied retroactively. Existing snoozes survive changes to reminder settings and move with a rescheduled meeting.")
+            Text("You get one reminder per configured time. Snoozing pauses all reminders for this meeting; closing one leaves later reminders active.")
+            Text("After joining, later reminders stay quiet unless meeting detection is enabled and notices you are not in a meeting.")
+            Text("Times you add here only apply going forward.")
         }
         .font(.callout)
         .padding(16)
-        .frame(width: 350)
+        .frame(width: 300, alignment: .leading)
     }
 }
 

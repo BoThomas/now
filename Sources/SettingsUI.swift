@@ -1807,7 +1807,7 @@ struct SettingsView: View {
             HStack(spacing: 6) {
                 Toggle("Play reminder sound", isOn: $store.settings.soundEnabled)
                 Button { showReminderSoundInfo.toggle() } label: {
-                    Image(systemName: "questionmark.circle")
+                    Image(systemName: "info.circle")
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("About reminder sounds")

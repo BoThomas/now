@@ -24,6 +24,9 @@ final class NotificationPreview: NSObject, NSApplicationDelegate {
     static func renderReminderControls(directory: String) {
         render(ReminderLeadEditor(leads: .constant([0, 300, 600])).padding(),
                size: NSSize(width: 420, height: 160), name: "multiple-reminder-controls", directory: directory)
+        // Under the limit: + reappears below the last row next to the info button.
+        render(ReminderLeadEditor(leads: .constant([300])).padding(),
+               size: NSSize(width: 420, height: 120), name: "single-reminder-controls", directory: directory)
         let event = MeetingEvent(uid: "details-render", title: "Team Sync", start: Date().addingTimeInterval(300),
             end: Date().addingTimeInterval(2100), location: "Conference room", notes: "Review the next milestone.",
             link: URL(string: "https://zoom.us/j/123"), calendarID: UUID(), calendarName: "Synthetic", colorIndex: 0)

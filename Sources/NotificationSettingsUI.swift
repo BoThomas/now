@@ -39,7 +39,7 @@ struct NotificationSettingsView: View {
                 }
                 Button("Notification Settings…") { notifications.openSettings() }
                 Button { showHelp.toggle() } label: {
-                    Image(systemName: "questionmark.circle")
+                    Image(systemName: "info.circle")
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("Notification not received?")

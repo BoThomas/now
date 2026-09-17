@@ -236,7 +236,7 @@ struct SetupAssistantView: View {
                     Button("Enable Notifications…") { notifications.requestPermission() }.disabled(notifications.requesting)
                 }
                 if notifications.requesting { ProgressView().controlSize(.small) }
-                Button { showNotificationHelp.toggle() } label: { Image(systemName: "questionmark.circle") }
+                Button { showNotificationHelp.toggle() } label: { Image(systemName: "info.circle") }
                     .buttonStyle(.borderless)
                     .accessibilityLabel("About notification access")
                     .popover(isPresented: $showNotificationHelp) {
