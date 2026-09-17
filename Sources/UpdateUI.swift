@@ -54,7 +54,10 @@ struct UpdateView: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
                 PopupScrollView {
-                    NotesView(blocks: UpdateLogic.noteBlocks(manifest.notes))
+                    // Consolidated body when the jump skipped intermediate
+                    // releases; the offered release's own body otherwise.
+                    // Both go through the same note-blocks rendering.
+                    NotesView(blocks: UpdateLogic.noteBlocks(controller.consolidatedNotes ?? manifest.notes))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(10)
@@ -95,12 +98,17 @@ struct UpdateView: View {
                     .textSelection(.enabled)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                    ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                         switch block {
                         case .heading(let level, let text):
                             Text(text)
-                                .font(.system(size: level == 1 ? 13 : 12, weight: .semibold))
+                                // Level 2 headings mark release boundaries in
+                                // consolidated multi-version notes — a step
+                                // larger, bolder, and with extra separation so
+                                // each release's section reads as a block.
+                                .font(.system(size: level == 3 ? 12 : 13, weight: level == 2 ? .bold : .semibold))
                                 .foregroundStyle(.primary)
+                                .padding(.top, level == 2 && index > 0 ? 8 : 0)
                                 .textSelection(.enabled)
                         case .bullet(let text):
                             HStack(alignment: .firstTextBaseline, spacing: 6) {

@@ -164,11 +164,31 @@ cp "$WORK/www/ok/$SMOKE_ASSET" "$WORK/www/old/now-v0.0.1.zip" 2>/dev/null || { m
 
 PUBLISHED=$(date -u -v-2d +%Y-%m-%dT%H:%M:%SZ)   # 2 days old: past the age gate
 make_latest() {
-  # $1 = base dir under www, $2 = tag, $3 = asset name, $4 = asset size
+  # $1 = base dir under www, $2 = tag, $3 = asset name, $4 = asset size,
+  # $5 = optional release body (default: the generic forged one)
   local dir="$WORK/www/$1/api/repos/BoThomas/now/releases"
   mkdir -p "$dir"
+  local body="${5:-- Forged smoke release\n\nFull changelog: https://github.com/BoThomas/now/compare/x}"
   cat > "$dir/latest" <<EOF
-{"tag_name":"$2","published_at":"$PUBLISHED","body":"- Forged smoke release\n\nFull changelog: https://github.com/BoThomas/now/compare/x","assets":[{"name":"$3","browser_download_url":"http://127.0.0.1:PORT/$1/$3","size":$4}]}
+{"tag_name":"$2","published_at":"$PUBLISHED","body":"$body","assets":[{"name":"$3","browser_download_url":"http://127.0.0.1:PORT/$1/$3","size":$4}]}
+EOF
+}
+# Multi-version jump: an intermediate release sits between the installed and
+# target versions. Bodies forge the recognized changelog categories so the
+# consolidated What's-New merge can be asserted end to end. The list is served
+# as `releases/index.html`: python http.server answers `/releases` with a 301
+# to `/releases/` (allowed — same loopback host) which then serves index.html,
+# while `/releases/latest` stays the file inside the same directory.
+INTERMEDIATE_VERSION="$((VERSION_PARTS[1])).$((VERSION_PARTS[2] + 1)).0"
+make_releases_list() {
+  # $1 = base dir under www; list is newest-first, like the GitHub API
+  local dir="$WORK/www/$1/api/repos/BoThomas/now/releases"
+  mkdir -p "$dir"
+  cat > "$dir/index.html" <<EOF
+[{"tag_name":"v$SMOKE_VERSION","body":"### Added\n- Target release feature\n\nFull changelog: https://github.com/BoThomas/now/compare/x"},
+{"tag_name":"v$INTERMEDIATE_VERSION","body":"### Fixed\n- Intermediate release fix"},
+{"tag_name":"v$ORIG_VERSION","body":"- Already installed"},
+{"tag_name":"v0.0.1","body":"- Ancient"}]
 EOF
 }
 make_latest ok "v$SMOKE_VERSION" "$SMOKE_ASSET" "$GOOD_SIZE"
@@ -179,6 +199,13 @@ cp "$WORK/www/ok/$SMOKE_ASSET" "$WORK/www/oversize/$SMOKE_ASSET"
 make_latest mismatch "v$SMOKE_VERSION" "$SMOKE_ASSET" "$((GOOD_SIZE + 1))"
 cp "$WORK/www/ok/$SMOKE_ASSET" "$WORK/www/mismatch/$SMOKE_ASSET"
 make_latest asset404 "v$SMOKE_VERSION" "$SMOKE_ASSET" "$GOOD_SIZE"
+# Consolidated notes succeed against `multi`; `multi404` serves no releases
+# list (404 → fallback), while the latest manifest still installs fine.
+make_latest multi "v$SMOKE_VERSION" "$SMOKE_ASSET" "$GOOD_SIZE" "### Added\n- Target release feature\n\nFull changelog: https://github.com/BoThomas/now/compare/x"
+cp "$WORK/www/ok/$SMOKE_ASSET" "$WORK/www/multi/$SMOKE_ASSET"
+make_releases_list multi
+make_latest multi404 "v$SMOKE_VERSION" "$SMOKE_ASSET" "$GOOD_SIZE"
+cp "$WORK/www/ok/$SMOKE_ASSET" "$WORK/www/multi404/$SMOKE_ASSET"
 
 print "• Starting local server"
 PORT=""
@@ -200,7 +227,9 @@ for f in "$WORK/www/ok/api/repos/BoThomas/now/releases/latest" \
          "$WORK/www/old/api/repos/BoThomas/now/releases/latest" \
          "$WORK/www/oversize/api/repos/BoThomas/now/releases/latest" \
          "$WORK/www/mismatch/api/repos/BoThomas/now/releases/latest" \
-         "$WORK/www/asset404/api/repos/BoThomas/now/releases/latest"; do
+         "$WORK/www/asset404/api/repos/BoThomas/now/releases/latest" \
+         "$WORK/www/multi/api/repos/BoThomas/now/releases/latest" \
+         "$WORK/www/multi404/api/repos/BoThomas/now/releases/latest"; do
   sed -i '' "s/127.0.0.1:PORT/127.0.0.1:$PORT/" "$f"
 done
 print "  http://127.0.0.1:$PORT"
@@ -238,7 +267,7 @@ wait_for_file() {
   fail "$label (timeout 30s)"
 }
 
-print "• [1/13] Positive: forge → check → stage → swap → exact startup health acknowledgement"
+print "• [1/15] Positive: forge → check → stage → swap → exact startup health acknowledgement"
 rm -f "$WORK/report" "$WORK/helper-done"
 run_smoke ok NOW_SMOKE_REPORT="$WORK/report" NOW_SMOKE_HELPER_DONE="$WORK/helper-done" | tee "$WORK/log1"
 grep -q "SMOKE: INSTALLED v$SMOKE_VERSION" "$WORK/log1" || fail "positive run did not reach install"
@@ -254,7 +283,7 @@ BACKUP_LEFT=("$WORK/"now.app.old-*(N))
 [[ ${#BACKUP_LEFT} -eq 0 ]] || fail "stray now.app.old-* backup left behind"
 print "  OK — updated to $SMOKE_VERSION, old bundle trashed, staging clean"
 
-print "• [2/13] Negative: tampered (ad-hoc) zip must be refused"
+print "• [2/15] Negative: tampered (ad-hoc) zip must be refused"
 reset_install
 set +e
 run_smoke bad NOW_SMOKE_REPORT="$WORK/report2" > "$WORK/log2" 2>&1
@@ -265,7 +294,7 @@ grep -q "SMOKE: REFUSED .*signed with a trusted identity" "$WORK/log2" || fail "
 [[ "$(version_of "$WORK/now.app")" == "$ORIG_VERSION" ]] || fail "tampered zip modified the install"
 print "  OK — refused at the signature gate, install untouched"
 
-print "• [3/13] Negative: older tag reads as up-to-date"
+print "• [3/15] Negative: older tag reads as up-to-date"
 set +e
 run_smoke old > "$WORK/log3" 2>&1
 RC=$?
@@ -274,7 +303,7 @@ set -e
 grep -q "SMOKE: UPTODATE" "$WORK/log3" || fail "older tag not reported as up-to-date"
 print "  OK — no downgrade offered"
 
-print "• [4/13] Negative: 404 (no releases) reads as up-to-date"
+print "• [4/15] Negative: 404 (no releases) reads as up-to-date"
 set +e
 run_smoke missing > "$WORK/log4" 2>&1
 RC=$?
@@ -282,7 +311,7 @@ set -e
 [[ $RC -eq 3 ]] || fail "404: expected exit 3 (UPTODATE), got $RC: $(cat "$WORK/log4")"
 print "  OK — 404 is up-to-date, not an error"
 
-print "• [5/13] Negative: streaming archive cap stops a lying response"
+print "• [5/15] Negative: streaming archive cap stops a lying response"
 reset_install
 set +e
 run_smoke oversize NOW_SMOKE_ARCHIVE_LIMIT=65536 > "$WORK/log5" 2>&1
@@ -293,7 +322,7 @@ grep -q "SMOKE: REFUSED update archive larger than" "$WORK/log5" || fail "oversi
 [[ "$(version_of "$WORK/now.app")" == "$ORIG_VERSION" ]] || fail "oversize response modified the install"
 print "  OK — response stopped at the streaming byte limit"
 
-print "• [6/13] Negative: downloaded size must match the release manifest"
+print "• [6/15] Negative: downloaded size must match the release manifest"
 reset_install
 set +e
 run_smoke mismatch > "$WORK/log6" 2>&1
@@ -303,7 +332,7 @@ set -e
 grep -q "SMOKE: REFUSED download size .* expected" "$WORK/log6" || fail "size mismatch refused for the wrong reason: $(cat "$WORK/log6")"
 print "  OK — mismatched asset size refused"
 
-print "• [7/13] Negative: missing asset download must be an error"
+print "• [7/15] Negative: missing asset download must be an error"
 reset_install
 set +e
 run_smoke asset404 > "$WORK/log7" 2>&1
@@ -313,7 +342,7 @@ set -e
 grep -q "SMOKE: REFUSED download returned 404" "$WORK/log7" || fail "asset 404 refused for the wrong reason: $(cat "$WORK/log7")"
 print "  OK — missing release asset refused"
 
-print "• [8/13] Negative: old→backup failure reports and leaves old app intact"
+print "• [8/15] Negative: old→backup failure reports and leaves old app intact"
 reset_install
 rm -f "$WORK/failure-backup"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=backup NOW_SMOKE_FAILURE_REPORT="$WORK/failure-backup" > "$WORK/log8" 2>&1
@@ -325,7 +354,7 @@ BACKUP_FAILURE_LEFT=("$WORK/"now.app.old-*(N))
 [[ ${#BACKUP_FAILURE_LEFT} -eq 0 ]] || fail "backup failure left a backup bundle"
 print "  OK — old app relaunched with the backup failure"
 
-print "• [9/13] Negative: post-swap relaunch failure restores old app"
+print "• [9/15] Negative: post-swap relaunch failure restores old app"
 reset_install
 rm -f "$WORK/failure-relaunch"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=relaunch NOW_SMOKE_FAILURE_REPORT="$WORK/failure-relaunch" > "$WORK/log9" 2>&1
@@ -336,7 +365,7 @@ RELAUNCH_BACKUP_LEFT=("$WORK/"now.app.old-*(N))
 [[ ${#RELAUNCH_BACKUP_LEFT} -eq 0 ]] || fail "relaunch failure left a backup bundle"
 print "  OK — new app removed, old app restored and relaunched with the error"
 
-print "• [10/13] Negative: unacknowledged child exit restores old app before Trash"
+print "• [10/15] Negative: unacknowledged child exit restores old app before Trash"
 reset_install
 rm -f "$WORK/failure-health-exit" "$WORK/unhealthy-child"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=health NOW_SMOKE_REPORT="$WORK/unhealthy-child" NOW_SMOKE_FAILURE_REPORT="$WORK/failure-health-exit" > "$WORK/log10" 2>&1
@@ -349,7 +378,7 @@ TRASHED_HEALTH=("$WORK/home/.Trash/"now-old-*.app(N))
 [[ ${#TRASHED_HEALTH} -eq 1 ]] || fail "health-exit failure trashed the rollback backup"
 print "  OK — unacknowledged child exit restored and relaunched the old app"
 
-print "• [11/13] Negative: startup health timeout restores old app before Trash"
+print "• [11/15] Negative: startup health timeout restores old app before Trash"
 reset_install
 rm -f "$WORK/failure-health-timeout"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=health NOW_SMOKE_HEALTH_TIMEOUT=3 NOW_SMOKE_FAILURE_REPORT="$WORK/failure-health-timeout" > "$WORK/log11" 2>&1
@@ -362,7 +391,7 @@ TRASHED_HEALTH_TIMEOUT=("$WORK/home/.Trash/"now-old-*.app(N))
 [[ ${#TRASHED_HEALTH_TIMEOUT} -eq 1 ]] || fail "health timeout trashed the rollback backup"
 print "  OK — missing acknowledgement timed out, restored, and relaunched the old app"
 
-print "• [12/13] Negative: stuck quit — helper must bail, nothing moved"
+print "• [12/15] Negative: stuck quit — helper must bail, nothing moved"
 reset_install
 rm -f "$WORK/stuck-done"
 set +e
@@ -379,7 +408,7 @@ STUCK_STAGING_LEFT=("$WORK/".now-update-*(N))
 [[ ${#STUCK_STAGING_LEFT} -eq 0 ]] || fail "stuck quit left staging artifacts"
 print "  OK — helper bailed, app untouched"
 
-print "• [13/13] Stale NOW_UPDATE_ERROR must not reach the updated child"
+print "• [13/15] Stale NOW_UPDATE_ERROR must not reach the updated child"
 # A failed install relaunches the old app with NOW_UPDATE_ERROR in its
 # environment; that process's next install helper inherits the variable
 # (spawnHelper passes the environment through). The success relaunch must
@@ -394,6 +423,30 @@ wait_for_file "$WORK/report13" "relaunched child never reported (stale-error cas
 [[ "$(version_of "$WORK/now.app")" == "$SMOKE_VERSION" ]] || fail "stale-error install did not complete"
 wait_for_file "$WORK/helper-done13" "stale-error helper never completed"
 print "  OK — updated child launched without the stale failure environment"
+
+print "• [14/15] Multi-version jump consolidates intermediate release notes"
+reset_install
+rm -f "$WORK/report14" "$WORK/helper-done14"
+run_smoke multi NOW_SMOKE_REPORT="$WORK/report14" NOW_SMOKE_HELPER_DONE="$WORK/helper-done14" > "$WORK/log14" 2>&1
+grep -q "SMOKE: NOTES consolidated" "$WORK/log14" || fail "multi-release jump did not consolidate notes: $(cat "$WORK/log14")"
+grep -q "^### Added\$" "$WORK/log14" || fail "consolidated notes missing grouped Added header: $(cat "$WORK/log14")"
+grep -q "^- Target release feature\$" "$WORK/log14" || fail "consolidated notes missing target-release bullet"
+grep -q "^### Fixed\$" "$WORK/log14" || fail "consolidated notes missing grouped Fixed header"
+grep -q "^- Intermediate release fix\$" "$WORK/log14" || fail "consolidated notes missing intermediate-release bullet"
+grep -q "SMOKE: INSTALLED v$SMOKE_VERSION" "$WORK/log14" || fail "consolidated-notes run did not reach install"
+wait_for_file "$WORK/report14" "consolidated-notes child never reported"
+[[ "$(cat "$WORK/report14")" == "$SMOKE_VERSION" ]] || fail "consolidated-notes install reported $(cat "$WORK/report14")"
+print "  OK — What's New lists every skipped release under its version heading, install unaffected"
+
+print "• [15/15] Missing intermediate notes fall back and never block the install"
+reset_install
+rm -f "$WORK/report15" "$WORK/helper-done15"
+run_smoke multi404 NOW_SMOKE_REPORT="$WORK/report15" NOW_SMOKE_HELPER_DONE="$WORK/helper-done15" > "$WORK/log15" 2>&1
+grep -q "SMOKE: NOTES fallback" "$WORK/log15" || fail "missing releases list did not fall back: $(cat "$WORK/log15")"
+grep -q "SMOKE: INSTALLED v$SMOKE_VERSION" "$WORK/log15" || fail "notes fallback delayed or blocked the install"
+wait_for_file "$WORK/report15" "notes-fallback child never reported"
+[[ "$(cat "$WORK/report15")" == "$SMOKE_VERSION" ]] || fail "notes-fallback install reported $(cat "$WORK/report15")"
+print "  OK — cosmetic notes failure kept the latest-release body and the install path"
 
 print ""
 

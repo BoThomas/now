@@ -101,7 +101,12 @@ def prepare_release(work):
     app = work / "run/now.app"
     shutil.copytree(fixture, app)
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
-    version = str(int(info["CFBundleShortVersionString"].split(".")[0]) + 1) + ".0.0"
+    parts = [int(part) for part in info["CFBundleShortVersionString"].split(".")]
+    version = str(parts[0] + 1) + ".0.0"
+    # Strictly between the installed and the forged target version, so the
+    # real GUI shows the consolidated multi-version What's New.
+    intermediate = f"{parts[0]}.{parts[1] + 1}.0"
+    installed = info["CFBundleShortVersionString"]
     forged = work / "forge/now.app"
     shutil.copytree(fixture, forged)
     info["CFBundleShortVersionString"] = version
@@ -122,6 +127,16 @@ def prepare_release(work):
         "assets": [{"name": archive.name, "browser_download_url": base + "/" + archive.name,
                     "size": archive.stat().st_size}]
     }))
+    # Releases list (newest first) with an intermediate between the installed
+    # and target versions: the update window's What's New consolidates
+    # everything since the installed version. Served as index.html because
+    # the latest manifest lives inside the same releases/ directory.
+    (release.parent / "index.html").write_text(json.dumps([
+        {"tag_name": "v" + version, "body": "### Added\n- Pick your reminder display"},
+        {"tag_name": "v" + intermediate, "body": "### Improved\n- Faster synthetic sync\n\n### Fixed\n- Intermediate release fix"},
+        {"tag_name": "v" + installed, "body": "- The version you are running"},
+        {"tag_name": "v0.0.1", "body": "- Ancient release"},
+    ]))
     return app, version, server, base + "/api"
 
 

@@ -817,7 +817,7 @@ enum CalendarURL {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Use HTTP Anyway")
         alert.addButton(withTitle: "Cancel")
-        AppActivation.activate()
+        AppActivation.activate(for: .userInitiated)
         return alert.runModal() == .alertFirstButtonReturn
     }
 }
@@ -1428,7 +1428,7 @@ struct SettingsView: View {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
-        AppActivation.activate()
+        AppActivation.activate(for: .userInitiated)
         if alert.runModal() == .alertFirstButtonReturn {
             store.removeSubscription(subscription.id)
         }

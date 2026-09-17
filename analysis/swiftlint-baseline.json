@@ -21,36 +21,6 @@
       "ruleName": "Cyclomatic Complexity",
       "severity": "warning",
       "location": {
-        "line": 762,
-        "file": "Sources/App.swift",
-        "character": 24
-      },
-      "reason": "Function should have complexity 15 or less; currently complexity is 25"
-    },
-    "text": "    @MainActor private static func updateSmokeCLIBody(_ baseArgument: String?) {"
-  },
-  {
-    "violation": {
-      "ruleIdentifier": "function_body_length",
-      "ruleDescription": "Function bodies should not span too many lines",
-      "ruleName": "Function Body Length",
-      "severity": "warning",
-      "location": {
-        "line": 762,
-        "file": "Sources/App.swift",
-        "character": 31
-      },
-      "reason": "Function body should span 80 lines or less excluding comments and whitespace: currently spans 122 lines"
-    },
-    "text": "    @MainActor private static func updateSmokeCLIBody(_ baseArgument: String?) {"
-  },
-  {
-    "violation": {
-      "ruleIdentifier": "cyclomatic_complexity",
-      "ruleDescription": "Complexity of function bodies should be limited.",
-      "ruleName": "Cyclomatic Complexity",
-      "severity": "warning",
-      "location": {
         "line": 61,
         "file": "Sources/NowCore/ICS.swift",
         "character": 5

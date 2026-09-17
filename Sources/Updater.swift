@@ -16,6 +16,14 @@ struct UpdateManifest: Equatable {
     var notes: String          // release body, raw
 }
 
+/// One entry of the GitHub `releases` list — only what consolidated
+/// What's-New notes need. The offered release's own body stays authoritative
+/// in its `UpdateManifest`.
+struct ReleaseNotes: Equatable {
+    var version: String
+    var body: String
+}
+
 enum UpdateDecision: Equatable {
     case upToDate              // also covers: release younger than the age gate
     case available(UpdateManifest)
@@ -223,6 +231,83 @@ enum UpdateLogic {
         return blocks
     }
 
+    // MARK: Consolidated multi-version notes
+
+    /// Bounds for merging intermediate release bodies. Notes are cosmetic:
+    /// exceeding either bound falls back to the latest release's own body.
+    static let intermediateNotesReleaseCap = 8
+    static let intermediateNotesCharacterCap = 20_000
+
+    struct GitHubReleaseListEntry: Decodable {
+        let tag_name: String
+        let body: String?
+    }
+
+    /// Parse `GET /repos/:owner/:repo/releases`. Non-strict tags (prereleases
+    /// like `v2.1.0-beta.1`) are skipped — the updater never offers them.
+    /// `pageSaturated` reports whether the list filled the requested page; a
+    /// saturated page is not proof that the whole history was seen.
+    static func parseReleaseNotes(_ data: Data, pageLimit: Int) -> (entries: [ReleaseNotes], pageSaturated: Bool)? {
+        guard let list = try? JSONDecoder().decode([GitHubReleaseListEntry].self, from: data) else { return nil }
+        var entries: [ReleaseNotes] = []
+        for entry in list {
+            guard let version = version(fromTag: entry.tag_name) else { continue }
+            entries.append(ReleaseNotes(version: version, body: entry.body ?? ""))
+        }
+        return (entries, list.count >= pageLimit)
+    }
+
+    /// Consolidated What's-New body for a multi-version jump: the offered
+    /// release's own body first, then every intermediate release newer than
+    /// the running version, newest → oldest — each under a version heading so
+    /// the reader sees where one release's notes end and the next begins
+    /// (real bodies already group their bullets under `###` categories).
+    /// Returns nil whenever the consolidated view can't be trusted — no
+    /// intermediates, an incomplete span, or a bound exceeded — and the
+    /// caller keeps rendering the latest release's own body.
+    static func consolidatedNotes(runningVersion: String, targetVersion: String, targetBody: String,
+                                  releases: [ReleaseNotes], pageSaturated: Bool) -> String? {
+        guard let running = strictVersionComponents(runningVersion), running.count == 3,
+              let target = strictVersionComponents(targetVersion), target.count == 3,
+              orderedVersionComponents(target, running) > 0 else { return nil }
+        var intermediates: [ReleaseNotes] = []
+        var sawRunningOrOlder = false
+        for release in releases {
+            guard let parts = strictVersionComponents(release.version), parts.count == 3 else { continue }
+            if orderedVersionComponents(parts, running) <= 0 {
+                sawRunningOrOlder = true
+                continue
+            }
+            guard orderedVersionComponents(parts, target) < 0 else { continue }
+            intermediates.append(release)
+        }
+        guard !intermediates.isEmpty else { return nil }
+        // A saturated page that never reached the running version may be
+        // missing older intermediates — the merged view would silently lie.
+        if pageSaturated && !sawRunningOrOlder { return nil }
+        guard intermediates.count <= intermediateNotesReleaseCap else { return nil }
+        // Newest first: the release being offered leads, then the skipped
+        // releases back toward the version currently running.
+        let ordered = intermediates.sorted {
+            orderedVersionComponents(strictVersionComponents($0.version) ?? [], strictVersionComponents($1.version) ?? []) > 0
+        }
+        func section(_ version: String, _ body: String) -> String? {
+            let trimmed = displayNotes(body)
+            // Level 2 marks a release boundary; the body's own `###`
+            // categories stay level 3 and render visually subordinate.
+            return trimmed.isEmpty ? nil : "## \(version)\n\(trimmed)"
+        }
+        var sections: [String] = []
+        if let offered = section(targetVersion, targetBody) { sections.append(offered) }
+        for release in ordered {
+            if let skipped = section(release.version, release.body) { sections.append(skipped) }
+        }
+        guard !sections.isEmpty else { return nil }
+        let merged = sections.joined(separator: "\n\n")
+        guard merged.count <= intermediateNotesCharacterCap else { return nil }
+        return merged
+    }
+
     /// Staged LSMinimumSystemVersion vs the running OS — a future deployment
     /// bump must refuse instead of installing an app that can't launch.
     static func meetsMinimumSystemVersion(required: String?, osMajor: Int, osMinor: Int, osPatch: Int) -> Bool {
@@ -362,6 +447,17 @@ enum UpdateFetch {
         URL(string: "\(base)/repos/\(repo)/releases/latest")
     }
 
+    // Bounds for the cosmetic intermediate-notes fetch: one page, a short
+    // deadline, and a response-size cap. Any failure or limit returns nil and
+    // the window keeps the latest release's body.
+    static let intermediateNotesPerPage = 30
+    static let intermediateNotesByteCap = 512 * 1024
+    static let intermediateNotesTimeout: TimeInterval = 15
+
+    static func releasesURL(base: String, repo: String, perPage: Int) -> URL? {
+        URL(string: "\(base)/repos/\(repo)/releases?per_page=\(perPage)")
+    }
+
     static func isSuccessfulStatus(_ status: Int?) -> Bool {
         status.map { (200...299).contains($0) } ?? false
     }
@@ -399,6 +495,32 @@ enum UpdateFetch {
             return Outcome(data: data, status: status, error: nil)
         } catch {
             return Outcome(data: nil, status: nil, error: error.localizedDescription)
+        }
+    }
+
+    /// Bounded fetch of the releases list plus pure consolidation for a
+    /// multi-version jump. Purely cosmetic: any failure, bound, or parse
+    /// problem returns nil so callers keep the latest release's body. Never
+    /// awaited on the staging/install path.
+    static func fetchIntermediateNotes(runningVersion: String, target: UpdateManifest, base: String, repo: String) async -> String? {
+        guard let url = releasesURL(base: base, repo: repo, perPage: intermediateNotesPerPage),
+              allows(url, apiBaseOverride: apiBaseOverride) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = intermediateNotesTimeout
+        request.setValue(userAgent(), forHTTPHeaderField: "User-Agent")
+        if let token = authToken(base: base) {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        do {
+            let (data, response) = try await UpdateTransport.session.data(for: request)
+            guard isSuccessfulStatus((response as? HTTPURLResponse)?.statusCode),
+                  data.count <= intermediateNotesByteCap,
+                  let parsed = UpdateLogic.parseReleaseNotes(data, pageLimit: intermediateNotesPerPage) else { return nil }
+            return UpdateLogic.consolidatedNotes(runningVersion: runningVersion, targetVersion: target.version,
+                                                 targetBody: target.notes, releases: parsed.entries,
+                                                 pageSaturated: parsed.pageSaturated)
+        } catch {
+            return nil
         }
     }
 }
@@ -1014,17 +1136,23 @@ final class UpdateController: ObservableObject {
     @Published private(set) var lastSuccessfulCheck: Date?
     @Published private(set) var lastCheckError: String?
     @Published private(set) var preparationFailure: PreparationFailure?
+    /// Consolidated multi-version What's-New body for the offered release;
+    /// nil ⇒ render the latest release's own body (also while it loads and
+    /// whenever the bounded fetch falls back).
+    @Published private(set) var consolidatedNotes: String?
     /// Non-nil ⇒ the update window should be (or is being) shown.
     @Published var windowContent: UpdateWindowContent? {
         didSet {
-            if windowContent != nil { onWindowRequest?() }
+            if windowContent != nil { onWindowRequest?(windowRequestUserInitiated) }
         }
     }
 
     unowned let store: AppStore
-    /// AppDelegate hooks: show (and defer while a reminder shows) the window,
-    /// and terminate without the quit confirmations for the install.
-    var onWindowRequest: (() -> Void)?
+    /// AppDelegate hooks: show (and defer while a reminder shows) the window —
+    /// `userInitiated` presentations must land in front of other apps' windows,
+    /// passive ones (the automatic 18-hour dwell escalation) must not steal
+    /// focus — and terminate without the quit confirmations for the install.
+    var onWindowRequest: ((_ userInitiated: Bool) -> Void)?
     var onTerminateForUpdate: (() -> Void)?
     var onCancelUpdateTermination: (() -> Void)?
 
@@ -1040,6 +1168,21 @@ final class UpdateController: ObservableObject {
     private var stagingTracker = StagingTracker()
     private var started = false
     private var availabilityChecked = false
+    /// Version whose intermediate notes were already requested (or whose
+    /// request failed — notes are cosmetic and never worth a retry loop).
+    private var notesFetchVersion: String?
+    /// Focus intent for the next window request, recorded just before
+    /// `windowContent` is set (its didSet fires the request synchronously).
+    /// Everything answers a user action or a flow the person started — manual
+    /// checks, menu/notification actions, install confirmations, the
+    /// NOW_UPDATE_ERROR relaunch — except the automatic dwell escalation.
+    private var windowRequestUserInitiated = true
+
+    /// Sets the update window content with its focus intent.
+    private func showWindow(_ content: UpdateWindowContent, userInitiated: Bool) {
+        windowRequestUserInitiated = userInitiated
+        windowContent = content
+    }
 
     init(store: AppStore) {
         self.store = store
@@ -1106,13 +1249,13 @@ final class UpdateController: ObservableObject {
         pendingInstalledVersion = nil
         guard let installed = UpdateLogic.justInstalledVersion(pending: state.pendingInstallVersion, currentVersion: UpdateLogic.currentVersion) else {
             if windowContent == nil, !(store.featureGuides?.updateIDs.isEmpty ?? true) {
-                windowContent = .features(version: UpdateLogic.currentVersion)
+                showWindow(.features(version: UpdateLogic.currentVersion), userInitiated: true)
             }
             return
         }
         state = UpdateLogic.stateAfterSuccessfulInstall(state)
         saveState()
-        windowContent = .installed(version: installed)
+        showWindow(.installed(version: installed), userInitiated: true)
     }
 
     /// Automatic trigger (launch / local eligibility timer / wake) — honors the
@@ -1135,7 +1278,7 @@ final class UpdateController: ObservableObject {
             isChecking = false
             recordAttempt(success: false, now: Date())
             lastCheckError = "invalid update URL"
-            if userInitiated { windowContent = .problem(title: "Couldn't check for updates", message: "Invalid update URL.", retry: .check) }
+            if userInitiated { showWindow(.problem(title: "Couldn't check for updates", message: "Invalid update URL.", retry: .check), userInitiated: true) }
             return
         }
         Task { [weak self] in
@@ -1159,21 +1302,21 @@ final class UpdateController: ObservableObject {
         if let error = outcome.error {
             recordAttempt(success: false, now: now)
             lastCheckError = error
-            if userInitiated { windowContent = .problem(title: "Couldn't check for updates", message: error, retry: .check) }
+            if userInitiated { showWindow(.problem(title: "Couldn't check for updates", message: error, retry: .check), userInitiated: true) }
             return
         }
         guard UpdateFetch.isSuccessfulStatus(outcome.status) else {
             let reason = outcome.status.map({ "server returned \($0)" }) ?? "invalid server response"
             recordAttempt(success: false, now: now)
             lastCheckError = reason
-            if userInitiated { windowContent = .problem(title: "Couldn't check for updates", message: reason, retry: .check) }
+            if userInitiated { showWindow(.problem(title: "Couldn't check for updates", message: reason, retry: .check), userInitiated: true) }
             return
         }
         guard let data = outcome.data, let manifest = UpdateLogic.parseLatestRelease(data) else {
             let reason = outcome.status.map({ "server returned \($0)" }) ?? "unreadable response"
             recordAttempt(success: false, now: now)
             lastCheckError = reason
-            if userInitiated { windowContent = .problem(title: "Couldn't check for updates", message: reason, retry: .check) }
+            if userInitiated { showWindow(.problem(title: "Couldn't check for updates", message: reason, retry: .check), userInitiated: true) }
             return
         }
         recordAttempt(success: true, now: now)
@@ -1193,6 +1336,7 @@ final class UpdateController: ObservableObject {
         case .available(let manifest):
             availabilityChecked = true
             available = manifest
+            fetchConsolidatedNotes(manifest)
             noteFirstSeen(manifest)
             // First discovery stages eagerly. Once a shown update loses its
             // session staging, later automatic checks keep the offer visible
@@ -1202,31 +1346,34 @@ final class UpdateController: ObservableObject {
                 beginStaging(manifest)
             }
             if userInitiated {
-                presentAvailable(manifest)
+                presentAvailable(manifest, userInitiated: true)
             } else if !store.settings.notifyUpdates, store.settings.skippedUpdateVersion != manifest.version, stagedVersion == manifest.version,
                       UpdateLogic.shouldEscalate(availableVersion: manifest.version, state: state, now: Date()) {
-                presentAvailable(manifest)
+                // The automatic 18-hour dwell escalation presents passively.
+                presentAvailable(manifest, userInitiated: false)
             }
             if !userInitiated { offerUpdateNotification() }
             store.notifications?.reconcile()
         case .skippedVersion:
             availabilityChecked = true
             available = nil
+            clearConsolidatedNotes()
             clearStaging()
             store.notifications?.reconcile()
         case .upToDate:
             availabilityChecked = true
             available = nil
+            clearConsolidatedNotes()
             store.notifications?.reconcile()
             clearStaging()
             state.firstSeenUpdateVersion = nil
             state.firstSeenUpdateDate = nil
             saveState()
-            if userInitiated { windowContent = .upToDate }
+            if userInitiated { showWindow(.upToDate, userInitiated: true) }
         case .error(let reason):
             lastCheckError = reason
             if userInitiated {
-                windowContent = .problem(title: "Couldn't check for updates", message: reason, retry: .check)
+                showWindow(.problem(title: "Couldn't check for updates", message: reason, retry: .check), userInitiated: true)
             }
         }
     }
@@ -1259,10 +1406,39 @@ final class UpdateController: ObservableObject {
         saveState()
     }
 
+    /// One bounded, purely cosmetic attempt per offered version: consolidate
+    /// the What's-New body across skipped intermediate releases. Runs in
+    /// parallel to staging — it can never block or delay preparation/install —
+    /// and any failure simply keeps the latest release's body.
+    private func fetchConsolidatedNotes(_ manifest: UpdateManifest) {
+        guard notesFetchVersion != manifest.version else { return }
+        notesFetchVersion = manifest.version
+        consolidatedNotes = nil
+        let base = UpdateFetch.resolvedBase(nil)
+        let repo = UpdateFetch.resolvedRepo(nil)
+        Task { [weak self] in
+            let notes = await UpdateFetch.fetchIntermediateNotes(
+                runningVersion: UpdateLogic.currentVersion,
+                target: manifest,
+                base: base,
+                repo: repo
+            )
+            await MainActor.run { [weak self] in
+                guard let self, self.available?.version == manifest.version else { return }
+                self.consolidatedNotes = notes
+            }
+        }
+    }
+
+    private func clearConsolidatedNotes() {
+        consolidatedNotes = nil
+        notesFetchVersion = nil
+    }
+
     /// Requests the available window. AppDelegate records notification only
     /// after the request is actually visible (a reminder can defer it).
-    private func presentAvailable(_ manifest: UpdateManifest) {
-        windowContent = .available(manifest)
+    private func presentAvailable(_ manifest: UpdateManifest, userInitiated: Bool) {
+        showWindow(.available(manifest), userInitiated: userInitiated)
     }
 
     func updateWindowDidShow() {
@@ -1289,12 +1465,12 @@ final class UpdateController: ObservableObject {
     func presentAvailableFromMenu() {
         if let manifest = available {
             if let failure = preparationFailure, failure.version == manifest.version {
-                windowContent = .problem(title: "Couldn't prepare the update", message: failure.reason, retry: .preparation)
+                showWindow(.problem(title: "Couldn't prepare the update", message: failure.reason, retry: .preparation), userInitiated: true)
             } else {
                 if stagedVersion != manifest.version, stagingTracker.version != manifest.version {
                     beginStaging(manifest)
                 }
-                presentAvailable(manifest)
+                presentAvailable(manifest, userInitiated: true)
             }
         }
     }
@@ -1365,13 +1541,14 @@ final class UpdateController: ObservableObject {
                     // Escalation is evaluated once staging is ready.
                     if !self.store.settings.notifyUpdates, self.store.settings.skippedUpdateVersion != staged.manifest.version, self.available?.version == staged.manifest.version,
                        UpdateLogic.shouldEscalate(availableVersion: staged.manifest.version, state: self.state, now: Date()) {
-                        self.presentAvailable(staged.manifest)
+                        // Automatic dwell escalation: passive presentation.
+                        self.presentAvailable(staged.manifest, userInitiated: false)
                     }
                 case .failure(let stageFailure):
                     self.lastCheckError = stageFailure.reason
                     self.preparationFailure = PreparationFailure(version: manifest.version, reason: stageFailure.reason)
                     if case .available(let shown) = self.windowContent, shown.version == manifest.version {
-                        self.windowContent = .problem(title: "Couldn't prepare the update", message: stageFailure.reason, retry: .preparation)
+                        self.showWindow(.problem(title: "Couldn't prepare the update", message: stageFailure.reason, retry: .preparation), userInitiated: true)
                     }
                 }
             }
@@ -1382,7 +1559,7 @@ final class UpdateController: ObservableObject {
     func retryPreparation() {
         guard let manifest = available else { return }
         beginStaging(manifest)
-        presentAvailable(manifest)
+        presentAvailable(manifest, userInitiated: true)
     }
 
     private func clearStaging() {
@@ -1403,11 +1580,11 @@ final class UpdateController: ObservableObject {
     func install() {
         guard installAttempt == nil else { return }
         guard let manifest = available else {
-            windowContent = .problem(title: "No update staged", message: "Check for updates first.", retry: .check)
+            showWindow(.problem(title: "No update staged", message: "Check for updates first.", retry: .check), userInitiated: true)
             return
         }
         guard stagedVersion == manifest.version, let stagedRoot else {
-            windowContent = .problem(title: "Update is still downloading", message: "Try again in a moment — the update is being prepared.", retry: .preparation)
+            showWindow(.problem(title: "Update is still downloading", message: "Try again in a moment — the update is being prepared.", retry: .preparation), userInitiated: true)
             return
         }
         let stagedApp = stagedRoot.appendingPathComponent("extracted/now.app")
@@ -1419,11 +1596,11 @@ final class UpdateController: ObservableObject {
             return
         }
         if let problem = UpdateLogic.installLocationProblem(Bundle.main.bundlePath) {
-            windowContent = .problem(title: "Can't update in place", message: problem, retry: nil)
+            showWindow(.problem(title: "Can't update in place", message: problem, retry: nil), userInitiated: true)
             return
         }
         guard !UpdateInstaller.otherInstanceRunning() else {
-            windowContent = .problem(title: "Another copy of now is running", message: "Quit the other copy of now, then update again.", retry: nil)
+            showWindow(.problem(title: "Another copy of now is running", message: "Quit the other copy of now, then update again.", retry: nil), userInitiated: true)
             return
         }
         let attempt = UUID()
@@ -1443,13 +1620,13 @@ final class UpdateController: ObservableObject {
                 self.saveState()
                 self.clearStaging()
                 self.preparationFailure = PreparationFailure(version: manifest.version, reason: problem)
-                self.windowContent = .problem(title: "Couldn't verify the update", message: problem + ". Prepare a fresh copy and try again.", retry: .preparation)
+                self.showWindow(.problem(title: "Couldn't verify the update", message: problem + ". Prepare a fresh copy and try again.", retry: .preparation), userInitiated: true)
                 return
             }
             // Another process may have started while verification was running.
             guard !UpdateInstaller.otherInstanceRunning() else {
                 self.installAttempt = nil
-                self.windowContent = .problem(title: "Another copy of now is running", message: "Quit the other copy of now, then update again.", retry: nil)
+                self.showWindow(.problem(title: "Another copy of now is running", message: "Quit the other copy of now, then update again.", retry: nil), userInitiated: true)
                 return
             }
             self.installVerified(manifest: manifest, stagedRoot: stagedRoot, attempt: attempt)
@@ -1464,7 +1641,7 @@ final class UpdateController: ObservableObject {
         guard saveState() else {
             installAttempt = nil
             state.pendingInstallVersion = nil
-            windowContent = .problem(title: "Couldn't save update progress", message: "Try again after resolving the saved-data problem in Settings.", retry: .preparation)
+            showWindow(.problem(title: "Couldn't save update progress", message: "Try again after resolving the saved-data problem in Settings.", retry: .preparation), userInitiated: true)
             return
         }
         guard UpdateInstaller.spawnHelper(
@@ -1482,7 +1659,7 @@ final class UpdateController: ObservableObject {
             installAttempt = nil
             state.pendingInstallVersion = nil
             saveState()
-            windowContent = .problem(title: "Couldn't start the updater", message: "The update helper failed to launch. Download the update manually.", retry: nil)
+            showWindow(.problem(title: "Couldn't start the updater", message: "The update helper failed to launch. Download the update manually.", retry: nil), userInitiated: true)
             return
         }
         onTerminateForUpdate?()
@@ -1498,7 +1675,7 @@ final class UpdateController: ObservableObject {
         state.pendingInstallVersion = nil
         saveState()
         clearStaging()
-        windowContent = .problem(title: "Update did not start", message: "now could not finish quitting. The installed app is unchanged. Try preparing the update again.", retry: .preparation)
+        showWindow(.problem(title: "Update did not start", message: "now could not finish quitting. The installed app is unchanged. Try preparing the update again.", retry: .preparation), userInitiated: true)
     }
 
     /// The helper relaunched us after a FAILED update — show what happened
@@ -1506,7 +1683,7 @@ final class UpdateController: ObservableObject {
     func handleInstallFailure(reason: String) {
         state = UpdateLogic.stateAfterInstallFailure(state)
         saveState()
-        windowContent = .problem(title: "Update failed", message: reason + " The previous version is still running. You can also download the update manually.", retry: nil)
+        showWindow(.problem(title: "Update failed", message: reason + " The previous version is still running. You can also download the update manually.", retry: nil), userInitiated: true)
     }
 
     // MARK: State
@@ -1553,11 +1730,16 @@ extension UpdateController {
         get { stagedRoot }
         set { stagedRoot = newValue }
     }
+    var smokeConsolidatedNotes: String? {
+        get { consolidatedNotes }
+        set { consolidatedNotes = newValue }
+    }
     var smokeInstallAttempt: UUID? {
         get { installAttempt }
         set { installAttempt = newValue }
     }
     func smokeApplyDecision(_ decision: UpdateDecision, userInitiated: Bool) { applyDecision(decision, userInitiated: userInitiated) }
+    func smokeShowWindow(_ content: UpdateWindowContent, userInitiated: Bool) { showWindow(content, userInitiated: userInitiated) }
     func smokeInstallHelperExited(attempt: UUID, status: Int32) { installHelperExited(attempt: attempt, status: status) }
 }
 #endif

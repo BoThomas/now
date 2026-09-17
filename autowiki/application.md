@@ -90,7 +90,10 @@ deleting possible recovery data. Exercise changes with the
 ## Windows and activation
 
 `AppDelegate.syncActivationPolicy` coordinates regular mode while a settings, setup, reminder, or
-update window is visible, and accessory mode otherwise. The installed main menu supplies
+update window is visible, and accessory mode otherwise. All user-facing windows present through one
+shared helper that orders the window front, records shown state, syncs the policy, and then
+activates: user-initiated presentations take the front even from the background, while the automatic
+update escalation shows its window without stealing focus. The installed main menu supplies
 responder-chain editing and window shortcuts. Finder reopen surfaces unfinished setup or Settings;
 notification agenda interaction has its own reopen suppression to avoid a competing Settings window.
 The fullscreen panel uses explicit focus/keyboard handling in

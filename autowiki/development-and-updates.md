@@ -46,12 +46,17 @@ workflows; a documentation review alone does not establish that they pass.
 ## Update discovery and preparation
 
 The updater uses GitHub Releases directly. [UpdateLogic](../Sources/Updater.swift) owns pure
-version, throttle, and presentation decisions; `UpdateController` owns live main-actor state.
-Automatic checks are spaced at least six hours apart, including failures; manual checks bypass that
-throttle. A newly published eligible release can be offered immediately. Automatic presentation
-starts with a menu/About indication, with an eighteen-hour uninstalled dwell before window
-escalation; opt-in update notifications use their own once-per-version marker and suppress that
-automatic delayed window. Manual checks still answer with a window.
+version, throttle, presentation, and release-notes consolidation decisions; `UpdateController` owns
+live main-actor state. Automatic checks are spaced at least six hours apart, including failures;
+manual checks bypass that throttle. A newly published eligible release can be offered immediately.
+Automatic presentation starts with a menu/About indication, with an eighteen-hour uninstalled dwell
+before window escalation; opt-in update notifications use their own once-per-version marker and
+suppress that automatic delayed window. Manual checks still answer with a window. When a jump skips
+intermediate releases, one bounded extra request to the `releases` list (single page, byte and time
+caps) lets the offered window render consolidated What's-New notes — the offered release's body
+first, then every skipped intermediate under its version heading, newest first. Notes are cosmetic:
+any failure or bound falls back to the offered release's own body and can never delay staging or
+installation.
 
 `UpdateFetch` enforces HTTPS for production URLs and redirects, with HTTP allowed only for an
 explicit loopback test override. `UpdateStaging` streams a bounded archive via
