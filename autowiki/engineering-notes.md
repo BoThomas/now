@@ -431,13 +431,20 @@ groups. Swift 5 language mode — keep new code compatible.
   snoozes while any event is still running (`end > now`), matching the button + hint; ⌘W/⌘M are
   swallowed silently (they'd beep on the borderless panel). Plain digits **1-9** join the Nth shown
   event (`joinIndex`, cards carry numbered badges) — with several simultaneous meetings, Return
-  alone joining "the first" would be a bad guess. **Keyboard focus**: a timer-fired panel can't take
-  focus as a background `.accessory` app (macOS ignores `activate()` without user interaction →
-  keystrokes invisibly went to the app behind the overlay). `present()`/`closePanel()` therefore
-  call `policyDidChange`, which runs `AppDelegate.syncActivationPolicy()` → app goes `.regular`
-  while the alert is up (Dock icon + our menu bar — the accepted cost) and back to `.accessory` on
-  close (unless Settings is still visible). **Button appearance**: the panel remains visible while
-  inactive; native prominent/bordered controls can become black-on-black in inactive Light mode.
+  alone joining "the first" would be a bad guess. **Display choice**: the panel covers
+  `NSScreen.main` (the display with keyboard focus, which is already the main display whenever
+  nothing has focus, e.g. AFK/lock screen) or is pinned to `NSScreen.screens.first` (always the
+  primary display) per `AppSettings.reminderScreen`; the pure `AlertController.preferredDisplay`
+  owns the preference/fallback ordering for both `present()` and the display-change reconciliation,
+  so an unplugged screen never bounces a "Main Display" user onto the focused one. The default for
+  new and updating installs is the focused display; absent or unknown persisted values decode back
+  to it. **Keyboard focus**: a timer-fired panel can't take focus as a background `.accessory` app
+  (macOS ignores `activate()` without user interaction → keystrokes invisibly went to the app behind
+  the overlay). `present()`/`closePanel()` therefore call `policyDidChange`, which runs
+  `AppDelegate.syncActivationPolicy()` → app goes `.regular` while the alert is up (Dock icon + our
+  menu bar — the accepted cost) and back to `.accessory` on close (unless Settings is still
+  visible). **Button appearance**: the panel remains visible while inactive; native
+  prominent/bordered controls can become black-on-black in inactive Light mode.
   `AlertJoinButtonStyle` and `AlertSecondaryButtonStyle` therefore own the fill and white label for
   every alert action; secondary actions deliberately have no outline, while
   `Palette.alertButtonColor` bounds the Join fill luminance — do not hand alert-button appearance
@@ -511,21 +518,53 @@ separately signed synthetic preview. Never seed installed now's calendars or pre
 UI. Add stable IDs for new introductions (never rename). Existing profiles show newly encountered
 features after either automatic or manual ZIP upgrades; fresh profiles only record introduction
 history because initial setup covers those choices. Manual discovery uses `.features` without
-claiming a verified installation. Notification guidance explains meetings, sync problems, and
-updates; its visible sync-problem checkbox recommends on for unconfigured notification users and
-preserves the value for existing notification users. Sync-only selections still require permission
-before applying. Record history only at `startupHealthAcknowledged`, after the helper health commit,
-never during init/start. Newly introduced update guides persist in `pendingPresentation` until their
-Update Complete or What’s New window actually becomes visible; an ordinary restart resumes unseen
-guides. Displayed/closed guides never repeat. A skipped/closed guide must not repeat next update;
-Setup commits its choices only after authorization and capability validation, with a
-cancellation/settings-change guard. Update notifications use `UpdateState.lastNotificationVersion`,
-independently of the existing window/failed-install marker; obey automatic-check preference and age
-gate, notify silently once/version, remove withdrawn/installed/disabled notices, and never show
-automatic delayed update windows while notifyUpdates is selected. Manual checks retain their window.
-`scripts/notification-smoke.py` injects fake transport and stubs archive staging only in its
-disposable compilation, testing production update routing and health-committed guide history without
-network.
+claiming a verified installation. The fullscreen display choice (`fullscreen-display-v1`) is an
+interactive card whose Show on selection applies on Continue; closing the card keeps the focused
+default. It is deliberately NOT gated on the current screen count: a user updating while attached to
+one display may still use several. Several newly introduced features page one card at a time with
+dot indicators in `FeatureGuideView`: the footer is pure navigation (Next, then Back + Complete),
+card-specific actions live inside their card, and the notification toggles are permission-gated
+exactly like Settings (disabled, with an Enable Notifications… button on top that requests
+permission only and disappears once granted). Next applies a card's choice when no permission prompt
+would be needed. `NotificationGuideSubmission` validates a newly enabled meeting-detection mode
+before committing, then rechecks notification permission without prompting. Failed validation stays
+on the current card with an error; closure and concurrent settings edits invalidate the pending
+commit. An unchanged detection mode retains its live check/retry. The notification guide smoke
+covers failure, retry, cancellation, permission loss and competing settings edits. Closing the
+window (⌘W, same as the former Later button) counts the guides as seen. Keep one guide per page so
+later introductions cannot be hidden below earlier cards. `PopupLayout.swift` shares content-sized
+scrolling between guides, release notes, update problems, and setup steps. Content grows to a 320 pt
+cap; navigation stays outside the scroll area and the window follows its intrinsic height. The
+native legacy scrollbar stays visible for overflow even with macOS overlay-scrollbar preferences,
+and disappears entirely when the content fits. Keep the full document height independent of the
+viewport, reset guide scroll position on page changes, and forward wheel events to the native scroll
+owner. The notification harness checks overflow, reachability of the final row, shrinking windows,
+and removal of the scroll track for short content. Notification guidance explains meetings, sync
+problems, and updates; its visible sync-problem checkbox recommends on for unconfigured notification
+users and preserves the value for existing notification users. Sync-only selections still require
+permission before applying. Record history only at `startupHealthAcknowledged`, after the helper
+health commit, never during init/start. Newly introduced update guides persist in
+`pendingPresentation` until their Update Complete or What’s New window actually becomes visible; an
+ordinary restart resumes unseen guides. Displayed/closed guides never repeat. A skipped/closed guide
+must not repeat next update; Setup commits its choices only after authorization and capability
+validation, with a cancellation/settings-change guard. Update notifications use
+`UpdateState.lastNotificationVersion`, independently of the existing window/failed-install marker;
+obey automatic-check preference and age gate, notify silently once/version, remove
+withdrawn/installed/disabled notices, and never show automatic delayed update windows while
+notifyUpdates is selected. Manual checks retain their window. `scripts/notification-smoke.py`
+injects fake transport and stubs archive staging only in its disposable compilation, testing
+production update routing and health-committed guide history without network. Manual window review
+has three lanes: `scripts/update-ui-demo.sh` drives the production staging → install → GUI relaunch
+→ up-to-date path in the signed updater fixture against a locally served forged release. Its app
+copy, preference suite, cache and Trash are disposable; notifications and login items are simulated
+and Calendar authorization is disabled. The old fixture omits the display introduction to exercise
+guide discovery after the update. `--smoke` verifies that GUI handoff and unchanged installed
+preferences; neither mode replaces a published-binary upgrade test. Process discovery fails closed,
+uses absolute executables, and never assigns zsh's `path` variable. For the other two lanes,
+`python3 scripts/notification-smoke.py --update-screens` opens an offline state switcher (fake
+transport, scripted guide history) for every update-window shape including guide-card combinations,
+and `python3 scripts/notification-smoke.py --setup-screens` walks first-run setup offline with
+toggleable display count and notification permission, opening sandboxed Settings on completion.
 
 ### First launch
 
@@ -537,11 +576,14 @@ launch/reopen until finished, then opens Settings for sources. Completed profile
 even without calendars. It does not modify general defaults or request Calendar access. Permission
 and meeting-detection checks precede the one settings commit, with generation cancellation on
 close/draft changes. `SetupAssistantState.applying` copies the exposed reminder and startup/update
-choices plus permission-gated notification defaults, preserving other preferences.
-`AlertController.presentPreview(settings:)` supports draft snooze/sound without mutating store
-settings. AppDelegate includes the assistant in activation/quit/window policy and defers automatic
-update windows while it is visible. Notification smoke covers resume, denial, failed capability,
-cancellation, completion, and renders each step using fake transport.
+choices plus permission-gated notification defaults, preserving other preferences. The reminders
+step asks which display fullscreen reminders cover only when the draft selects Fullscreen AND the
+Mac currently has multiple displays; the flag is injected (`multiDisplay`), never read from NSScreen
+inside the view, so harness renders stay deterministic. Everyone else silently keeps the focused
+default. `AlertController.presentPreview(settings:)` supports draft snooze/sound without mutating
+store settings. AppDelegate includes the assistant in activation/quit/window policy and defers
+automatic update windows while it is visible. Notification smoke covers resume, denial, failed
+capability, cancellation, completion, and renders each step using fake transport.
 
 ### Three-screen setup
 

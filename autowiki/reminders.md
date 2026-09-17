@@ -85,10 +85,11 @@ normalization, unmute and pruning. `AppStore.commitEvents` retains the live tran
 accepted receipt replacement/submission state remains in the native notification controller.
 
 The borderless panel has an explicit key monitor, including a one-second guard against keystrokes in
-flight when it takes focus. Keep its keyboard and activation behavior together with
-[AppDelegate](../Sources/App.swift); ordinary SwiftUI shortcuts alone do not cover disappearing
-snooze controls or background focus. Pure timing, snooze, key-action, and preview-transition cases
-live in [SelfTest.swift](../Tests/NowTests/SelfTest.swift).
+flight when it takes focus. It covers the display with keyboard focus, or the main display when the
+**Show on** setting chooses it; previews use the same path and honor the same setting. Keep its
+keyboard and activation behavior together with [AppDelegate](../Sources/App.swift); ordinary SwiftUI
+shortcuts alone do not cover disappearing snooze controls or background focus. Pure timing, snooze,
+key-action, and preview-transition cases live in [SelfTest.swift](../Tests/NowTests/SelfTest.swift).
 
 [MenuBarController](../Sources/MenuBar.swift) renders the agenda and countdown from store state.
 `AppStore.menuBarFocus` picks the nearest eligible start, gives a future start the exact midpoint

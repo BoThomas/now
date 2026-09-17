@@ -83,7 +83,7 @@ extension CoreTests {
         let json = """
         {"subscriptions":[{"id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","name":"Calendar","url":"https://example.invalid/feed","colorIndex":2,"colorHex":"#abcdef","isEnabled":true,"titleFilters":[{"id":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC","pattern":"Standup","mode":"exact"}]}],
          "nativeCalendars":[{"id":"BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB","ekIdentifier":"opaque","name":"Native","colorIndex":0,"colorHex":"","isEnabled":false,"titleFilters":[]}],
-         "settings":{"leadSeconds":300,"refreshMinutes":15,"soundEnabled":true,"soundName":"Hero","showMenuBarCountdown":true,"menuMeetingLimit":5,"launchAtLogin":false,"elapsedStartMinutes":10,"skipDeclined":true,"snoozeSeconds":0,"automaticUpdateChecks":true,"suppressRemindersDuringMeetings":false,"includeBrowserMeetings":false,"reminderDelivery":"fullscreen","notifyDuringMeetings":false,"notifyOnCatchUp":false,"skipMeetingsOnCatchUp":false,"hideNotificationDetails":false,"notifySyncErrors":false,"notifyUpdates":false},
+         "settings":{"leadSeconds":300,"refreshMinutes":15,"soundEnabled":true,"soundName":"Hero","showMenuBarCountdown":true,"menuMeetingLimit":5,"launchAtLogin":false,"elapsedStartMinutes":10,"skipDeclined":true,"snoozeSeconds":0,"automaticUpdateChecks":true,"suppressRemindersDuringMeetings":false,"includeBrowserMeetings":false,"reminderDelivery":"fullscreen","reminderScreen":"focused","notifyDuringMeetings":false,"notifyOnCatchUp":false,"skipMeetingsOnCatchUp":false,"hideNotificationDetails":false,"notifySyncErrors":false,"notifyUpdates":false},
          "pausedUntil":800000000}
         """
         let data = Data(json.utf8)

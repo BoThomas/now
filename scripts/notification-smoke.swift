@@ -60,6 +60,8 @@ struct NotificationSmoke {
         if CommandLine.arguments.contains("--startup-new") { SetupAppSmoke.run(existingProfile: false); return }
         if CommandLine.arguments.contains("--startup-legacy") { SetupAppSmoke.run(existingProfile: true, legacyProfile: true); return }
         if CommandLine.arguments.contains("--startup-existing") { SetupAppSmoke.run(existingProfile: true); return }
+        if CommandLine.arguments.contains("--update-screens") { UpdateScreensPreview.run(root: root); return }
+        if CommandLine.arguments.contains("--setup-screens") { SetupScreensPreview.run(root: root); return }
         if CommandLine.arguments.contains("--gui") { NotificationPreview.run(root: root); return }
         if CommandLine.arguments.contains("--recovery-smoke") { await preferenceRecoveryTests(root: root); return }
         var clock = Date()
@@ -303,8 +305,9 @@ struct NotificationSmoke {
         let updater = UpdateController(store: store)
         require(guides.updateIDs.isEmpty, "update guide remains hidden before health commit")
         updater.startupHealthAcknowledged()
-        require(guides.updateIDs == [FeatureGuideCatalog.notificationsID], "successful update presents new guide")
+        require(guides.updateIDs == [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID], "successful update presents new guides")
         if case .installed = updater.windowContent {} else { require(false, "success dialog follows health commit") }
+        NotificationPreview.verifyPopupLayout()
         if let directory = ProcessInfo.processInfo.environment["NOW_NOTIFICATION_RENDER_DIR"] {
             // Render production views with untouched default choices, entirely
             // offline. Never construct SystemNotificationTransport here.
@@ -316,12 +319,26 @@ struct NotificationSmoke {
             previewTransport.status.authorization = .notRequested
             let previewDelivery = ReminderNotificationController(transport: previewTransport, defaults: previewDefaults)
             previewStore.connectNotifications(previewDelivery)
+            let previewUpdates = UpdateController(store: previewStore)
+            previewUpdates.windowContent = .installed(version: "1.11.0")
+            // Realistic v2.x upgrader: the notifications guide is already
+            // encountered, so the window shows only the interactive display
+            // card.
+            var guideHistory = FeatureGuideState()
+            guideHistory.encountered = [FeatureGuideCatalog.notificationsID]
+            StoredPreferences.save(guideHistory, key: FeatureGuideController.storageKey, label: "Guide history", defaults: previewDefaults)
             let updateGuides = FeatureGuideController(defaults: previewDefaults)
             updateGuides.startupHealthAcknowledged(installedUpdate: true)
             previewStore.featureGuides = updateGuides
-            let previewUpdates = UpdateController(store: previewStore)
-            previewUpdates.windowContent = .installed(version: "1.11.0")
-            NotificationPreview.render(UpdateView(controller: previewUpdates), size: NSSize(width: 460, height: 424), name: "update-guide", directory: directory)
+            NotificationPreview.render(UpdateView(controller: previewUpdates), size: NSSize(width: 460, height: 520), name: "update-guide", directory: directory)
+            // Multi-version upgrader: every unseen card at once.
+            let bothDomain = "now-guide-both-" + UUID().uuidString
+            let bothDefaults = UserDefaults(suiteName: bothDomain)!
+            let bothGuides = FeatureGuideController(defaults: bothDefaults)
+            bothGuides.startupHealthAcknowledged(installedUpdate: true)
+            bothDefaults.removePersistentDomain(forName: bothDomain)
+            previewStore.featureGuides = bothGuides
+            NotificationPreview.render(UpdateView(controller: previewUpdates), size: NSSize(width: 460, height: 520), name: "update-guide-notifications", directory: directory)
             previewDefaults.removePersistentDomain(forName: previewDomain)
             let assistant = SetupAssistantController(isNewProfile: true, settings: AppSettings(), defaults: previewDefaults)
             let previewAlerts = AlertController()
@@ -336,6 +353,22 @@ struct NotificationSmoke {
             _ = await previewDelivery.checkPermission()
             NotificationPreview.render(SetupAssistantView(assistant: assistant, store: previewStore, alerts: previewAlerts,
                 notifications: previewDelivery, onFinish: {}), size: NSSize(width: 560, height: 430), name: "setup-reminders-enabled", directory: directory)
+            // The display question renders deterministically because the
+            // multi-display flag is injected, never read from NSScreen here.
+            // Fresh defaults domain: the persisted draft of the assistant
+            // rendered above must not leak a later step into this one
+            // (loading it resumes at that step, so next() would land on
+            // "You're set").
+            let multiDomain = "now-setup-multi-" + UUID().uuidString
+            let multiDefaults = UserDefaults(suiteName: multiDomain)!
+            let multiDisplayAssistant = SetupAssistantController(isNewProfile: true, settings: AppSettings(), defaults: multiDefaults)
+            multiDisplayAssistant.next() // welcome → reminders
+            multiDisplayAssistant.draft.reminderDelivery = .fullscreen
+            let multiDisplayAlerts = AlertController()
+            multiDisplayAlerts.store = previewStore
+            NotificationPreview.render(SetupAssistantView(assistant: multiDisplayAssistant, store: previewStore, alerts: multiDisplayAlerts,
+                notifications: previewDelivery, multiDisplay: true, onFinish: {}), size: NSSize(width: 560, height: 430), name: "setup-reminders-multi-display", directory: directory)
+            multiDefaults.removePersistentDomain(forName: multiDomain)
             NotificationPreview.renderSettings(store: previewStore, alerts: previewAlerts, updates: previewUpdates, directory: directory)
             previewDefaults.removePersistentDomain(forName: previewDomain)
         }
@@ -344,7 +377,7 @@ struct NotificationSmoke {
         resumedStore.featureGuides = deferredGuides
         let resumedUpdater = UpdateController(store: resumedStore)
         resumedUpdater.startupHealthAcknowledged()
-        require(deferredGuides.updateIDs == [FeatureGuideCatalog.notificationsID], "unseen guide survives process state restore without install marker")
+        require(deferredGuides.updateIDs == [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID], "unseen guides survive process state restore without install marker")
         if case .features = resumedUpdater.windowContent {} else { require(false, "unseen guide gets a new window after restart") }
         let failureStore = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("guide-failure")), initialState: Persisted())
         failureStore.featureGuides = FeatureGuideController()
@@ -700,6 +733,7 @@ struct NotificationSmoke {
                 "unsupported capability preserves preference without endless retries")
         probeStore.setInMeetingDelivery(.normal)
         await lifecycleTests(root: root)
+        await guideSubmissionTests(root: root)
         print("NOTIFICATION SMOKE OK — async races, permission recovery, routing, privacy, snooze, restart, wake grouping, cleanup, update notices, feature migration")
     }
 }

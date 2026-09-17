@@ -36,11 +36,12 @@ panels. Extend the existing pure policy helpers when testing decisions.
 | Signed update staging/install/rollback                            | `./scripts/update-smoke.sh --app outputs/now.app` ([harness](../scripts/update-smoke.sh))                                                                                                                                                                   |
 
 [scripts/preflight.sh](../scripts/preflight.sh) runs the signed release build, debug and optimized
-selftests, and all of these suites; `--app` uses an existing bundle instead of rebuilding. The
-updater smoke temporarily quits and later reopens a running now. The full notification harness
-includes synthetic GUI fixtures. Use the disposable harness data rather than installed
-calendars/preferences. These commands describe repository workflows; a documentation review alone
-does not establish that they pass.
+selftests and core suites, the module ownership/syntax check, and all of these suites. It also runs
+the demo process/isolation regressions and the isolated GUI update/relaunch smoke; `--app` uses an
+existing bundle instead of rebuilding. The updater smokes temporarily quit and later reopen a
+running now. The full notification harness includes synthetic GUI fixtures. Use the disposable
+harness data rather than installed calendars/preferences. These commands describe repository
+workflows; a documentation review alone does not establish that they pass.
 
 ## Update discovery and preparation
 

@@ -135,8 +135,27 @@ Calendar permission prompts, real Notification Center delivery or older macOS ve
 
 The pinned-ID updater fixture uses an explicit disposable preference suite and injected cache;
 changing HOME alone does not isolate macOS preferences. Interactive menu/focus checks require an
-unlocked, undisturbed desktop. Historical parser comparisons build complete archived revisions with
-their own SwiftPM layouts. Use
+unlocked, undisturbed desktop.
+
+`./scripts/update-ui-demo.sh` builds that fixture and runs a real interactive staging → install →
+GUI relaunch tour against a loopback server. Each run owns a temporary app copy, preference suite,
+cache and Trash directory. The shipping bundle and installed profile are untouched. Notifications
+and login items are simulated, and Calendar access is disabled. The old fixture's feature catalog
+omits the display guide so the updated fixture can introduce it after startup health
+acknowledgement. After installation, Check for Updates shows the up-to-date window in the same
+session. Use `--escalation` for an aged offer; quit other now instances before starting either
+interactive tour. Ctrl-C cleans up the session. If a helper cannot finish, its files are preserved
+for inspection.
+
+`./scripts/update-ui-demo.sh --smoke` automates the GUI install/relaunch, checks retained settings,
+the health-committed guide and isolated Trash, and compares the installed current/legacy preference
+domains before and after. Like updater smoke, it temporarily quits and then reopens a running now.
+The release preflight runs this check, the process-discovery/isolation regressions, both debug and
+release core suites, and the module ownership/syntax check in addition to the existing macOS suites.
+These fixtures still do not replace a manual upgrade from a published binary or real OS permission
+checks.
+
+Historical parser comparisons build complete archived revisions with their own SwiftPM layouts. Use
 `python3 scripts/parser-performance-smoke.py --compare-revision d01dbd7` for extraction equivalence;
 `--compare-head` compares to the current committed revision. Both compare the full materialization
 fixture digests, including identities and presentation fields.

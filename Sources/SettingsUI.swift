@@ -30,7 +30,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .calendars: return "calendar"
         case .native: return "calendar.badge.clock"
-        case .reminder: return "bell.badge"
+        case .reminder: return "megaphone"
         case .notifications: return "bell"
         case .general: return "gearshape"
         case .about: return "info.circle"
@@ -1163,6 +1163,27 @@ struct GatedPickerOption<Value: Hashable>: View {
     }
 }
 
+/// A menu picker that keeps its label inline while label and control fit the
+/// row, and stacks the label above the control at narrow widths. The former
+/// `.fixedSize()` here imposed a horizontal minimum that could force the whole
+/// shared settings content wider than the scroll viewport.
+private struct AdaptivePickerRow<Selection: Hashable, Options: View>: View {
+    let title: String
+    let selection: Binding<Selection>
+    @ViewBuilder let options: () -> Options
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            Picker(title, selection: selection, content: options)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                Picker(title, selection: selection, content: options)
+                    .labelsHidden()
+            }
+        }
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject private var persistence = PersistenceStatus.shared
     @EnvironmentObject var store: AppStore
@@ -1668,6 +1689,23 @@ struct SettingsView: View {
                 .pickerStyle(.menu)
                 .frame(maxWidth: 360, alignment: .leading)
             }
+            if store.settings.reminderDelivery == .fullscreen {
+                HStack {
+                    Text("Show on")
+                    Picker("", selection: Binding(
+                        get: { store.settings.reminderScreen },
+                        set: { store.settings.reminderScreen = $0 }
+                    )) {
+                        Text("Focused Display").tag(ReminderScreen.focused)
+                        Text("Main Display").tag(ReminderScreen.mainDisplay)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 230)
+                    .accessibilityLabel("Fullscreen reminder display")
+                    .help("Focused Display takes over whichever display you are working on. Main Display always uses your main display, even when you are working on another one.")
+                }
+            }
             Picker("Remind me", selection: Binding(
                 get: { store.settings.leadSeconds },
                 set: { value in
@@ -1715,18 +1753,21 @@ struct SettingsView: View {
             }
             Divider()
             permissionGated { denied in
-                Picker("On launch or wake, meetings already in progress", selection: Binding(
-                    get: { store.settings.catchUpDelivery },
-                    set: { value in
-                        store.settings.catchUpDelivery = value
-                        if value == .notification { store.notifications?.requestPermission() }
-                    })) {
+                AdaptivePickerRow(
+                    title: "On launch or wake, meetings already in progress",
+                    selection: Binding(
+                        get: { store.settings.catchUpDelivery },
+                        set: { value in
+                            store.settings.catchUpDelivery = value
+                            if value == .notification { store.notifications?.requestPermission() }
+                        }
+                    )
+                ) {
                     Text("Use normal reminder style").tag(CatchUpDelivery.normal)
                     GatedPickerOption(title: "Use notification", tag: CatchUpDelivery.notification,
                                       unavailable: denied, isSelected: store.settings.catchUpDelivery == .notification)
                     Text("Skip reminder").tag(CatchUpDelivery.skip)
                 }
-                .fixedSize()
             }
             permissionGated { denied in
                 Picker("During another meeting", selection: Binding(

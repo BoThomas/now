@@ -28,7 +28,9 @@ struct UpdateView: View {
         }
         .padding(20)
         .frame(width: 460, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
         .background(VisualEffectBackground())
+        .background(PopupWindowSizing())
     }
 
     // MARK: - Update available
@@ -51,11 +53,10 @@ struct UpdateView: View {
                 Text("WHAT'S NEW")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
-                ScrollView {
+                PopupScrollView {
                     NotesView(blocks: UpdateLogic.noteBlocks(manifest.notes))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: 160)
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
             }
@@ -71,6 +72,7 @@ struct UpdateView: View {
                 .disabled(controller.isVerifyingInstall)
                 .font(.system(size: 12))
                 .help("Stop automatic offers for this version. Check for Updates can show it again.")
+            Color.clear.frame(height: 8)
             footer(
                 primaryTitle: "Install & Relaunch",
                 primaryEnabled: staged && !controller.isVerifyingInstall,
@@ -78,7 +80,6 @@ struct UpdateView: View {
                 cancelTitle: "Later"
             )
         }
-        .frame(height: 380, alignment: .topLeading)
     }
 
     /// Release body rendered as headings / bullets / paragraphs — real
@@ -138,7 +139,7 @@ struct UpdateView: View {
                 }
                 Spacer(minLength: 0)
             }
-            Spacer(minLength: 8)
+            Color.clear.frame(height: 8)
             footer(
                 primaryTitle: "OK",
                 primaryEnabled: true,
@@ -146,7 +147,6 @@ struct UpdateView: View {
                 cancelTitle: nil
             )
         }
-        .frame(height: 380, alignment: .topLeading)
     }
 
     // MARK: - Installed
@@ -177,40 +177,41 @@ struct UpdateView: View {
                     .foregroundStyle(.secondary)
             }
             }
-            if let guides = controller.store.featureGuides, !guides.updateIDs.isEmpty {
-                ScrollView {
-                    FeatureGuideView(store: controller.store, guides: guides, ids: guides.updateIDs, usesKeyboardShortcuts: true) {
-                        controller.dismissWindow()
-                    }
+            if let guides = controller.store.featureGuides, let notifications = controller.store.notifications, !guides.updateIDs.isEmpty {
+                // Card content grows up to its cap; navigation stays outside
+                // the scrolling region.
+                FeatureGuideView(store: controller.store, notifications: notifications, guides: guides, ids: guides.updateIDs, usesKeyboardShortcuts: true) {
+                    controller.dismissWindow()
                 }
             } else {
-                Spacer(minLength: 8)
+                Color.clear.frame(height: 8)
                 footer(primaryTitle: "OK", primaryEnabled: true,
                        primaryAction: { controller.dismissWindow() }, cancelTitle: nil)
             }
         }
-        .frame(height: 380, alignment: .topLeading)
     }
 
     // MARK: - Problem
 
     private func problemView(title: String, message: String, retry: UpdateRetry?) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 26))
-                    .foregroundStyle(.orange)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.system(size: 17, weight: .semibold))
-                    Text(message)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            PopupScrollView {
+                HStack(alignment: .top, spacing: 14) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 26))
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(.system(size: 17, weight: .semibold))
+                        Text(message)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
             }
-            Spacer(minLength: 8)
+            Color.clear.frame(height: 8)
             footer(
                 primaryTitle: retry == nil ? "OK" : "Try Again",
                 primaryEnabled: true,
@@ -221,7 +222,6 @@ struct UpdateView: View {
                 cancelTitle: retry == nil ? nil : "Cancel"
             )
         }
-        .frame(height: 380, alignment: .topLeading)
     }
 
     // MARK: - Shared pieces
