@@ -625,17 +625,26 @@ final class SetupAppSmoke {
                     // the menu open; it can otherwise dismiss a tracking menu.
                     for window in NSApp.windows where window.isVisible { window.close() }
                     try? await Task.sleep(nanoseconds: 250_000_000)
-                    var reopenedDuringAgenda = false
-                    var reopenedAfterAgenda = false
-                    var duringTimer: Timer?
+                    // The @Sendable notification and timer closures may capture
+                    // only Sendable values; this state is genuinely confined to
+                    // the main actor (main-queue observers, main run-loop
+                    // timers), so one unchecked box is the trust boundary.
+                    final class AgendaReopenProbe: @unchecked Sendable {
+                        var reopenedDuringAgenda = false
+                        var reopenedAfterAgenda = false
+                        var duringTimer: Timer?
+                        var trackedMenu: NSMenu?
+                    }
+                    let probe = AgendaReopenProbe()
                     let beginObserver = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { notification in
                         MainActor.assumeIsolated {
                             guard let menu = notification.object as? NSMenu, menu.delegate is MenuBarController else { return }
-                            duringTimer = AppStore.commonTimer(withTimeInterval: 1.2, repeats: false) { _ in
+                            probe.trackedMenu = menu
+                            probe.duringTimer = AppStore.commonTimer(withTimeInterval: 1.2, repeats: false) { _ in
                                 MainActor.assumeIsolated {
-                                    reopenedDuringAgenda = true
+                                    probe.reopenedDuringAgenda = true
                                     _ = delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false)
-                                    menu.cancelTracking()
+                                    probe.trackedMenu?.cancelTracking()
                                 }
                             }
                         }
@@ -643,12 +652,12 @@ final class SetupAppSmoke {
                     let endObserver = NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { notification in
                         MainActor.assumeIsolated {
                             guard let menu = notification.object as? NSMenu, menu.delegate is MenuBarController else { return }
-                            duringTimer?.invalidate()
+                            probe.duringTimer?.invalidate()
                             // Foreground actions can deliver their reopen after
                             // menu tracking and the notification callback return.
                             _ = AppStore.commonTimer(withTimeInterval: 0.05, repeats: false) { _ in
                                 MainActor.assumeIsolated {
-                                    reopenedAfterAgenda = true
+                                    probe.reopenedAfterAgenda = true
                                     _ = delegate.applicationShouldHandleReopen(app, hasVisibleWindows: false)
                                 }
                             }
@@ -670,8 +679,8 @@ final class SetupAppSmoke {
                     try? await Task.sleep(nanoseconds: 500_000_000)
                     NotificationCenter.default.removeObserver(beginObserver)
                     NotificationCenter.default.removeObserver(endObserver)
-                    require(reopenedDuringAgenda, "group agenda stays open past the original one-second notification guard")
-                    require(reopenedAfterAgenda, "notification reopen arrives after agenda dismissal")
+                    require(probe.reopenedDuringAgenda, "group agenda stays open past the original one-second notification guard")
+                    require(probe.reopenedAfterAgenda, "notification reopen arrives after agenda dismissal")
                     require(!settingsVisible(), "notification agenda dismissal must not open Settings")
                     delegate.store.smokeCommitEvents([])
                 }
