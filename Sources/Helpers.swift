@@ -304,11 +304,33 @@ enum Fmt {
 /// presenting window. Keep the platform API choice consistent at every call site.
 @MainActor
 enum AppActivation {
-    static func activate(forReminder: Bool = false) {
-        // The cooperative API doesn't take keyboard focus for a background,
-        // timer-fired reminder on macOS 26. Preserve the tested legacy request
-        // there; ordinary user-initiated window activation uses the modern API.
-        if #available(macOS 14.0, *), !forReminder { NSApp.activate() }
-        else { NSApp.activate(ignoringOtherApps: true) }
+    /// How hard a presentation may reach for focus. The cooperative
+    /// `activate()` (macOS 14+) is advisory: when a window appears without a
+    /// fresh user gesture in this app — an async fetch's result, a startup
+    /// confirmation, a timer-fired reminder — the system declines the request
+    /// and the window stays behind the active app. The signed activation smoke
+    /// demonstrated this on macOS 26 for keyboard focus, where the legacy
+    /// request works; macOS 13 only offers the legacy method.
+    enum Focus {
+        /// The user acted (menu, button, notification response) or explicitly
+        /// started the flow that ends in this window: it must land in front of
+        /// other apps' windows.
+        case userInitiated
+        /// App-initiated presentation (automatic update escalation): visible,
+        /// but must not steal focus from the app the person is using.
+        case passive
+        /// Timer-fired fullscreen reminder: needs real keyboard focus in the
+        /// background (see AlertUI).
+        case reminder
+    }
+
+    static func activate(for focus: Focus) {
+        switch focus {
+        case .userInitiated, .reminder:
+            NSApp.activate(ignoringOtherApps: true)
+        case .passive:
+            if #available(macOS 14.0, *) { NSApp.activate() }
+            else { NSApp.activate(ignoringOtherApps: true) }
+        }
     }
 }

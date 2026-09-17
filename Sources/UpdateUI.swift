@@ -54,7 +54,10 @@ struct UpdateView: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
                 PopupScrollView {
-                    NotesView(blocks: UpdateLogic.noteBlocks(manifest.notes))
+                    // Consolidated body when the jump skipped intermediate
+                    // releases; the offered release's own body otherwise.
+                    // Both go through the same note-blocks rendering.
+                    NotesView(blocks: UpdateLogic.noteBlocks(controller.consolidatedNotes ?? manifest.notes))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(10)

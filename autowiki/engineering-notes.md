@@ -733,10 +733,18 @@ need platform work.
 
 ### Activation compatibility
 
-`AppActivation.activate()` chooses `NSApp.activate()` for ordinary windows on macOS 14+. Background
-reminders explicitly request the legacy API even there: signed/registered GUI smoke on macOS 26
-demonstrated that the cooperative API loses keyboard focus while the legacy request works. macOS 13
-also uses the legacy method. Keep activation policy owned by AppDelegate and preserve panel/window
-ordering. `python3 scripts/notification-smoke.py --activation-smoke` briefly presents a synthetic
-fullscreen reminder from the background, checks key focus, and confirms accessory policy is restored
-on close.
+`AppActivation.activate(for:)` distinguishes presentation focus. User-initiated windows (Settings,
+onboarding, manual check results, install confirmations, quit dialogs) and timer-fired reminders use
+the legacy `activate(ignoringOtherApps:)`: the cooperative `NSApp.activate()` (macOS 14+) is
+advisory and the system declines it whenever the request is not tied to a fresh user gesture — an
+async fetch's window, a startup confirmation after the install helper's relaunch, or a background
+reminder — leaving the window behind the active app's windows (the 2026-09-17 follow-up;
+signed/registered GUI smoke on macOS 26 proved the legacy request works where the cooperative one
+loses focus). Only the automatic 18-hour update escalation presents passively with the cooperative
+request, so it never steals focus. macOS 13 has only the legacy method. AppDelegate routes every
+user-facing window through one shared presentation helper (ordering → shown-state → policy sync →
+focus); activation policy stays owned by `syncActivationPolicy()`.
+`python3 scripts/notification-smoke.py --activation-smoke` briefly presents a synthetic fullscreen
+reminder from the background, checks key focus, confirms accessory policy is restored on close, and
+re-runs every user-initiated window path from the background across repeated rounds, including
+fresh-install onboarding (`--startup-new`) and a passive escalation that must not take focus.

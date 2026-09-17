@@ -83,5 +83,8 @@ copies if saved settings are damaged.
 Use **Check for Updates…** from the menu. Automatic checks and update notifications are optional in
 Settings.
 
+The update window's **What's New** lists everything since the version you are running — if you skip
+several versions, the notes of the releases in between are merged into one grouped list.
+
 Updates keep your calendars and preferences. New features get a short introduction once. **Skip This
 Version** skips an automatic offer; a manual check can show it again.

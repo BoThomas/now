@@ -131,8 +131,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.onAlert = { [weak alertController] events in
             alertController?.present(events)
         }
-        updateController.onWindowRequest = { [weak self] in
-            self?.presentUpdateWindow()
+        updateController.onWindowRequest = { [weak self] userInitiated in
+            self?.presentUpdateWindow(userInitiated: userInitiated)
         }
         updateController.onTerminateForUpdate = { [weak self] in
             self?.terminateForUpdate()
@@ -311,7 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Cancel")
         // Sit above the .screenSaver-level reminder panel.
         alert.window.level = NSWindow.Level(NSWindow.Level.screenSaver.rawValue + 1)
-        AppActivation.activate()
+        AppActivation.activate(for: .userInitiated)
         // The reminder's own key monitor (esc/return/s) must not eat keystrokes
         // while this dialog is up.
         alertController.modalAlertActive = true
@@ -336,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: closeTitle)
         alert.addButton(withTitle: "Cancel")
         alert.window.level = .floating
-        AppActivation.activate()
+        AppActivation.activate(for: .userInitiated)
         switch runQuitDialog(alert) {
         case .alertFirstButtonReturn:
             terminateApplication()
@@ -362,9 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.center()
             setupWindow = window
         }
-        setupWindow?.makeKeyAndOrderFront(nil)
-        syncActivationPolicy()
-        AppActivation.activate()
+        presentWindow(setupWindow, focus: .userInitiated)
     }
 
     private func finishInitialSetup() {
@@ -408,13 +406,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.setFrame(frame, display: false)
             settingsWindow = window
         }
-        settingsWindow?.makeKeyAndOrderFront(nil)
         // Being .regular is what actually puts our menus in the menu bar — an
         // .accessory app activating with a window often keeps the previous app's
         // menu bar on screen. syncActivationPolicy also runs when the window closes
         // (windowWillClose) to hand the menu bar back.
-        syncActivationPolicy()
-        AppActivation.activate()
+        presentWindow(settingsWindow, focus: .userInitiated)
     }
 
     /// The app is .regular (Dock icon + owns the menu bar) while Settings, the
@@ -431,6 +427,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The one presentation path for user-facing windows: order the window
+    /// front, keep the menu-bar activation policy in sync, then apply the
+    /// focus rule. `afterOrdering` runs once the window is on screen, for
+    /// state that must be recorded at actual-visibility time (the update
+    /// window's shown-version marker). Presentations not tied to a fresh
+    /// user gesture (async fetch results, startup confirmations) MUST pass a
+    /// user-initiated focus when the person is waiting for the result: the
+    /// cooperative activation request alone leaves the window behind the
+    /// active app. Passive presentations (automatic update escalation) keep
+    /// the cooperative request so they never steal focus.
+    private func presentWindow(_ window: NSWindow?, focus: AppActivation.Focus, afterOrdering: (() -> Void)? = nil) {
+        window?.makeKeyAndOrderFront(nil)
+        afterOrdering?()
+        syncActivationPolicy()
+        AppActivation.activate(for: focus)
+    }
+
     // MARK: - Update window
 
     /// The shared update window's title follows its content: "Update now" is
@@ -445,7 +458,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Shows the update window — deferred while a reminder is showing: the
     /// alert is a .screenSaver-level fullscreen panel whose key monitor eats
     /// Return/Esc, so the window would sit underneath it, invisible.
-    private func presentUpdateWindow() {
+    /// `userInitiated` windows (manual checks, menu/notification actions,
+    /// install confirmations) must land in front; only the automatic 18-hour
+    /// dwell escalation presents passively.
+    private func presentUpdateWindow(userInitiated: Bool) {
         guard updateController.windowContent != nil else { return }
         guard !alertController.isOpen, !(setupWindow?.isVisible ?? false) else {
             pendingUpdateWindow = true
@@ -463,17 +479,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // retitle lands a runloop tick later, so a reused window would flash
         // its previous title ("Update Complete") for that tick.
         updateWindow?.title = Self.updateWindowTitle(for: updateController.windowContent)
-        updateWindow?.makeKeyAndOrderFront(nil)
-        updateController.updateWindowDidShow()
-        syncActivationPolicy()
-        AppActivation.activate()
+        presentWindow(updateWindow, focus: userInitiated ? .userInitiated : .passive) { [weak self] in
+            self?.updateController.updateWindowDidShow()
+        }
     }
 
     /// A deferred request fires when the reminder alert closes.
     private func presentPendingUpdateWindow() {
         guard pendingUpdateWindow, !alertController.isOpen, !(setupWindow?.isVisible ?? false) else { return }
         pendingUpdateWindow = false
-        presentUpdateWindow()
+        presentUpdateWindow(userInitiated: true)
     }
 
     private func closeUpdateWindow() {
@@ -800,6 +815,29 @@ enum NowApp {
         }
     }
 
+    /// The cosmetic consolidated-notes fetch must never block staging:
+    /// bounded (one page, byte cap, short deadline) and fallback-only.
+    @MainActor private static func printSmokeIntermediateNotes(base: String, repo: String, manifest: UpdateManifest) {
+        let notesSemaphore = DispatchSemaphore(value: 0)
+        var intermediateNotes: String?
+        Task {
+            intermediateNotes = await UpdateFetch.fetchIntermediateNotes(
+                runningVersion: UpdateLogic.currentVersion,
+                target: manifest,
+                base: base,
+                repo: repo
+            )
+            notesSemaphore.signal()
+        }
+        runLoopWait(notesSemaphore)
+        if let intermediateNotes {
+            print("SMOKE: NOTES consolidated")
+            print(intermediateNotes)
+        } else {
+            print("SMOKE: NOTES fallback")
+        }
+    }
+
     @MainActor private static func updateSmokeCLIBody(_ baseArgument: String?) {
         let arguments = ProcessInfo.processInfo.arguments
         var repoArgument: String?
@@ -851,6 +889,16 @@ enum NowApp {
             print("SMOKE: UPTODATE \(decision)")
             exit(3)
         }
+        printSmokeIntermediateNotes(base: base, repo: repo, manifest: manifest)
+        let update = smokeStageUpdate(bundlePath: bundlePath, manifest: manifest)
+        smokeSpawnInstallHelper(bundlePath: bundlePath, update: update, manifest: manifest)
+        print("SMOKE: INSTALLED v\(manifest.version) — terminating for swap")
+        exit(0)
+    }
+
+    /// Stages the update, runs the test-only verified-bundle handoff, then the
+    /// production install-time validation. Exits on any failure.
+    @MainActor private static func smokeStageUpdate(bundlePath: String, manifest: UpdateManifest) -> UpdateStaging.StagedUpdate {
         let stageSemaphore = DispatchSemaphore(value: 0)
         var staged: Result<UpdateStaging.StagedUpdate, StageFailure>?
         var stagingLimits = StagingLimits.production
@@ -887,6 +935,12 @@ enum NowApp {
             print("SMOKE: REFUSED install-time validation: \(problem)")
             exit(2)
         }
+        return update
+    }
+
+    /// Final install guards, the helper spawn, and the stuck-quit negative.
+    /// Only returns when the swap may proceed.
+    @MainActor private static func smokeSpawnInstallHelper(bundlePath: String, update: UpdateStaging.StagedUpdate, manifest: UpdateManifest) {
         if let problem = UpdateLogic.installLocationProblem(bundlePath) {
             print("SMOKE: REFUSED \(problem)")
             exit(2)
@@ -895,11 +949,7 @@ enum NowApp {
             print("SMOKE: REFUSED another instance of now is running")
             exit(2)
         }
-        let env = ProcessInfo.processInfo.environment
-        var extraEnv: [String: String] = [:]
-        for key in ["NOW_SMOKE_REPORT", "NOW_SMOKE_FAILURE_REPORT", "NOW_SMOKE_HOME", "NOW_SMOKE_POLL_TIMEOUT", "NOW_SMOKE_HEALTH_TIMEOUT", "NOW_SMOKE_HELPER_FAULT", "NOW_SMOKE_HELPER_DONE"] {
-            if let value = env[key], !value.isEmpty { extraEnv[key] = value }
-        }
+        let extraEnv = Self.smokeHelperEnvironment()
         if let fault = extraEnv["NOW_SMOKE_HELPER_FAULT"], !["backup", "relaunch", "health"].contains(fault) {
             print("SMOKE: ERROR unknown helper fault \(fault)")
             exit(4)
@@ -916,6 +966,7 @@ enum NowApp {
             print("SMOKE: ERROR helper spawn failed")
             exit(4)
         }
+        let env = ProcessInfo.processInfo.environment
         if env["NOW_SMOKE_SKIP_QUIT"] == "1" {
             // Stuck-quit negative: stay alive past the helper's poll timeout —
             // the helper must bail WITHOUT touching anything.
@@ -925,8 +976,16 @@ enum NowApp {
             print("SMOKE: still alive; helper should have bailed, nothing moved")
             exit(0)
         }
-        print("SMOKE: INSTALLED v\(manifest.version) — terminating for swap")
-        exit(0)
+    }
+
+    /// Pass-through variables the smoke harness sets for the install helper.
+    private static func smokeHelperEnvironment() -> [String: String] {
+        let env = ProcessInfo.processInfo.environment
+        var extraEnv: [String: String] = [:]
+        for key in ["NOW_SMOKE_REPORT", "NOW_SMOKE_FAILURE_REPORT", "NOW_SMOKE_HOME", "NOW_SMOKE_POLL_TIMEOUT", "NOW_SMOKE_HEALTH_TIMEOUT", "NOW_SMOKE_HELPER_FAULT", "NOW_SMOKE_HELPER_DONE"] {
+            if let value = env[key], !value.isEmpty { extraEnv[key] = value }
+        }
+        return extraEnv
     }
 
     #endif

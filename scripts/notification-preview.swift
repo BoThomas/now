@@ -231,6 +231,7 @@ struct UpdateScreensPanel: View {
     @State private var guides: GuideCombo = .notificationsAndInfo
     @State private var scrollFluff = false
     @State private var longReleaseNotes = false
+    @State private var multiVersionNotes = false
 
     private var manifest: UpdateManifest {
         UpdateManifest(version: "9.9.9",
@@ -252,6 +253,25 @@ struct UpdateScreensPanel: View {
             + "\n\nEnd of long test changelog. This final line should be fully reachable."
     }
 
+    /// Forged consolidated body for a jump like 1.10 → 2.1: grouped under
+    /// the recognized categories, plus ungrouped preamble content.
+    private var multiVersionBody: String {
+        """
+        2.0 rebuilt reminders for the notification age.
+
+        ### Added
+        - Pick your reminder display
+        - Release notes render headings and lists
+
+        ### Improved
+        - Faster calendar sync
+
+        ### Fixed
+        - Install row in Settings wraps when narrow
+        - Fullscreen panel keeps keyboard focus in the background
+        """
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -265,6 +285,14 @@ struct UpdateScreensPanel: View {
                 Toggle("Use long test changelog", isOn: $longReleaseNotes)
                     .help("Adds long release notes to all three update-available states. Updates the current preview immediately.")
                     .onChange(of: longReleaseNotes) { _ in
+                        if case .available = updates.windowContent {
+                            updates.windowContent = .available(manifest)
+                        }
+                    }
+                Toggle("Multi-version jump (consolidated What’s New)", isOn: $multiVersionNotes)
+                    .help("Shows the forged consolidated notes a multi-version jump (e.g. 1.10 → 2.1) renders: everything since your current version, grouped under the changelog categories.")
+                    .onChange(of: multiVersionNotes) { _ in
+                        updates.smokeConsolidatedNotes = multiVersionNotes ? multiVersionBody : nil
                         if case .available = updates.windowContent {
                             updates.windowContent = .available(manifest)
                         }
@@ -468,6 +496,9 @@ final class SetupAppSmoke {
         }
         let app = NSApplication.shared
         let delegate = AppDelegate()
+        // The activation rounds below run past updater.start()'s +10 s
+        // automatic check; this fixture never contacts the network.
+        delegate.store.settings.automaticUpdateChecks = false
         app.delegate = delegate
         // Exercise the actual startup-to-status-menu fallback without registering
         // with Notification Center or reading any real calendar.
@@ -496,6 +527,14 @@ final class SetupAppSmoke {
                 func require(_ result: Bool, _ label: String) {
                     if !result { print("FAIL: " + label); exit(1) }
                 }
+                // Focus requires a real desktop. Allow normal scheduling jitter
+                // without relaxing the final focus/policy assertions.
+                @MainActor func waitUntil(_ condition: @MainActor () -> Bool) async {
+                    let deadline = ProcessInfo.processInfo.systemUptime + 2
+                    while !condition() && ProcessInfo.processInfo.systemUptime < deadline {
+                        try? await Task.sleep(nanoseconds: 25_000_000)
+                    }
+                }
                 require(openedColdAgenda, "cold missing-meeting click opens the actual menu-bar agenda")
                 NotificationCenter.default.removeObserver(agendaObserver)
                 require(delegate.store.hadSavedProfile == existingProfile, "profile presence captured before migration")
@@ -506,6 +545,25 @@ final class SetupAppSmoke {
                 } else {
                     require(delegate.smokeSetupWindow?.isVisible == true, "fresh launch displays assistant without sources")
                     require(NSApp.activationPolicy() == .regular, "assistant owns app menus")
+                    if CommandLine.arguments.contains("--activation-smoke") {
+                        // Fresh-install onboarding opens at +0.4 s while the
+                        // app runs in the background (no user gesture yet):
+                        // on 2026-09-17 it appeared once and hid once on
+                        // identical relaunches. Re-present through the
+                        // production path from the background, repeatedly —
+                        // the window must take the front every time.
+                        for round in 0..<3 {
+                            delegate.smokeSetupWindow?.close()
+                            NSApp.deactivate()
+                            await waitUntil { !NSApp.isActive }
+                            require(!NSApp.isActive, "onboarding round \(round) starts in the background")
+                            delegate.openSettings() // pending assistant routes to the setup window
+                            await waitUntil { NSApp.isActive && delegate.smokeSetupWindow?.isKeyWindow == true }
+                            require(NSApp.isActive, "onboarding takes focus from the background (round \(round))")
+                            require(delegate.smokeSetupWindow?.isKeyWindow == true, "onboarding window is key and front (round \(round))")
+                            require(NSApp.activationPolicy() == .regular, "onboarding owns app menu policy (round \(round))")
+                        }
+                    }
                     delegate.smokeSetupAssistant.next()
                     delegate.smokeSetupWindow?.close()
                     delegate.openSettings()
@@ -595,14 +653,6 @@ final class SetupAppSmoke {
                 delegate.notificationInteraction()
                 require(!settingsVisible(), "late notification undoes only competing reopen window")
                 if CommandLine.arguments.contains("--activation-smoke") {
-                    // Focus requires a real desktop. Allow normal scheduling jitter
-                    // without relaxing the final keyboard-focus/policy assertions.
-                    @MainActor func waitUntil(_ condition: @MainActor () -> Bool) async {
-                        let deadline = ProcessInfo.processInfo.systemUptime + 2
-                        while !condition() && ProcessInfo.processInfo.systemUptime < deadline {
-                            try? await Task.sleep(nanoseconds: 25_000_000)
-                        }
-                    }
                     for window in NSApp.windows where window.isVisible { window.close() }
                     NSApp.deactivate()
                     await waitUntil { !NSApp.isActive }
@@ -616,6 +666,49 @@ final class SetupAppSmoke {
                     delegate.alertController.close()
                     await waitUntil { NSApp.activationPolicy() == .accessory }
                     require(NSApp.activationPolicy() == .accessory, "closing reminder restores accessory policy")
+                    // User-initiated windows must land in front of the active
+                    // app's windows even when the request is NOT tied to a
+                    // fresh click (2026-09-17: the update result, install
+                    // confirmation, and onboarding opened behind other apps).
+                    // The background re-entry below reproduces that handoff:
+                    // async fetch completions and startup confirmations fire
+                    // exactly this way. Repeated rounds expose ordering races.
+                    let release = UpdateManifest(version: "999.0.0", zipURL: URL(string: "https://example.com/now.zip")!,
+                                                 assetSize: 1, publishedAt: Date().addingTimeInterval(-86400), notes: "Synthetic")
+                    for round in 0..<3 {
+                        NSApp.deactivate()
+                        await waitUntil { !NSApp.isActive }
+                        require(!NSApp.isActive, "window fixture round \(round) starts in the background")
+                        delegate.openSettings()
+                        await waitUntil { NSApp.isActive && delegate.smokeSettingsWindow?.isKeyWindow == true }
+                        require(NSApp.isActive, "Settings activates from the background (round \(round))")
+                        require(delegate.smokeSettingsWindow?.isKeyWindow == true, "Settings is key window (round \(round))")
+                        require(NSApp.activationPolicy() == .regular, "Settings owns app menu policy (round \(round))")
+                        delegate.smokeSettingsWindow?.close()
+                        await waitUntil { NSApp.activationPolicy() == .accessory }
+                        NSApp.deactivate()
+                        await waitUntil { !NSApp.isActive }
+                        delegate.updateController.windowContent = .available(release)
+                        await waitUntil { delegate.smokeUpdateWindow?.isKeyWindow == true }
+                        require(NSApp.isActive && delegate.smokeUpdateWindow?.isKeyWindow == true,
+                                "update window fronts from the background like an async fetch result (round \(round))")
+                        require(delegate.smokeUpdateWindow?.title == "Update now", "update window title follows content")
+                        delegate.updateController.dismissWindow()
+                        await waitUntil { delegate.smokeUpdateWindow?.isVisible != true }
+                        await waitUntil { NSApp.activationPolicy() == .accessory }
+                    }
+                    // The automatic 18-hour dwell escalation is passive: the
+                    // window appears, but the app must not force itself in
+                    // front of whatever the person is doing.
+                    NSApp.deactivate()
+                    await waitUntil { !NSApp.isActive }
+                    delegate.updateController.smokeShowWindow(.available(release), userInitiated: false)
+                    await waitUntil { delegate.smokeUpdateWindow?.isVisible == true }
+                    require(delegate.smokeUpdateWindow?.isVisible == true, "passive dwell window becomes visible")
+                    require(NSApp.activationPolicy() == .regular, "passive window still owns app menu policy")
+                    require(!NSApp.isActive, "passive dwell escalation must not steal focus")
+                    delegate.updateController.dismissWindow()
+                    await waitUntil { NSApp.activationPolicy() == .accessory }
                     print("ACTIVATION SMOKE OK — background reminder takes keyboard focus and restores policy")
                 }
                 print("SETUP APP SMOKE OK — " + (legacyProfile ? "legacy profile migration bypass" : (existingProfile ? "existing profile bypass" : "fresh launch, close/reopen, completion to Settings")))

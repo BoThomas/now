@@ -546,7 +546,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Status-menu selection does not necessarily activate an accessory app.
         // Make the details popover key so its controls are immediately live and
         // it does not require a throwaway first click merely to activate.
-        AppActivation.activate()
+        AppActivation.activate(for: .userInitiated)
         popover.contentViewController?.view.window?.makeKey()
     }
 

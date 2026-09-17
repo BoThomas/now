@@ -37,7 +37,11 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
         print("Isolated notification preview: " + str(contents.parent), flush=True)
     try:
         def run(mode=None, activation=False):
+            # Both domains must be clean before every run: the legacy-profile
+            # fixture seeds `.legacy`, and `hadSavedProfile` counts a legacy
+            # payload just like a current one.
             subprocess.run(["defaults", "delete", identifier], capture_output=True)
+            subprocess.run(["defaults", "delete", identifier + ".legacy"], capture_output=True)
             args = [str(executable), str(directory)] + ([mode] if mode else [])
             if activation:
                 args.append("--activation-smoke")
@@ -50,8 +54,10 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
             for mode in ["--startup-new", "--startup-existing", "--startup-legacy"]:
                 run(mode)
             run("--startup-existing", activation=True)
+            run("--startup-new", activation=True)
         elif "--activation-smoke" in sys.argv:
             run("--startup-existing", activation=True)
+            run("--startup-new", activation=True)
         elif screens:
             run("--update-screens")
         elif setup:
