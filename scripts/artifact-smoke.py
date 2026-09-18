@@ -17,7 +17,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 app = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "outputs/now.app").resolve()
 executable = app / "Contents/MacOS/now"
 metadata = plistlib.loads((app / "Contents/Info.plist").read_bytes())
-assert metadata == plistlib.loads((ROOT / "Info.plist").read_bytes()), "bundle metadata drift"
+assert metadata == plistlib.loads((ROOT / "resources" / "Info.plist").read_bytes()), "bundle metadata drift"
 assert (app / "Contents/Resources/AppIcon.png").is_file()
 subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
 identity = os.environ.get("NOW_SIGNING_IDENTITY_SHA1", "A505B08900C56A28709479297A049525A2A187C6")
@@ -25,7 +25,7 @@ requirement = subprocess.check_output(["codesign", "-d", "-r-", str(app)], stder
 assert 'identifier "com.thomasboch.now"' in requirement, requirement
 assert 'certificate root = H"' + identity.lower() + '"' in requirement, requirement
 entitlements = subprocess.check_output(["codesign", "-d", "--entitlements", ":-", str(app)], stderr=subprocess.DEVNULL)
-assert plistlib.loads(entitlements) == plistlib.loads((ROOT / "now.entitlements").read_bytes())
+assert plistlib.loads(entitlements) == plistlib.loads((ROOT / "resources" / "now.entitlements").read_bytes())
 architecture = subprocess.check_output(["lipo", "-archs", str(executable)], text=True).strip()
 assert architecture == "arm64", architecture
 load_commands = subprocess.check_output(["vtool", "-show-build", str(executable)], text=True)
@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix="now-shipping-smoke-") as folder:
     metadata["CFBundleIdentifier"] = domain
     (clone / "Contents/Info.plist").write_bytes(plistlib.dumps(metadata))
     subprocess.run(["codesign", "--force", "--sign", identity, "--entitlements",
-                    str(ROOT / "now.entitlements"), str(clone)], check=True)
+                    str(ROOT / "resources" / "now.entitlements"), str(clone)], check=True)
     # A present empty profile prevents migration from the installed app's legacy domain.
     preferences = root / "preferences.plist"
     preferences.write_bytes(plistlib.dumps({"local.tboch.now.state.v1": json.dumps({

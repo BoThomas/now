@@ -68,7 +68,7 @@ enum UpdateLogic {
 
     /// Certificate SHA-1 fingerprints accepted for staged updates — the same
     /// anchors that keep Calendar (TCC) grants stable across releases (see
-    /// build-app.sh / AGENTS.md → Code signing). Rotation procedure: ADD the
+    /// scripts/build-app.sh / AGENTS.md → Code signing). Rotation procedure: ADD the
     /// new fingerprint while still signing with the old cert, keep that up for
     /// several releases, then switch and later remove the old entry. Clients
     /// older than the release that added the new fingerprint strand on manual
@@ -76,7 +76,7 @@ enum UpdateLogic {
     static let pinnedFingerprints = ["A505B08900C56A28709479297A049525A2A187C6"]
 
     /// Designated requirement a staged bundle must satisfy (same text form
-    /// build-app.sh verifies against: lowercase hex, no colons).
+    /// scripts/build-app.sh verifies against: lowercase hex, no colons).
     static func updateRequirement(fingerprint: String, bundleIdentifier: String = updateBundleIdentifier) -> String {
         "identifier \"\(bundleIdentifier)\" and certificate root = H\"\(fingerprint.lowercased())\""
     }
@@ -199,7 +199,7 @@ enum UpdateLogic {
         return state
     }
 
-    /// Release body → window text: drops release.sh's trailing
+    /// Release body → window text: drops scripts/release.sh's trailing
     /// "Full changelog: …" line and surrounding blank lines.
     static func displayNotes(_ body: String) -> String {
         var lines = body.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -211,7 +211,7 @@ enum UpdateLogic {
     }
 
     /// One renderable element of a release body: real changelogs are often
-    /// multiple lists under `#`/`##` headings (release.sh `--notes` keeps
+    /// multiple lists under `#`/`##` headings (scripts/release.sh `--notes` keeps
     /// heading and bullet lines), not one flat list.
     enum NoteBlock: Equatable {
         case heading(level: Int, text: String)
@@ -388,7 +388,7 @@ enum UpdateLogic {
     }
 
     /// The running app's marketing version, normalized to three components
-    /// (release.sh does the same when reading Info.plist).
+    /// (scripts/release.sh does the same when reading Info.plist).
     static var currentVersion: String {
         let raw = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.0.0"
         let parts = versionComponents(raw)
@@ -801,7 +801,7 @@ enum UpdateStaging {
         if manifest.assetSize > 0, downloadedBytes != Int64(manifest.assetSize) {
             return failure("download size \(downloadedBytes) ≠ expected \(manifest.assetSize)")
         }
-        // 2. Extract with ditto (matches build-app.sh's zip creation flags).
+        // 2. Extract with ditto (matches scripts/build-app.sh's zip creation flags).
         let extracted = root.appendingPathComponent("extracted")
         do {
             try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)

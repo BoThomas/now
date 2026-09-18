@@ -6,7 +6,7 @@ Requires a Swift 6.1+ compiler and Xcode Command Line Tools with a macOS 15 or l
 uses the active SDK reported by `xcrun`; override with `SDK_PATH` if needed).
 
 ```bash
-./build-app.sh
+./scripts/build-app.sh
 ```
 
 Builds optimized `outputs/now.app` and `outputs/now.zip` using SwiftPM, in Swift 5 mode for macOS
@@ -96,7 +96,7 @@ it does not replace the full analysis smoke.
 ./outputs/now.app/Contents/MacOS/now --meeting            # inspect active meeting audio metadata
 python3 scripts/calendar-cache-smoke.py             # isolated offline restart/cache checks
 ./scripts/preflight.sh                            # full build + release regression suites
-./release.sh --dry-run                             # release prerequisites (no tests/publication)
+./scripts/release.sh --dry-run                     # release prerequisites (no tests/publication)
 ```
 
 See [AGENTS.md](../AGENTS.md) for development notes and the release workflow.

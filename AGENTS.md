@@ -1,10 +1,10 @@
 # AGENTS.md — now
 
 Native macOS menu bar app for meeting reminders. SwiftPM compiles the shell in `Sources/` against
-the shared `NowCore` library in `Sources/NowCore/`; `build-app.sh` assembles and signs the bundle.
-Keep Swift 5 language mode and macOS 13 / Apple Silicon compatibility. `make-icon.swift` is a
-separate tool and must remain outside `Sources/`. Core consumers use `package` access; never compile
-a second copy of core sources into an app or harness target.
+the shared `NowCore` library in `Sources/NowCore/`; `scripts/build-app.sh` assembles and signs the
+bundle. Keep Swift 5 language mode and macOS 13 / Apple Silicon compatibility.
+`scripts/make-icon.swift` is a separate tool and must remain outside `Sources/`. Core consumers use
+`package` access; never compile a second copy of core sources into an app or harness target.
 
 ## AutoWiki and project context
 
@@ -37,7 +37,7 @@ documentation tooling, not the Swift build.
 Always run the signed build and selftest after changes:
 
 ```bash
-./build-app.sh --require-identity
+./scripts/build-app.sh --require-identity
 ./scripts/test.sh
 ```
 
@@ -103,9 +103,9 @@ tests. Keep selftest deterministic and EventKit-free: never construct `AppStore`
 
 ## Releases
 
-Only release when requested. Use `release.sh`; it updates version/build and changelog, runs the full
-preflight, commits, tags, pushes, and publishes the release ZIP. `--dry-run` checks prerequisites
-without publishing.
+Only release when requested. Use `scripts/release.sh`; it updates version/build and changelog, runs
+the full preflight, commits, tags, pushes, and publishes the release ZIP. `--dry-run` checks
+prerequisites without publishing.
 
 Releases, including dry runs, require clean `main` tracking and exactly synchronized with local and
 live `origin/main`, both origin and authenticated `gh` resolving to `BoThomas/now`, the exact stable

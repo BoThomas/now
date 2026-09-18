@@ -1,5 +1,6 @@
 #!/bin/zsh
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
 APP_NAME="now"
 EXECUTABLE="now"
@@ -28,7 +29,7 @@ for arg in "$@"; do
     --release) CONFIGURATION=release ;;
     --clean) CLEAN=true ;;
     --test-updater) UPDATER_TEST=true ;;
-    *) echo "usage: ./build-app.sh [--require-identity] [--debug|--release] [--clean]" >&2; exit 1 ;;
+    *) echo "usage: ./scripts/build-app.sh [--require-identity] [--debug|--release] [--clean]" >&2; exit 1 ;;
   esac
 done
 
@@ -61,11 +62,11 @@ if [[ "$CONFIGURATION" == release ]]; then
   strip -x "$APP/Contents/MacOS/$EXECUTABLE"
 fi
 
-swiftc -sdk "$SDK_PATH" -target arm64-apple-macos13.0 make-icon.swift -o .build/make-icon
+swiftc -sdk "$SDK_PATH" -target arm64-apple-macos13.0 scripts/make-icon.swift -o .build/make-icon
 .build/make-icon "$ICONSET"
 cp "$ICONSET/icon_512x512@2x.png" "$APP/Contents/Resources/AppIcon.png"
 
-cp Info.plist "$APP/Contents/Info.plist"
+cp resources/Info.plist "$APP/Contents/Info.plist"
 
 # Sign with the exact stable self-signed identity when present — its
 # certificate hash anchors the code signature's designated requirement, so TCC
@@ -77,7 +78,7 @@ cp Info.plist "$APP/Contents/Info.plist"
 STABLE_SIGNATURE=false
 AVAILABLE_IDENTITIES=$(security find-identity -v -p codesigning)
 if [[ "$AVAILABLE_IDENTITIES" == *"$SIGNING_IDENTITY_SHA1"* ]]; then
-  codesign --force --deep --sign "$SIGNING_IDENTITY_SHA1" --entitlements now.entitlements "$APP"
+  codesign --force --deep --sign "$SIGNING_IDENTITY_SHA1" --entitlements resources/now.entitlements "$APP"
   STABLE_SIGNATURE=true
 else
   if [[ "$REQUIRE_IDENTITY" == true ]]; then
@@ -86,7 +87,7 @@ else
     exit 1
   fi
   echo "warning: signing identity $SIGNING_IDENTITY_SHA1 not found — signing ad-hoc (Calendar permission will be re-asked per build)"
-  codesign --force --deep --sign - --entitlements now.entitlements "$APP"
+  codesign --force --deep --sign - --entitlements resources/now.entitlements "$APP"
 fi
 
 codesign --verify --deep --strict --verbose=2 "$APP"

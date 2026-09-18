@@ -85,28 +85,28 @@ changelogs and an isolated local probe (docs.brew.sh; brew 7.0.1, September 2026
 
 ## Slice 2: release automation and ordering
 
-- [x] Bump the tap from the release pipeline after publication: `release.sh` keeps its existing
-      sequence through `gh release create`, then computes the SHA-256 of the final local ZIP
-      (byte-identical to the uploaded asset), commits and pushes the cask version bump to the tap
-      repository. Ordering rationale: the release is already live, so the only transient state is a
-      briefly stale cask — brew users see the update a few seconds later. The reverse order would
-      expose fresh installs to an asset URL that 404s until the release exists, which is the
+- [x] Bump the tap from the release pipeline after publication: `scripts/release.sh` keeps its
+      existing sequence through `gh release create`, then computes the SHA-256 of the final local
+      ZIP (byte-identical to the uploaded asset), commits and pushes the cask version bump to the
+      tap repository. Ordering rationale: the release is already live, so the only transient state
+      is a briefly stale cask — brew users see the update a few seconds later. The reverse order
+      would expose fresh installs to an asset URL that 404s until the release exists, which is the
       strictly worse failure.
 - [x] The bump step clones the tap repository into a temporary directory at a pinned ref, never a
-      durable local checkout (`release.sh` guarantees a clean tree only for `now`). Extend the
-      `release_failed` trap with a recovery phase for the bump — "release published, cask stale:
+      durable local checkout (`scripts/release.sh` guarantees a clean tree only for `now`). Extend
+      the `release_failed` trap with a recovery phase for the bump — "release published, cask stale:
       rerun the bump" — alongside the existing per-phase instructions.
-- [x] Extend `release.sh --dry-run` to print the planned tap bump (repository, cask path, version,
-      SHA-256, commit message) without mutating anything; preflight continues to fetch or mutate
-      nothing in either repository.
-- [ ] Credentials: none beyond what `release.sh` already gates on. It already fails without
+- [x] Extend `scripts/release.sh --dry-run` to print the planned tap bump (repository, cask path,
+      version, SHA-256, commit message) without mutating anything; preflight continues to fetch or
+      mutate nothing in either repository.
+- [ ] Credentials: none beyond what `scripts/release.sh` already gates on. It already fails without
       `gh auth`, and `gh auth setup-git` configures git to use the gh CLI as credential helper,
       which covers the tap push. No secrets live in the `now` repository. Escape hatch if a push is
       ever needed where gh cannot serve as credential helper: a fine-grained PAT with
       `contents:write` limited to the tap repository, stored in the login keychain — never
       committed, never logged.
-- [ ] Fallback automation if `release.sh` integration is deferred: a `repository_dispatch` (or
-      scheduled) workflow in the tap repo that bumps after publish, authenticated with the tap
+- [ ] Fallback automation if `scripts/release.sh` integration is deferred: a `repository_dispatch`
+      (or scheduled) workflow in the tap repo that bumps after publish, authenticated with the tap
       repository's own `GITHUB_TOKEN` (the `now` repository is public, so reading releases needs no
       token). This lengthens the stale window and is therefore the fallback, not the default.
 
@@ -162,8 +162,8 @@ changelogs and an isolated local probe (docs.brew.sh; brew 7.0.1, September 2026
 
 ## Verification gates
 
-Signed build (`./build-app.sh --require-identity`, outside the agent sandbox) and selftest after
-every change set; `./scripts/analyze.sh` after Swift changes. Core suites and
+Signed build (`./scripts/build-app.sh --require-identity`, outside the agent sandbox) and selftest
+after every change set; `./scripts/analyze.sh` after Swift changes. Core suites and
 `module-boundary-smoke.py` are required only if `NowCore` changes — the planned detection helper is
 shell policy, so revisit this if the decision moves into core. `update-smoke.sh` covers updater
 changes; GUI launch/liveness is checked because the updater touches startup paths. Tap-side changes
@@ -173,7 +173,7 @@ retention). The postflight mechanics and the Caskroom tracking-symlink model wer
 2026-09-18 with a disposable local tap, dummy apps, a local HTTP server, and a custom `--appdir`
 (brew 7.0.1, macOS 26.6, arm64); the hosted first-install flow (auto-tap plus item-level trust)
 still needs the real GitHub tap and remains part of Slice 1 verification. No release is performed
-unless explicitly requested; `release.sh` changes are exercised via `--dry-run` first.
+unless explicitly requested; `scripts/release.sh` changes are exercised via `--dry-run` first.
 
 ## Open questions
 

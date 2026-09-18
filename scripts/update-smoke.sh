@@ -16,7 +16,7 @@
 # an ad-hoc build cannot pass the pinned-DR gate (by design).
 #
 # Usage: ./scripts/update-smoke.sh [--app outputs/now.app]
-#   --app  reuse an already-built app instead of running ./build-app.sh
+#   --app  reuse an already-built app instead of running ./scripts/build-app.sh
 
 set -euo pipefail
 
@@ -44,14 +44,14 @@ if [[ -n "$APP_PATH" ]]; then
   print "• Using existing app: $APP_PATH"
 else
   print "• Building"
-  ./build-app.sh >/dev/null
+  ./scripts/build-app.sh >/dev/null
   APP_PATH="outputs/now.app"
 fi
 
 # Validate the supplied shipping artifact, then exercise the same updater code
 # with the explicit headless/fault runner. Test builds never replace release output.
 codesign --verify --deep --strict "$APP_PATH"
-./build-app.sh --require-identity --release --test-updater
+./scripts/build-app.sh --require-identity --release --test-updater
 APP_PATH="outputs/testing/release/now.app"
 
 WORK="$(mktemp -d "${TMPDIR}now update test.XXXXXX")"   # note the space — on purpose
@@ -140,9 +140,9 @@ forge() {
   cp -R "$APP_PATH" "$WORK/forge/now.app"
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$WORK/forge/now.app/Contents/Info.plist" >/dev/null
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build" "$WORK/forge/now.app/Contents/Info.plist" >/dev/null
-  # KEEP IN SYNC with build-app.sh's codesign invocation (flags, entitlements,
+  # KEEP IN SYNC with scripts/build-app.sh's codesign invocation (flags, entitlements,
   # fingerprint) — they WILL drift otherwise.
-  codesign --force --deep --sign "$SIGNING_IDENTITY_SHA1" --entitlements now.entitlements "$WORK/forge/now.app" >/dev/null 2>&1
+  codesign --force --deep --sign "$SIGNING_IDENTITY_SHA1" --entitlements resources/now.entitlements "$WORK/forge/now.app" >/dev/null 2>&1
   mkdir -p "$(dirname "$dest")"
   ( cd "$WORK/forge" && ditto -c -k --sequesterRsrc --keepParent now.app "$dest" )
 }
@@ -499,7 +499,7 @@ for mutation in signature version; do
     codesign --force --deep --sign - "$STAGED_MUTATION_APP" >/dev/null 2>&1
   else
     /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ORIG_VERSION" "$STAGED_MUTATION_APP/Contents/Info.plist"
-    codesign --force --deep --sign "$SIGNING_IDENTITY_SHA1" --entitlements now.entitlements "$STAGED_MUTATION_APP" >/dev/null 2>&1
+    codesign --force --deep --sign "$SIGNING_IDENTITY_SHA1" --entitlements resources/now.entitlements "$STAGED_MUTATION_APP" >/dev/null 2>&1
   fi
   touch "$WORK/stage-continue"
   set +e

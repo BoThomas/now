@@ -113,7 +113,7 @@ def prepare_release(work):
     info["CFBundleVersion"] = str(int(info["CFBundleVersion"]) + 1)
     (forged / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     run("/usr/bin/codesign", "--force", "--deep", "--sign", IDENTITY, "--entitlements",
-        str(ROOT / "now.entitlements"), str(forged))
+        str(ROOT / "resources" / "now.entitlements"), str(forged))
     www = work / "www"
     release = www / "ok/api/repos/BoThomas/now/releases/latest"
     release.parent.mkdir(parents=True)
@@ -229,7 +229,7 @@ def main():
         if args.smoke:
             stop_apps(previous)
             snapshots = installed_preferences()
-        run(str(ROOT / "build-app.sh"), "--require-identity", "--release", "--test-updater", cwd=ROOT)
+        run(str(ROOT / "scripts" / "build-app.sh"), "--require-identity", "--release", "--test-updater", cwd=ROOT)
         if running_apps():
             raise RuntimeError("Another now instance started; refusing to launch the demo")
         work = Path(tempfile.mkdtemp(prefix="now update demo ")).resolve()

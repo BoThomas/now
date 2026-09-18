@@ -3,7 +3,7 @@
 #
 # Clones the tap repository into a temporary directory at its default branch,
 # updates Casks/now.rb (version, sha256, versioned asset URL), commits, and
-# pushes. Called by release.sh AFTER `gh release create` — the release is
+# pushes. Called by scripts/release.sh AFTER `gh release create` — the release is
 # already live, so the only failure state is a briefly stale cask and this
 # script is safe to rerun for recovery (idempotent when the cask is already
 # at the requested version).

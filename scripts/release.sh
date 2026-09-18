@@ -1,5 +1,6 @@
 #!/bin/zsh
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
 REPO_SLUG="BoThomas/now"
 VERSION_SPEC=""
@@ -9,7 +10,7 @@ DRY_RUN=false
 
 usage() {
   cat <<EOF
-Usage: ./release.sh [patch|minor|major|X.Y.Z] [options]
+Usage: ./scripts/release.sh [patch|minor|major|X.Y.Z] [options]
 
   patch|minor|major   version bump (default: patch; first release uses the current version)
   X.Y.Z               explicit version
@@ -55,7 +56,7 @@ bump() {
   esac
 }
 
-[[ -f Info.plist ]] || die "run this from the repository root"
+[[ -f resources/Info.plist ]] || die "resources/Info.plist not found — run from a now checkout"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repository"
 command -v gh >/dev/null 2>&1 || die "gh CLI missing (brew install gh)"
 gh auth status >/dev/null 2>&1 || die "gh not authenticated (gh auth login)"
@@ -85,9 +86,9 @@ AVAILABLE_IDENTITIES=$(security find-identity -v -p codesigning)
 [[ "$AVAILABLE_IDENTITIES" == *"$SIGNING_IDENTITY_SHA1"* ]] || die "required signing identity $SIGNING_IDENTITY_SHA1 not found"
 [[ -x scripts/preflight.sh && -x scripts/update-smoke.sh ]] || die "mandatory release preflight scripts are missing or not executable"
 
-CURRENT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
+CURRENT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" resources/Info.plist)
 if [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+$ ]]; then CURRENT="$CURRENT.0"; fi
-is_version "$CURRENT" || die "bad version in Info.plist: $CURRENT"
+is_version "$CURRENT" || die "bad version in resources/Info.plist: $CURRENT"
 
 if [[ -n "$VERSION_SPEC" ]]; then
   if is_version "$VERSION_SPEC"; then
@@ -187,15 +188,15 @@ release_failed() {
   case "$PHASE" in
     "preparing release files"|"building and testing")
       print -u2 "Recovery: fix the failure in this worktree, then resume the preflight and publication:"
-      print -u2 "  ./build-app.sh --require-identity && ./scripts/test.sh"
+      print -u2 "  ./scripts/build-app.sh --require-identity && ./scripts/test.sh"
       print -u2 "  ./scripts/preflight.sh --app outputs/now.app && cp outputs/now.zip 'outputs/now-$TAG.zip'"
-      print -u2 "  git add Info.plist CHANGELOG.md && git commit -m 'Release $TAG' && git tag '$TAG'"
+      print -u2 "  git add resources/Info.plist CHANGELOG.md && git commit -m 'Release $TAG' && git tag '$TAG'"
       print -u2 "  git push --atomic -u origin HEAD '$TAG'"
-      print -u2 "Do not rerun release.sh until these generated release changes are committed or removed."
+      print -u2 "Do not rerun scripts/release.sh until these generated release changes are committed or removed."
       ;;
     "committing release")
       print -u2 "Recovery: inspect git status, then complete the commit and continue:"
-      print -u2 "  git add Info.plist CHANGELOG.md && git commit -m 'Release $TAG' && git tag '$TAG'"
+      print -u2 "  git add resources/Info.plist CHANGELOG.md && git commit -m 'Release $TAG' && git tag '$TAG'"
       print -u2 "  git push --atomic -u origin HEAD '$TAG'"
       ;;
     "tagging release")
@@ -241,14 +242,14 @@ print "[$VERSION]: $CHANGE_URL" >> "$CHANGELOG"
 rm -f "$ENTRY_FILE"
 
 print "• Updating Info.plist → $VERSION (build $BUILD)"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" Info.plist
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" resources/Info.plist
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" resources/Info.plist
 
 print "• Building"
 PHASE="building and testing"
 # Stable signing is mandatory for releases: an ad-hoc release zip would
 # invalidate existing Calendar (TCC) grants on every update.
-./build-app.sh --require-identity >/dev/null
+./scripts/build-app.sh --require-identity >/dev/null
 # All regression suites are mandatory, including real process restarts and
 # the signed updater transaction. No publication happens before they pass.
 print "• Running full release preflight"
@@ -267,7 +268,7 @@ NOTES_FILE=$(mktemp)
 
 print "• Committing and tagging"
 PHASE="committing release"
-git add Info.plist CHANGELOG.md
+git add resources/Info.plist CHANGELOG.md
 git commit -m "Release $TAG" --quiet
 PHASE="tagging release"
 git tag "$TAG"

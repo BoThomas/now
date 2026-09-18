@@ -5,10 +5,10 @@
 ## Build and choose checks
 
 Follow [docs/development.md](../docs/development.md) for prerequisites and [AGENTS.md](../AGENTS.md)
-for the required signed build and selftest after changes. [build-app.sh](../build-app.sh) builds the
-SwiftPM `NowApp` executable target, separately runs the root icon generator, assembles the bundle,
-signs and verifies it, then creates the ZIP. Keep `make-icon.swift` outside `Sources/` because it is
-a separate executable.
+for the required signed build and selftest after changes.
+[scripts/build-app.sh](../scripts/build-app.sh) builds the SwiftPM `NowApp` executable target,
+separately runs the icon generator, assembles the bundle, signs and verifies it, then creates the
+ZIP. Keep `scripts/make-icon.swift` outside `Sources/` because it is a separate executable.
 
 After Swift or analysis-tooling changes, run `./scripts/analyze.sh` after the build. It compares
 strict-concurrency warnings and focused SwiftLint findings against committed baselines; preflight
@@ -123,12 +123,13 @@ update-screen preview includes a Homebrew state for visual review.
 
 ## Release workflow
 
-[release.sh](../release.sh) validates prerequisites before modifying version/build and changelog,
-builds and runs the full preflight, then commits, tags, pushes, and publishes the release asset.
-`--dry-run` checks prerequisites and prints a plan without running that publication pipeline.
-Release operations require a clean `main`, exact synchronization with local and live `origin/main`,
-the expected repository/authentication, stable signing identity, and an unused increasing version.
-Release notes must contain recognized `###` categories such as `Added` and `Fixed`.
+[scripts/release.sh](../scripts/release.sh) validates prerequisites before modifying version/build
+and changelog, builds and runs the full preflight, then commits, tags, pushes, and publishes the
+release asset. `--dry-run` checks prerequisites and prints a plan without running that publication
+pipeline. Release operations require a clean `main`, exact synchronization with local and live
+`origin/main`, the expected repository/authentication, stable signing identity, and an unused
+increasing version. Release notes must contain recognized `###` categories such as `Added` and
+`Fixed`.
 
 After GitHub publication, [scripts/tap-bump.sh](../scripts/tap-bump.sh) clones
 `BoThomas/homebrew-tap`, updates `Casks/now.rb` with the version, release ZIP SHA-256 and asset URL,
@@ -141,8 +142,8 @@ does not execute this tap workflow or the full test suite.
 
 Use the release rules in [AGENTS.md](../AGENTS.md), signing recovery guidance in
 [engineering notes](engineering-notes.md#code-signing-tcc-stability), and commands in
-[release.sh](../release.sh) when a release is requested. A normal code or documentation change does
-not itself require publishing a release.
+[scripts/release.sh](../scripts/release.sh) when a release is requested. A normal code or
+documentation change does not itself require publishing a release.
 
 Before changing this area, read the relevant
 [engineering constraints and regression notes](engineering-notes.md).

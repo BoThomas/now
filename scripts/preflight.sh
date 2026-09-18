@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 APP_PATH="outputs/now.app"
 if [[ $# -eq 0 ]]; then
-  ./build-app.sh --require-identity
+  ./scripts/build-app.sh --require-identity
 elif [[ $# -eq 2 && "$1" == --app ]]; then
   APP_PATH="$2"
 else

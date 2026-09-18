@@ -2774,9 +2774,9 @@ enum SelfTest {
         escalate.firstSeenUpdateDate = now.addingTimeInterval(-18 * 3600)
         c.expect(!UpdateLogic.shouldEscalate(availableVersion: "1.5.0", state: escalate, now: now), "different first-seen version does not escalate")
 
-        // -- Requirement string (must mirror build-app.sh's DR form) --------
+        // -- Requirement string (must mirror scripts/build-app.sh's DR form) --------
         c.expect(UpdateLogic.updateRequirement(fingerprint: "A505B08900C56A28709479297A049525A2A187C6")
-                 == "identifier \"com.thomasboch.now\" and certificate root = H\"a505b08900c56a28709479297a049525a2a187c6\"", "DR string format matches build-app.sh")
+                 == "identifier \"com.thomasboch.now\" and certificate root = H\"a505b08900c56a28709479297a049525a2a187c6\"", "DR string format matches scripts/build-app.sh")
         c.expect(UpdateLogic.pinnedFingerprints.contains("A505B08900C56A28709479297A049525A2A187C6"), "current signing identity pinned")
 
         // -- Release notes cleanup ------------------------------------------

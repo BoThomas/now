@@ -16,8 +16,8 @@ EKU, valid to 2036) whose certificate hash anchors the DR instead — grants sur
 release updates.
 
 - The identity lives in the **login keychain** of the dev machine. Its expected SHA-1 fingerprint is
-  `A505B08900C56A28709479297A049525A2A187C6`; `build-app.sh` signs by that exact fingerprint and
-  falls back to ad-hoc with a warning unless `--require-identity` is set.
+  `A505B08900C56A28709479297A049525A2A187C6`; `scripts/build-app.sh` signs by that exact fingerprint
+  and falls back to ad-hoc with a warning unless `--require-identity` is set.
   `NOW_SIGNING_IDENTITY_SHA1` is the deliberate certificate-rotation override and must also be
   supplied to release preflights.
 - Backup: the `.p12` (with its password) lives **only** in the password manager (1Password/Bitwarden
@@ -248,8 +248,8 @@ top-level for the same reason). Notification/timer closures delivered on main ho
     register there).
   - **Testing**: `--update-check` prints what the updater sees (read-only).
     `scripts/update-smoke.sh` fakes everything locally (python http.server + a dynamically bumped,
-    re-signed release — the re-sign invocation must MIRROR build-app.sh's codesign line). The
-    directly launched child acknowledges startup, reports its version, and exits before UI; a
+    re-signed release — the re-sign invocation must MIRROR scripts/build-app.sh's codesign line).
+    The directly launched child acknowledges startup, reports its version, and exits before UI; a
     negative case suppresses the acknowledgement and proves rollback before Trash; the stale-error
     case proves a successful retry's child never inherits a prior failure's `NOW_UPDATE_ERROR`.
     Needs the stable identity (ad-hoc can't pass the DR gate — by design). The staging dir is HIDDEN
@@ -374,8 +374,9 @@ immediately (fetchNativeEvents' unauthorized branch wipes them), not at the next
   - **Permission split**: macOS 14+ needs `requestFullAccessToEvents()` (no read-only tier); the
     legacy `requestAccess(to: .event)` on 14+ grants **write-only**. Both plist keys ship
     (`NSCalendarsFullAccessUsageDescription` + `NSCalendarsUsageDescription`); entitlement
-    `com.apple.security.personal-information.calendars` via `now.entitlements`. Prompt only from the
-    settings UI ("Grant Access…"), never at launch; `EKEventStore()` alone is TCC-silent.
+    `com.apple.security.personal-information.calendars` via `resources/now.entitlements`. Prompt
+    only from the settings UI ("Grant Access…"), never at launch; `EKEventStore()` alone is
+    TCC-silent.
   - **TCC + signing**: TCC grants key to the signature's designated requirement — solved with the
     self-signed "now Developer" identity (see _Code signing_ above); ad-hoc fallback builds
     re-prompt per build (known). Status re-checked on `didBecomeActive` so granting via System
@@ -483,12 +484,12 @@ same loop) fail with "command not found" — and `|| true`/`2>/dev/null` swallow
 different loop-variable name (and absolute tool paths in cleanup paths).
 
 - `swiftc` expression type-check blowups: break long `CGRect(...)` expressions with mixed
-  Int/CGFloat math into sub-expressions (this bit `make-icon.swift`).
+  Int/CGFloat math into sub-expressions (this bit `scripts/make-icon.swift`).
 - `Color.quaternary`/`NSImage.withTintColor` don't exist on this target; use
   `Color.primary.opacity(...)` and manual NSImage tinting.
 - Selftest constructs fixed dates in 2026 — keep deterministic (UTC/Berlin calendars explicitly).
-- Icon: `make-icon.swift` renders the SF `alarm` symbol white-on-gradient; menu bar uses the same
-  symbol for consistency.
+- Icon: `scripts/make-icon.swift` renders the SF `alarm` symbol white-on-gradient; menu bar uses the
+  same symbol for consistency.
 
 ### Preview isolation
 
@@ -654,7 +655,7 @@ default individually; decoded source UUIDs are unique across ICS/native sources.
 ignored for alert shortcuts, while Command/Option/Control guards remain. Helper exit callbacks clear
 timed-out install attempts; missing staging is re-prepared before any swap. `scripts/preflight.sh`
 runs the build (unless --app), selftest, all notification/startup/reminder/cache/fetch/workload
-smoke suites and signed updater smoke; release.sh runs it before committing or publishing.
+smoke suites and signed updater smoke; scripts/release.sh runs it before committing or publishing.
 
 ### Preference recovery
 
