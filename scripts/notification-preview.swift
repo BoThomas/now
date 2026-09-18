@@ -246,6 +246,7 @@ struct UpdateScreensPanel: View {
     @State private var scrollFluff = false
     @State private var longReleaseNotes = false
     @State private var multiVersionNotes = false
+    @State private var brewManaged = false
     @State private var liveNotesStatus = ""
 
     private var manifest: UpdateManifest {
@@ -327,6 +328,14 @@ struct UpdateScreensPanel: View {
                 .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Text("Update available").font(.headline)
+                Toggle("Homebrew-managed install", isOn: $brewManaged)
+                    .help("Presents the brew-mode layout of the update-available window: no staging states, a copyable brew upgrade command instead of Install & Relaunch. Copy Command writes the real pasteboard, so pasting after the click must produce the command.")
+                    .onChange(of: brewManaged) { enabled in
+                        updates.smokeIsBrewManaged = enabled
+                        if case .available = updates.windowContent {
+                            updates.windowContent = .available(manifest)
+                        }
+                    }
                 Toggle("Use long test changelog", isOn: $longReleaseNotes)
                     .help("Adds long release notes to all three update-available states. Updates the current preview immediately.")
                     .onChange(of: longReleaseNotes) { _ in
