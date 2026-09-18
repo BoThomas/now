@@ -761,3 +761,17 @@ focus); activation policy stays owned by `syncActivationPolicy()`.
 reminder from the background, checks key focus, confirms accessory policy is restored on close, and
 re-runs every user-initiated window path from the background across repeated rounds, including
 fresh-install onboarding (`--startup-new`) and a passive escalation that must not take focus.
+
+### Homebrew ownership and release recovery
+
+Match Caskroom tracking-link destinations to the running bundle, not the inverse; never shell out to
+Homebrew during runtime detection. Keep the staging, retry and install gates together, and clear a
+pending manual-install marker before startup interprets it in Homebrew mode. Discovery and passive
+escalation still work without staging. See
+[the update workflow](development-and-updates.md#homebrew-owned-installations) and
+[BrewManagement.swift](../Sources/BrewManagement.swift).
+
+Publish the release asset before updating the tap. A tap failure must remain a failing release phase
+with recovery instructions, not a successful release command with an unnoticed stale cask. Recovery
+uses the existing ZIP and must reject downgrades. Keep the disposable remote regressions in
+[tap-bump-tests.py](../scripts/tap-bump-tests.py) in preflight.

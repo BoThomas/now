@@ -27,6 +27,16 @@ before grouping ongoing meetings. See `CatchUpRefreshTracker`, `offerNotificatio
 [refresh trackers](../Sources/NowCore/Reminders/RefreshObservation.swift) own pure
 source-observation decisions; the shell owns timers, delivery and persistence.
 
+The shared [ReminderLeadEditor](../Sources/ReminderLeadEditor.swift) exposes up to three distinct
+lead times in Settings and setup.
+[ReminderDeliveryState](../Sources/NowCore/Reminders/ReminderDeliveryState.swift) tracks the
+concrete lead membership and action/Snooze tokens of a delivery. Closing one reminder leaves later
+leads eligible; Snooze consumes leads through its scheduled time and pauses the whole occurrence.
+Newly added lead times receive persisted activation cutoffs, so settings changes do not
+retroactively fire elapsed leads, including for events loaded later. Existing leads retain normal
+late-launch catch-up. A start-time change shifts an active Snooze by the same delta and resets Join;
+a shifted Snooze at or beyond the new end is discarded.
+
 ## Edits and transient omissions
 
 All event changes pass through `commitEvents`. It normalizes the list, reconciles handled/snoozed
@@ -80,7 +90,9 @@ changes.
 The alert controller delegates those pure decisions to
 [SnoozePolicy](../Sources/NowCore/Reminders/SnoozePolicy.swift). Its type aliases preserve the
 shell's existing API without a second algorithm.
-[ReminderTiming](../Sources/NowCore/Reminders/ReminderTiming.swift) owns due/Join eligibility, and
+[ReminderTiming](../Sources/NowCore/Reminders/ReminderTiming.swift) supplies scalar timing helpers,
+while [ReminderDeliveryState](../Sources/NowCore/Reminders/ReminderDeliveryState.swift) extends the
+ledger with live multi-lead eligibility, acknowledgement and occurrence-wide actions.
 [ReminderReconciliation](../Sources/NowCore/Reminders/ReminderReconciliation.swift) owns
 normalization, unmute and pruning. `AppStore.commitEvents` retains the live transaction ordering;
 accepted receipt replacement/submission state remains in the native notification controller.

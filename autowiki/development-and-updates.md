@@ -37,11 +37,12 @@ panels. Extend the existing pure policy helpers when testing decisions.
 
 [scripts/preflight.sh](../scripts/preflight.sh) runs the signed release build, debug and optimized
 selftests and core suites, the module ownership/syntax check, and all of these suites. It also runs
-the demo process/isolation regressions and the isolated GUI update/relaunch smoke; `--app` uses an
-existing bundle instead of rebuilding. The updater smokes temporarily quit and later reopen a
-running now. The full notification harness includes synthetic GUI fixtures. Use the disposable
-harness data rather than installed calendars/preferences. These commands describe repository
-workflows; a documentation review alone does not establish that they pass.
+the demo process/isolation regressions, local tap-bump regressions, and the isolated GUI
+update/relaunch smoke; `--app` uses an existing bundle instead of rebuilding. The updater smokes
+temporarily quit and later reopen a running now. The full notification harness includes synthetic
+GUI fixtures. Use the disposable harness data rather than installed calendars/preferences. These
+commands describe repository workflows; a documentation review alone does not establish that they
+pass.
 
 ## Update discovery and preparation
 
@@ -73,6 +74,9 @@ preparation or validation from winning.
 
 ## Installation is a health-checked swap
 
+This installation path applies to manually installed copies. Homebrew-managed copies use the
+separate update action described below.
+
 [UpdateInstaller](../Sources/Updater.swift) starts a detached shell helper with parameters in
 environment variables. It waits for the old PID to exit, renames the old bundle to a sibling backup,
 moves the staged bundle into place, and launches the actual executable. It retains the backup until
@@ -93,6 +97,30 @@ coordinate the build identity and updater pins;
 [AGENTS.md](../AGENTS.md) retains release rules. Do not infer a missing identity from sandboxed
 keychain lookup or replace the required signed build with ad-hoc signing on this machine.
 
+## Homebrew-owned installations
+
+[BrewManagement](../Sources/BrewManagement.swift) detects ownership once when the update controller
+is initialized. It reads `now/<version>/now.app` tracking symlinks under `/opt/homebrew/Caskroom`
+and `/usr/local/Caskroom` and compares their normalized destinations with the running bundle. The
+installed app is a real bundle; the Caskroom link points back to it. Relative link destinations are
+supported. Custom Homebrew prefixes and copies moved away from the tracked location are accepted
+detection misses and retain the in-app updater. Runtime detection never invokes `brew`.
+
+Discovery, release notes, six-hour checks, skipping, notifications and the eighteen-hour passive
+escalation remain active. [UpdateController](../Sources/Updater.swift) blocks staging, preparation
+retry and installation in Homebrew mode, and clears a persisted pending manual-install marker at
+startup. Escalation does not require a staged archive in this mode.
+[UpdateView](../Sources/UpdateUI.swift) instead offers `brew upgrade --cask BoThomas/tap/now`; only
+an explicit Copy Command action writes the clipboard. The user must relaunch after upgrading to run
+the new version.
+
+The [selftest](../Tests/NowTests/SelfTest.swift) covers detection policy;
+[notification smoke](../scripts/notification-smoke.swift) exercises controller transitions and
+ensures discovery, menu, retry and install never request staging. The
+[signed updater smoke](../scripts/update-smoke.sh) adds positive/negative filesystem detection
+against a synthetic Caskroom and checks that the bundle and staging directory remain unchanged. The
+update-screen preview includes a Homebrew state for visual review.
+
 ## Release workflow
 
 [release.sh](../release.sh) validates prerequisites before modifying version/build and changelog,
@@ -101,6 +129,15 @@ builds and runs the full preflight, then commits, tags, pushes, and publishes th
 Release operations require a clean `main`, exact synchronization with local and live `origin/main`,
 the expected repository/authentication, stable signing identity, and an unused increasing version.
 Release notes must contain recognized `###` categories such as `Added` and `Fixed`.
+
+After GitHub publication, [scripts/tap-bump.sh](../scripts/tap-bump.sh) clones
+`BoThomas/homebrew-tap`, updates `Casks/now.rb` with the version, release ZIP SHA-256 and asset URL,
+then commits and pushes the tap. Publishing first ensures the cask never points at an unpublished
+asset. A failed tap step fails the release command but leaves the GitHub release live; recover by
+rerunning only the printed tap-bump command with the published ZIP. An already matching version is a
+no-op, and a delayed recovery cannot downgrade a newer cask. Local disposable-remote cases in
+[tap-bump-tests.py](../scripts/tap-bump-tests.py) are included in preflight. The release dry run
+does not execute this tap workflow or the full test suite.
 
 Use the release rules in [AGENTS.md](../AGENTS.md), signing recovery guidance in
 [engineering notes](engineering-notes.md#code-signing-tcc-stability), and commands in
