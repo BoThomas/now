@@ -13,7 +13,11 @@ struct UpdateView: View {
         VStack(alignment: .leading, spacing: 0) {
             switch controller.windowContent {
             case .available(let manifest):
-                availableView(manifest)
+                if controller.isBrewManaged {
+                    brewAvailableView(manifest)
+                } else {
+                    availableView(manifest)
+                }
             case .upToDate:
                 upToDateView
             case .installed(let version):
@@ -129,6 +133,84 @@ struct UpdateView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Update available (Homebrew-managed)
+
+    /// Brew mode: discovery and notes stay, but the action is a copyable
+    /// `brew upgrade` command. The pasteboard is written ONLY by the explicit
+    /// button action — never on presentation.
+    private func brewAvailableView(_ manifest: UpdateManifest) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
+                appIcon
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("now \(manifest.version)")
+                        .font(.system(size: 17, weight: .semibold))
+                    Text("Released \(manifest.publishedAt.formatted(.dateTime.month(.abbreviated).day().year())) · currently on \(UpdateLogic.currentVersion)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("WHAT'S NEW")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                PopupScrollView {
+                    NotesView(blocks: UpdateLogic.noteBlocks(controller.consolidatedNotes ?? manifest.notes))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Text("Managed by Homebrew")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(UpdateLogic.brewUpgradeCommand)
+                    .font(.system(size: 12, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.08)))
+                Text("This copy of now is installed and updated with Homebrew. Run the command in Terminal, then relaunch now — the running version stays \(UpdateLogic.currentVersion) until then.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button("Skip This Version") { controller.skipVersion(manifest.version) }
+                .font(.system(size: 12))
+                .help("Stop automatic offers for this version. Check for Updates can show it again.")
+            Color.clear.frame(height: 8)
+            footer(
+                primaryTitle: brewCommandCopied ? "Copied" : "Copy Command",
+                primaryEnabled: true,
+                primaryAction: { copyBrewUpgradeCommand() },
+                cancelTitle: "Later"
+            )
+        }
+    }
+
+    /// Writes the upgrade command to the pasteboard on the explicit button
+    /// action and briefly confirms it.
+    @State private var brewCommandCopied = false
+
+    private func copyBrewUpgradeCommand() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(UpdateLogic.brewUpgradeCommand, forType: .string)
+        brewCommandCopied = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            brewCommandCopied = false
         }
     }
 

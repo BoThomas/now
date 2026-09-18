@@ -267,7 +267,7 @@ wait_for_file() {
   fail "$label (timeout 30s)"
 }
 
-print "• [1/15] Positive: forge → check → stage → swap → exact startup health acknowledgement"
+print "• [1/16] Positive: forge → check → stage → swap → exact startup health acknowledgement"
 rm -f "$WORK/report" "$WORK/helper-done"
 run_smoke ok NOW_SMOKE_REPORT="$WORK/report" NOW_SMOKE_HELPER_DONE="$WORK/helper-done" | tee "$WORK/log1"
 grep -q "SMOKE: INSTALLED v$SMOKE_VERSION" "$WORK/log1" || fail "positive run did not reach install"
@@ -283,7 +283,7 @@ BACKUP_LEFT=("$WORK/"now.app.old-*(N))
 [[ ${#BACKUP_LEFT} -eq 0 ]] || fail "stray now.app.old-* backup left behind"
 print "  OK — updated to $SMOKE_VERSION, old bundle trashed, staging clean"
 
-print "• [2/15] Negative: tampered (ad-hoc) zip must be refused"
+print "• [2/16] Negative: tampered (ad-hoc) zip must be refused"
 reset_install
 set +e
 run_smoke bad NOW_SMOKE_REPORT="$WORK/report2" > "$WORK/log2" 2>&1
@@ -294,7 +294,7 @@ grep -q "SMOKE: REFUSED .*signed with a trusted identity" "$WORK/log2" || fail "
 [[ "$(version_of "$WORK/now.app")" == "$ORIG_VERSION" ]] || fail "tampered zip modified the install"
 print "  OK — refused at the signature gate, install untouched"
 
-print "• [3/15] Negative: older tag reads as up-to-date"
+print "• [3/16] Negative: older tag reads as up-to-date"
 set +e
 run_smoke old > "$WORK/log3" 2>&1
 RC=$?
@@ -303,7 +303,7 @@ set -e
 grep -q "SMOKE: UPTODATE" "$WORK/log3" || fail "older tag not reported as up-to-date"
 print "  OK — no downgrade offered"
 
-print "• [4/15] Negative: 404 (no releases) reads as up-to-date"
+print "• [4/16] Negative: 404 (no releases) reads as up-to-date"
 set +e
 run_smoke missing > "$WORK/log4" 2>&1
 RC=$?
@@ -311,7 +311,7 @@ set -e
 [[ $RC -eq 3 ]] || fail "404: expected exit 3 (UPTODATE), got $RC: $(cat "$WORK/log4")"
 print "  OK — 404 is up-to-date, not an error"
 
-print "• [5/15] Negative: streaming archive cap stops a lying response"
+print "• [5/16] Negative: streaming archive cap stops a lying response"
 reset_install
 set +e
 run_smoke oversize NOW_SMOKE_ARCHIVE_LIMIT=65536 > "$WORK/log5" 2>&1
@@ -322,7 +322,7 @@ grep -q "SMOKE: REFUSED update archive larger than" "$WORK/log5" || fail "oversi
 [[ "$(version_of "$WORK/now.app")" == "$ORIG_VERSION" ]] || fail "oversize response modified the install"
 print "  OK — response stopped at the streaming byte limit"
 
-print "• [6/15] Negative: downloaded size must match the release manifest"
+print "• [6/16] Negative: downloaded size must match the release manifest"
 reset_install
 set +e
 run_smoke mismatch > "$WORK/log6" 2>&1
@@ -332,7 +332,7 @@ set -e
 grep -q "SMOKE: REFUSED download size .* expected" "$WORK/log6" || fail "size mismatch refused for the wrong reason: $(cat "$WORK/log6")"
 print "  OK — mismatched asset size refused"
 
-print "• [7/15] Negative: missing asset download must be an error"
+print "• [7/16] Negative: missing asset download must be an error"
 reset_install
 set +e
 run_smoke asset404 > "$WORK/log7" 2>&1
@@ -342,7 +342,7 @@ set -e
 grep -q "SMOKE: REFUSED download returned 404" "$WORK/log7" || fail "asset 404 refused for the wrong reason: $(cat "$WORK/log7")"
 print "  OK — missing release asset refused"
 
-print "• [8/15] Negative: old→backup failure reports and leaves old app intact"
+print "• [8/16] Negative: old→backup failure reports and leaves old app intact"
 reset_install
 rm -f "$WORK/failure-backup"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=backup NOW_SMOKE_FAILURE_REPORT="$WORK/failure-backup" > "$WORK/log8" 2>&1
@@ -354,7 +354,7 @@ BACKUP_FAILURE_LEFT=("$WORK/"now.app.old-*(N))
 [[ ${#BACKUP_FAILURE_LEFT} -eq 0 ]] || fail "backup failure left a backup bundle"
 print "  OK — old app relaunched with the backup failure"
 
-print "• [9/15] Negative: post-swap relaunch failure restores old app"
+print "• [9/16] Negative: post-swap relaunch failure restores old app"
 reset_install
 rm -f "$WORK/failure-relaunch"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=relaunch NOW_SMOKE_FAILURE_REPORT="$WORK/failure-relaunch" > "$WORK/log9" 2>&1
@@ -365,7 +365,7 @@ RELAUNCH_BACKUP_LEFT=("$WORK/"now.app.old-*(N))
 [[ ${#RELAUNCH_BACKUP_LEFT} -eq 0 ]] || fail "relaunch failure left a backup bundle"
 print "  OK — new app removed, old app restored and relaunched with the error"
 
-print "• [10/15] Negative: unacknowledged child exit restores old app before Trash"
+print "• [10/16] Negative: unacknowledged child exit restores old app before Trash"
 reset_install
 rm -f "$WORK/failure-health-exit" "$WORK/unhealthy-child"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=health NOW_SMOKE_REPORT="$WORK/unhealthy-child" NOW_SMOKE_FAILURE_REPORT="$WORK/failure-health-exit" > "$WORK/log10" 2>&1
@@ -378,7 +378,7 @@ TRASHED_HEALTH=("$WORK/home/.Trash/"now-old-*.app(N))
 [[ ${#TRASHED_HEALTH} -eq 1 ]] || fail "health-exit failure trashed the rollback backup"
 print "  OK — unacknowledged child exit restored and relaunched the old app"
 
-print "• [11/15] Negative: startup health timeout restores old app before Trash"
+print "• [11/16] Negative: startup health timeout restores old app before Trash"
 reset_install
 rm -f "$WORK/failure-health-timeout"
 run_smoke ok NOW_SMOKE_HELPER_FAULT=health NOW_SMOKE_HEALTH_TIMEOUT=3 NOW_SMOKE_FAILURE_REPORT="$WORK/failure-health-timeout" > "$WORK/log11" 2>&1
@@ -391,7 +391,7 @@ TRASHED_HEALTH_TIMEOUT=("$WORK/home/.Trash/"now-old-*.app(N))
 [[ ${#TRASHED_HEALTH_TIMEOUT} -eq 1 ]] || fail "health timeout trashed the rollback backup"
 print "  OK — missing acknowledgement timed out, restored, and relaunched the old app"
 
-print "• [12/15] Negative: stuck quit — helper must bail, nothing moved"
+print "• [12/16] Negative: stuck quit — helper must bail, nothing moved"
 reset_install
 rm -f "$WORK/stuck-done"
 set +e
@@ -408,7 +408,7 @@ STUCK_STAGING_LEFT=("$WORK/".now-update-*(N))
 [[ ${#STUCK_STAGING_LEFT} -eq 0 ]] || fail "stuck quit left staging artifacts"
 print "  OK — helper bailed, app untouched"
 
-print "• [13/15] Stale NOW_UPDATE_ERROR must not reach the updated child"
+print "• [13/16] Stale NOW_UPDATE_ERROR must not reach the updated child"
 # A failed install relaunches the old app with NOW_UPDATE_ERROR in its
 # environment; that process's next install helper inherits the variable
 # (spawnHelper passes the environment through). The success relaunch must
@@ -424,7 +424,7 @@ wait_for_file "$WORK/report13" "relaunched child never reported (stale-error cas
 wait_for_file "$WORK/helper-done13" "stale-error helper never completed"
 print "  OK — updated child launched without the stale failure environment"
 
-print "• [14/15] Multi-version jump consolidates intermediate release notes"
+print "• [14/16] Multi-version jump consolidates intermediate release notes"
 reset_install
 rm -f "$WORK/report14" "$WORK/helper-done14"
 run_smoke multi NOW_SMOKE_REPORT="$WORK/report14" NOW_SMOKE_HELPER_DONE="$WORK/helper-done14" > "$WORK/log14" 2>&1
@@ -438,7 +438,7 @@ wait_for_file "$WORK/report14" "consolidated-notes child never reported"
 [[ "$(cat "$WORK/report14")" == "$SMOKE_VERSION" ]] || fail "consolidated-notes install reported $(cat "$WORK/report14")"
 print "  OK — What's New lists every skipped release under its version heading, install unaffected"
 
-print "• [15/15] Missing intermediate notes fall back and never block the install"
+print "• [15/16] Missing intermediate notes fall back and never block the install"
 reset_install
 rm -f "$WORK/report15" "$WORK/helper-done15"
 run_smoke multi404 NOW_SMOKE_REPORT="$WORK/report15" NOW_SMOKE_HELPER_DONE="$WORK/helper-done15" > "$WORK/log15" 2>&1
@@ -447,6 +447,43 @@ grep -q "SMOKE: INSTALLED v$SMOKE_VERSION" "$WORK/log15" || fail "notes fallback
 wait_for_file "$WORK/report15" "notes-fallback child never reported"
 [[ "$(cat "$WORK/report15")" == "$SMOKE_VERSION" ]] || fail "notes-fallback install reported $(cat "$WORK/report15")"
 print "  OK — cosmetic notes failure kept the latest-release body and the install path"
+
+print "• [16/16] Brew mode: tracking-link detection, copy-command offer, no staging"
+reset_install
+# Lay out a Caskroom exactly as brew 7 does: the bundle is REAL in the app
+# dir and the Caskroom holds a tracking symlink back to it (probe-verified
+# 2026-09-18). Both detection directions run against the same release.
+BREWROOM="$WORK/brewroom"
+mkdir -p "$BREWROOM/now/$SMOKE_VERSION"
+ln -s "$WORK/now.app" "$BREWROOM/now/$SMOKE_VERSION/now.app"
+set +e
+env NOW_UPDATE_API_BASE="http://127.0.0.1:$PORT/ok/api" NOW_UPDATE_REPO="BoThomas/now" \
+    "$WORK/now.app/Contents/MacOS/now" --update-smoke-brew \
+    --brew-caskroom "$BREWROOM" --brew-expect 1 > "$WORK/log16" 2>&1
+RC=$?
+set -e
+[[ $RC -eq 0 ]] || fail "brew positive detection: expected exit 0, got $RC: $(cat "$WORK/log16")"
+grep -q "SMOKE: BREW detected=1" "$WORK/log16" || fail "brew detection did not report 1: $(cat "$WORK/log16")"
+grep -q "SMOKE: BREW action=copy-command brew upgrade --cask BoThomas/tap/now" "$WORK/log16" || fail "brew mode did not offer the copy command: $(cat "$WORK/log16")"
+grep -q "SMOKE: BREW staging skipped" "$WORK/log16" || fail "brew staging gate did not hold: $(cat "$WORK/log16")"
+# Negative detection: a tracking link to some other bundle must read 0.
+OTHERROOM="$WORK/otherroom"
+mkdir -p "$OTHERROOM/now/$SMOKE_VERSION"
+ln -s "$WORK/nonexistent-parent/other.app" "$OTHERROOM/now/$SMOKE_VERSION/now.app"
+set +e
+env NOW_UPDATE_API_BASE="http://127.0.0.1:$PORT/ok/api" NOW_UPDATE_REPO="BoThomas/now" \
+    "$WORK/now.app/Contents/MacOS/now" --update-smoke-brew \
+    --brew-caskroom "$OTHERROOM" --brew-expect 0 > "$WORK/log16b" 2>&1
+RC=$?
+set -e
+[[ $RC -eq 0 ]] || fail "brew negative detection: expected exit 0, got $RC: $(cat "$WORK/log16b")"
+grep -q "SMOKE: BREW detected=0" "$WORK/log16b" || fail "brew detection did not report 0: $(cat "$WORK/log16b")"
+# Nothing was downloaded, staged, or installed: the bundle is untouched and
+# no staging artifacts exist.
+[[ "$(version_of "$WORK/now.app")" == "$ORIG_VERSION" ]] || fail "brew mode modified the install"
+BREW_STAGING_LEFT=("$WORK/".now-update-*(N))
+[[ ${#BREW_STAGING_LEFT} -eq 0 ]] || fail "brew mode left staging artifacts"
+print "  OK — brew mode detected, offers the upgrade command, never stages"
 
 print ""
 
@@ -481,4 +518,4 @@ for mutation in signature version; do
   print "  OK — post-stage $mutation refused before swap"
 done
 
-print "UPDATE SMOKE OK — health-gated swap, staging/install signature and version gates, streaming limits, rollback, stuck-quit, stale-error-env"
+print "UPDATE SMOKE OK — health-gated swap, staging/install signature and version gates, streaming limits, rollback, stuck-quit, stale-error-env, brew mode"
