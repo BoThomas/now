@@ -60,9 +60,11 @@ isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
       short name `now` requires `brew trust --cask <user>/tap/now` first, so the README leads with
       the full form.
 - [ ] Cask stanzas: `version` (plain `X.Y.Z`, no `v`), `sha256` of the published release ZIP,
-      versioned release-asset `url`, `name "now"` (required stanza), `desc`, `homepage`,
-      `app "now.app"` (the ZIP contains exactly one top-level `now.app`), and requirements
-      `depends_on macos: :ventura` for the macOS 13 minimum (symbol form) plus
+      `url` using `#{version}` interpolation
+      (`https://github.com/BoThomas/now/releases/download/v#{version}/now-v#{version}.zip`) so
+      version bumps touch only the `version`/`sha256` stanzas, `name "now"` (required stanza),
+      `desc`, `homepage`, `app "now.app"` (the ZIP contains exactly one top-level `now.app`), and
+      requirements `depends_on macos: :ventura` for the macOS 13 minimum (symbol form) plus
       `depends_on arch: :arm64` because builds are arm64-only (`scripts/swiftpm.sh` passes
       `--arch arm64`).
 - [ ] Quarantine handling, in the form the probe verified: `postflight_steps` with

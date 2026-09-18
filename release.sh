@@ -165,6 +165,7 @@ else
   print "    (none)"
 fi
 print "  asset   : outputs/now-$TAG.zip"
+print "  tap     : bump ${NOW_TAP_REPO:-BoThomas/homebrew-tap} Casks/now.rb to $VERSION (after publish)"
 print ""
 
 if [[ "$DRY_RUN" == true ]]; then
@@ -209,6 +210,11 @@ release_failed() {
     "creating GitHub release")
       print -u2 "Recovery: branch and tag are published. Retry only the GitHub release:"
       print -u2 "  gh release create '$TAG' 'outputs/now-$TAG.zip' --repo '$REPO_SLUG' --title 'now $VERSION' --notes-file '$NOTES_FILE'"
+      ;;
+    "bumping tap cask")
+      print -u2 "Recovery: the release is already published and the Homebrew tap cask is stale."
+      print -u2 "Retry only the tap bump (idempotent):"
+      print -u2 "  ./scripts/tap-bump.sh '$VERSION' 'outputs/now-$TAG.zip'"
       ;;
   esac
   exit $rc
@@ -274,6 +280,20 @@ print "• Creating GitHub release"
 PHASE="creating GitHub release"
 gh release create "$TAG" "outputs/now-$TAG.zip" --repo "$REPO_SLUG" --title "now $VERSION" --notes-file "$NOTES_FILE"
 rm -f "$NOTES_FILE"
+
+print "• Bumping Homebrew tap cask"
+PHASE="bumping tap cask"
+# Release-first ordering: the release is live, so a slow or failed bump only
+# leaves the cask briefly stale — never a cask pointing at an unpublished
+# asset. Exit 3 = tap repository not created yet (plan/homebrew-tap.md
+# slice 1): skip with a notice instead of failing the release.
+TAP_RC=0
+./scripts/tap-bump.sh "$VERSION" "outputs/now-$TAG.zip" || TAP_RC=$?
+if [[ "$TAP_RC" -eq 3 ]]; then
+  print "  tap repository not present yet — skipped (manual installs still update)"
+elif [[ "$TAP_RC" -ne 0 ]]; then
+  false  # trigger the phase trap → recovery guidance for the stale cask
+fi
 PHASE="complete"
 
 print ""
