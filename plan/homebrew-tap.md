@@ -54,12 +54,12 @@ isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
 
 ## Slice 1: tap repository and cask
 
-- [ ] Create the dedicated tap repository with `Casks/now.rb` and a README describing
+- [x] Create the dedicated tap repository with `Casks/now.rb` and a README describing
       `brew tap <user>/tap` (for the `homebrew-tap` repository) and the fully qualified
       `brew install --cask <user>/tap/now`. Fully qualified names install with item-level trust; the
       short name `now` requires `brew trust --cask <user>/tap/now` first, so the README leads with
       the full form.
-- [ ] Cask stanzas: `version` (plain `X.Y.Z`, no `v`), `sha256` of the published release ZIP, `url`
+- [x] Cask stanzas: `version` (plain `X.Y.Z`, no `v`), `sha256` of the published release ZIP, `url`
       using `#{version}` interpolation
       (`https://github.com/BoThomas/now/releases/download/v#{version}/now-v#{version}.zip`) so
       version bumps touch only the `version`/`sha256` stanzas, `name "now"` (required stanza),
@@ -67,7 +67,7 @@ isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
       requirements `depends_on macos: :ventura` for the macOS 13 minimum (symbol form) plus
       `depends_on arch: :arm64` because builds are arm64-only (`scripts/swiftpm.sh` passes
       `--arch arm64`).
-- [ ] Quarantine handling, in the form the probe verified: `postflight_steps` with
+- [x] Quarantine handling, in the form the probe verified: `postflight_steps` with
       `run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/now.app"],     must_succeed: false`.
       On brew 7.0.1 this strips the attribute on install and upgrade — the absolute binary path, the
       `{{appdir}}` token, and the sandboxed step's write on the installed bundle all work. The
@@ -76,7 +76,7 @@ isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
       exits non-zero when the attribute is already absent, which would otherwise abort the install.
       Re-verify manually against the hosted tap that install and upgrade leave no quarantine
       attribute and that first launch is unblocked.
-- [ ] Add a `livecheck` block with `url :url`, `strategy :github_latest`, and
+- [x] Add a `livecheck` block with `url :url`, `strategy :github_latest`, and
       `regex(/^v?(\d+(?:\.\d+)+)$/i)` (strips the leading `v` from the release tag) so
       `brew livecheck` tracks upstream even before automation lands.
 - [ ] Verify an upgrade over a running app: the running instance keeps the old binary until
@@ -149,7 +149,7 @@ isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
 
 ## Slice 5: documentation
 
-- [ ] README: Homebrew install alongside the manual ZIP path; keep the manual quarantine guidance
+- [x] README: Homebrew install alongside the manual ZIP path; keep the manual quarantine guidance
       for manual installs only.
 - [x] `docs/guide.md`: describe brew-mode update behavior and what differs from the in-app updater.
 - [ ] Refresh the wiki through the AutoWiki skill (as `AGENTS.md` prescribes) once the feature
