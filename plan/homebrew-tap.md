@@ -1,10 +1,11 @@
 # Plan: Homebrew tap with brew-managed updates
 
-Status: proposed, not started. Written from a user feature request ("a homebrew repo which
-automatically runs xattr after an update and also provides updates") and the accompanying design
-discussion. No release is part of this plan; each slice lands behind the required checks in
-`AGENTS.md`. Homebrew behavior was verified against current documentation and changelogs and an
-isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
+Status: complete. Implemented on `feat/homebrew-tap` (PR #21); the tap is live at
+`BoThomas/homebrew-tap` with `now` as its first package. Written from a user feature request ("a
+homebrew repo which automatically runs xattr after an update and also provides updates") and the
+accompanying design discussion. No release is part of this plan; each slice landed behind the
+required checks in `AGENTS.md`. Homebrew behavior was verified against current documentation and
+changelogs and an isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
 
 ## Motivation and current distribution
 
@@ -176,8 +177,17 @@ unless explicitly requested; `release.sh` changes are exercised via `--dry-run` 
 
 ## Open questions
 
-- Tap repository name: `BoThomas/homebrew-tap` (generic, room for more packages; tap name
-  `BoThomas/tap`) versus a now-specific name; the install command differs accordingly.
-- Whether a cask named `now` collides with any official cask name in practice; in a third-party tap
-  the fully qualified name disambiguates and short-name use requires `brew trust`, so the README
-  documents the full form either way.
+All resolved. Tap naming decided as `BoThomas/homebrew-tap` (generic, room for more packages; tap
+name `BoThomas/tap`): the repository exists with a generic README and `now` as its first package, so
+no now-specific name is needed. A cask named `now` needs no collision check in practice: in a
+third-party tap the fully qualified name disambiguates and short-name use requires `brew trust`, so
+the README documents the full form either way. No additional releases-page action in brew mode: the
+persistent "View on GitHub" badge covers it (review decision, 2026-09-18).
+
+## Follow-ups after merge
+
+- Hosted upgrade over a running app (Slice 1): needs the next release, which exercises the new tap
+  bump pipeline for real — verify the running instance keeps the old binary until relaunch, Calendar
+  permission is retained, and no re-prompt appears.
+- Wiki refresh through the AutoWiki skill (Slice 5): brew mode, detection, and the tap pipeline in
+  `autowiki/development-and-updates.md`.
