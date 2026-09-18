@@ -194,7 +194,10 @@ struct UpdateView: View {
                 primaryTitle: brewCommandCopied ? "Copied" : "Copy Command",
                 primaryEnabled: true,
                 primaryAction: { copyBrewUpgradeCommand() },
-                cancelTitle: "Later"
+                cancelTitle: "Later",
+                // "Copied" is shorter than "Copy Command" — reserve the wider
+                // title so the confirmation does not resize the button.
+                primaryMinWidth: 124
             )
         }
     }
@@ -324,9 +327,10 @@ struct UpdateView: View {
 
     /// Bottom bar: quiet "View on GitHub…" badge bottom-left (the same
     /// capsule style the Settings badges use — visibly clickable), buttons
-    /// bottom-right.
+    /// bottom-right. `primaryMinWidth` reserves the primary button's width so
+    /// a transient label change cannot shift the layout (nil = intrinsic).
     @ViewBuilder
-    private func footer(primaryTitle: String, primaryEnabled: Bool, primaryAction: @escaping () -> Void, cancelTitle: String?) -> some View {
+    private func footer(primaryTitle: String, primaryEnabled: Bool, primaryAction: @escaping () -> Void, cancelTitle: String?, primaryMinWidth: CGFloat? = nil) -> some View {
         HStack(alignment: .bottom) {
             BadgeLink(url: Links.releases) {
                 Text("View on GitHub")
@@ -343,6 +347,7 @@ struct UpdateView: View {
                 primaryAction()
             } label: {
                 Text(primaryTitle)
+                    .frame(minWidth: primaryMinWidth)
             }
             .keyboardShortcut(.defaultAction)
             .disabled(!primaryEnabled)

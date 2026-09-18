@@ -141,7 +141,9 @@ isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
       pending-install state instead of leaving a stale staged bundle or a pending marker that brew
       mode can never consume.
 - [x] UI copy states that the running instance stays on the old version until relaunch, and the
-      copied command is written to the pasteboard only on explicit user action.
+      copied command is written to the pasteboard only on explicit user action. No additional
+      releases-page action: the persistent "View on GitHub" badge already covers it (review
+      decision, 2026-09-18).
 - [x] "Update Complete", rollback, and backup flows remain in-app-updater-only and unreachable in
       brew mode.
 - [x] Extend `scripts/update-smoke.sh` with a brew-mode scenario proving no staging or install is
@@ -179,5 +181,3 @@ unless explicitly requested; `release.sh` changes are exercised via `--dry-run` 
 - Whether a cask named `now` collides with any official cask name in practice; in a third-party tap
   the fully qualified name disambiguates and short-name use requires `brew trust`, so the README
   documents the full form either way.
-- Whether manual "Check for Updates" in brew mode should additionally offer a link to the releases
-  page.
