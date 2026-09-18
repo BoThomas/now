@@ -737,6 +737,51 @@ struct NotificationSmoke {
         probeStore.setInMeetingDelivery(.normal)
         await lifecycleTests(root: root)
         await guideSubmissionTests(root: root)
+        brewUpdateTests(root: root)
         print("NOTIFICATION SMOKE OK — async races, permission recovery, routing, privacy, snooze, restart, wake grouping, cleanup, update notices, feature migration")
+    }
+}
+
+extension NotificationSmoke {
+    @MainActor static func brewUpdateTests(root: URL) {
+        func require(_ condition: @autoclosure () -> Bool, _ label: String) {
+            if !condition() { print("FAIL: \(label)"); exit(1) }
+        }
+        let store = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("brew-cache")), initialState: Persisted())
+        store.settings.automaticUpdateChecks = false
+        store.settings.notifyUpdates = false
+        let release = UpdateManifest(version: "999.0.0", zipURL: URL(string: "https://example.invalid/update.zip")!,
+                                     assetSize: 1, publishedAt: Date().addingTimeInterval(-4 * 86400), notes: "Synthetic")
+        let updater = UpdateController(store: store, brewManaged: true)
+        updater.smokeState = UpdateState()
+        updater.smokeState.pendingInstallVersion = UpdateLogic.currentVersion
+        updater.start()
+        require(updater.smokeState.pendingInstallVersion == nil, "brew startup discards pending manual install")
+        let persisted = UserDefaults.standard.data(forKey: UpdateController.stateKey).flatMap { try? JSONDecoder().decode(UpdateState.self, from: $0) }
+        require(persisted != nil && persisted?.pendingInstallVersion == nil, "brew startup persists discarded marker")
+        updater.startupHealthAcknowledged()
+        require(updater.windowContent == nil, "brew startup does not announce an in-app installation")
+        updater.smokeApplyDecision(.available(release), userInitiated: false)
+        require(updater.available == release && updater.windowContent == nil, "brew automatic discovery keeps a quiet offer")
+        updater.smokeState.firstSeenUpdateDate = Date().addingTimeInterval(-19 * 3600)
+        updater.smokeApplyDecision(.available(release), userInitiated: false)
+        if case .available = updater.windowContent {} else { require(false, "brew dwell escalates without staging") }
+        updater.dismissWindow()
+        updater.smokeApplyDecision(.available(release), userInitiated: true)
+        if case .available = updater.windowContent {} else { require(false, "brew manual check presents available update") }
+        updater.dismissWindow()
+        updater.presentAvailableFromMenu()
+        if case .available = updater.windowContent {} else { require(false, "brew menu presents available update") }
+        updater.retryPreparation()
+        updater.install()
+        if case .available = updater.windowContent {} else { require(false, "brew install leaves the command offer unchanged") }
+        require(updater.smokeStagingRequests == 0, "brew discovery, menu, retry and install never enter staging")
+        require(!updater.isVerifyingInstall && updater.smokeInstallAttempt == nil && updater.smokeState.pendingInstallVersion == nil,
+                "brew install does not start verification or commit an install marker")
+        // Positive control: prove the spy observes the real controller call site.
+        let manual = UpdateController(store: store, brewManaged: false)
+        manual.smokeApplyDecision(.available(release), userInitiated: true)
+        require(manual.smokeStagingRequests == 1, "manual installs still enter staging")
+        print("BREW CONTROLLER OK — startup, discovery, dwell, menu, retry and install guards")
     }
 }

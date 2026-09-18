@@ -285,15 +285,8 @@ print "• Bumping Homebrew tap cask"
 PHASE="bumping tap cask"
 # Release-first ordering: the release is live, so a slow or failed bump only
 # leaves the cask briefly stale — never a cask pointing at an unpublished
-# asset. Exit 3 = tap repository not created yet (plan/homebrew-tap.md
-# slice 1): skip with a notice instead of failing the release.
-TAP_RC=0
-./scripts/tap-bump.sh "$VERSION" "outputs/now-$TAG.zip" || TAP_RC=$?
-if [[ "$TAP_RC" -eq 3 ]]; then
-  print "  tap repository not present yet — skipped (manual installs still update)"
-elif [[ "$TAP_RC" -ne 0 ]]; then
-  false  # trigger the phase trap → recovery guidance for the stale cask
-fi
+# asset. Every failure triggers the phase trap and its recovery guidance.
+./scripts/tap-bump.sh "$VERSION" "outputs/now-$TAG.zip"
 PHASE="complete"
 
 print ""

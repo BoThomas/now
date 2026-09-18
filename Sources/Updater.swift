@@ -1147,6 +1147,9 @@ enum UpdateRetry: Equatable {
 
 @MainActor
 final class UpdateController: ObservableObject {
+    #if NOW_NOTIFICATION_TESTS
+    private(set) var smokeStagingRequests = 0
+    #endif
     nonisolated static let stateKey = "local.tboch.now.updates.v1"
     /// Inform users on discovery, without an additional release-age delay.
     nonisolated static let ageGate: TimeInterval = 0
@@ -1567,6 +1570,7 @@ final class UpdateController: ObservableObject {
     private func beginStaging(_ manifest: UpdateManifest) {
         #if NOW_NOTIFICATION_TESTS
         // Notification fixtures exercise offer state; archive/install coverage uses updater smoke.
+        smokeStagingRequests += 1
         return
         #else
         clearStaging()

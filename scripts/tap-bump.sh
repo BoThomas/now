@@ -12,8 +12,8 @@
 # at worst see the update seconds later; bumping first would expose fresh
 # installs to an asset URL that 404s until the release exists.
 #
-# The tap repository is created in plan/homebrew-tap.md slice 1; until it
-# exists this exits with code 3 and release.sh skips the bump with a notice.
+# The tap must exist and be reachable; lookup failures fail the release's
+# tap phase so its recovery instructions remain visible.
 #
 # Usage: ./scripts/tap-bump.sh <X.Y.Z> <path/to/now-vX.Y.Z.zip>
 #   NOW_TAP_REPO / NOW_TAP_CASK override the destination (tests).
@@ -36,8 +36,8 @@ ZIP_PATH="${2:-}"
 if [[ -z "$TAP_URL" ]]; then
   command -v gh >/dev/null 2>&1 || { print -u2 "tap-bump: gh CLI missing (brew install gh)"; exit 1 }
   gh auth status >/dev/null 2>&1 || { print -u2 "tap-bump: gh not authenticated (gh auth login)"; exit 1 }
-  gh repo view "$TAP_REPO" --json nameWithOwner >/dev/null 2>&1 ||
-    { print -u2 "tap-bump: tap repository $TAP_REPO not found"; exit 3; }
+  gh repo view "$TAP_REPO" --json nameWithOwner >/dev/null ||
+    { print -u2 "tap-bump: could not access tap repository $TAP_REPO"; exit 1; }
   TAP_URL="https://github.com/$TAP_REPO.git"
 fi
 
@@ -60,6 +60,21 @@ if [[ "$OLD_VERSION" == "$VERSION" ]]; then
   print "• Tap already at $VERSION — nothing to do"
   exit 0
 fi
+
+[[ "$OLD_VERSION" =~ '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ]] ||
+  { print -u2 "tap-bump: invalid existing version: $OLD_VERSION"; exit 1; }
+# Compare components numerically: a delayed recovery must never replace a
+# newer tap release, and lexical ordering would put 2.0.10 before 2.0.9.
+OLD_PARTS=("${(@s:.:)OLD_VERSION}")
+NEW_PARTS=("${(@s:.:)VERSION}")
+for component in 1 2 3; do
+  if (( NEW_PARTS[component] > OLD_PARTS[component] )); then
+    break
+  elif (( NEW_PARTS[component] < OLD_PARTS[component] )); then
+    print -u2 "tap-bump: refusing downgrade from $OLD_VERSION to $VERSION"
+    exit 1
+  fi
+done
 
 print "• Bumping cask $OLD_VERSION → $VERSION (sha256 ${SHA256:0:12}…)"
 # A fully literal url gets version, sha256, and both URL spellings bumped;
