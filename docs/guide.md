@@ -113,3 +113,13 @@ several versions, each release's notes appear under its own version heading, new
 
 Updates keep your calendars and preferences. New features get a short introduction once. **Skip This
 Version** skips an automatic offer; a manual check can show it again.
+
+### Installed with Homebrew?
+
+If Homebrew installed now (`brew install --cask BoThomas/tap/now`), the app leaves updating to
+Homebrew: **Check for Updates…** still discovers and presents new versions, but instead of
+installing itself it shows a copyable `brew upgrade --cask BoThomas/tap/now` command. Run it in
+Terminal, then relaunch now — the running copy keeps the old version until then.
+
+The app detects this automatically from Homebrew's install records. If you move the app out of the
+Homebrew-managed location, it falls back to updating itself.

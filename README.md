@@ -23,8 +23,18 @@ join your meeting with a click.
 Grab `now-vX.Y.Z.zip` from the [latest release](https://github.com/BoThomas/now/releases/latest),
 unzip, and move `now.app` to `/Applications`.
 
-> Release builds are signed but not notarized. If macOS blocks the first launch, use one of these
-> options:
+Or install with Homebrew:
+
+```bash
+brew install --cask BoThomas/tap/now
+```
+
+The Homebrew install removes the quarantine attribute during install, so first launch is not
+blocked. Homebrew also handles updates (`brew upgrade --cask BoThomas/tap/now`); the app detects
+this and leaves installing to Homebrew.
+
+> Manual downloads are signed but not notarized. If macOS blocks the first launch of a manual
+> download, use one of these options:
 >
 > - **System Settings → Privacy & Security → Open Anyway**
 >   ([Apple’s instructions](https://support.apple.com/102445)).

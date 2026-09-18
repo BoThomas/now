@@ -176,6 +176,29 @@ enum UpdateLogic {
         userInitiated || state.lastNotifiedVersion != version
     }
 
+    /// The upgrade command offered in brew mode. Must stay in sync with the
+    /// tap repository: the tap is referenced WITHOUT the `homebrew-` prefix
+    /// (`brew tap <user>/<repo>` clones `github.com/<user>/homebrew-<repo>`,
+    /// so `BoThomas/homebrew-tap` is the tap `BoThomas/tap`).
+    static let brewUpgradeCommand = "brew upgrade --cask BoThomas/tap/now"
+
+    /// Brew-managed installs never download or stage an update: Homebrew owns
+    /// the bundle, and an in-app swap would desync Caskroom metadata.
+    static func shouldBeginStaging(brewManaged: Bool, version: String, userInitiated: Bool, state: UpdateState) -> Bool {
+        guard !brewManaged else { return false }
+        return shouldStageUpdate(version: version, userInitiated: userInitiated, state: state)
+    }
+
+    /// Brew mode never spawns the install helper. A pending-install marker
+    /// surviving from a manual-install life (the bundle became
+    /// Caskroom-managed, e.g. moved while a swap was pending) must be
+    /// discarded, not read as a just-installed or failed install.
+    static func stateAfterBrewModeDetected(_ old: UpdateState) -> UpdateState {
+        var state = old
+        state.pendingInstallVersion = nil
+        return state
+    }
+
     /// Release body → window text: drops release.sh's trailing
     /// "Full changelog: …" line and surrounding blank lines.
     static func displayNotes(_ body: String) -> String {
@@ -1124,6 +1147,9 @@ enum UpdateRetry: Equatable {
 
 @MainActor
 final class UpdateController: ObservableObject {
+    #if NOW_NOTIFICATION_TESTS
+    private(set) var smokeStagingRequests = 0
+    #endif
     nonisolated static let stateKey = "local.tboch.now.updates.v1"
     /// Inform users on discovery, without an additional release-age delay.
     nonisolated static let ageGate: TimeInterval = 0
@@ -1148,6 +1174,12 @@ final class UpdateController: ObservableObject {
     }
 
     unowned let store: AppStore
+    /// Homebrew owns this installation: discovery, presentation, and the
+    /// six-hour cadence stay, but the in-app download/staging/install path is
+    /// disabled and the offered action becomes a copyable
+    /// `brew upgrade --cask <tap>/now` command. Detected once at init from
+    /// the Caskroom tracking links (`BrewManagement`).
+    private(set) var isBrewManaged: Bool
     /// AppDelegate hooks: show (and defer while a reminder shows) the window —
     /// `userInitiated` presentations must land in front of other apps' windows,
     /// passive ones (the automatic 18-hour dwell escalation) must not steal
@@ -1184,8 +1216,9 @@ final class UpdateController: ObservableObject {
         windowContent = content
     }
 
-    init(store: AppStore) {
+    init(store: AppStore, brewManaged: Bool? = nil) {
         self.store = store
+        self.isBrewManaged = brewManaged ?? BrewManagement.isBundleBrewManaged(bundlePath: Bundle.main.bundlePath)
         state = StoredPreferences.load(UpdateState.self, key: Self.stateKey, label: "Update history") ?? UpdateState()
         lastSuccessfulCheck = state.lastSuccessCheckDate
         store.validateUpdateNotification = { [weak self] in self?.validUpdateNotification($0) ?? false }
@@ -1211,6 +1244,15 @@ final class UpdateController: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        // Brew mode transition: staging never survives a restart anyway
+        // (launch cleanup below), but a persisted pending-install marker from
+        // a manual-install life must be discarded before the pending logic
+        // below can misread it — brew mode never spawns the helper, so no
+        // rollback or confirmation can ever consume it.
+        if isBrewManaged, state.pendingInstallVersion != nil {
+            state = UpdateLogic.stateAfterBrewModeDetected(state)
+            saveState()
+        }
         // A successful install relaunches us AS the pending version — DETECT
         // the marker now, but consume it only once startup has been health-
         // acknowledged (`startupHealthAcknowledged`, +2 s): until then the
@@ -1341,15 +1383,19 @@ final class UpdateController: ObservableObject {
             // First discovery stages eagerly. Once a shown update loses its
             // session staging, later automatic checks keep the offer visible
             // without downloading again; manual checks/actions are explicit.
-            let shouldStage = UpdateLogic.shouldStageUpdate(version: manifest.version, userInitiated: userInitiated, state: state)
+            // Brew-managed installs never stage (Homebrew owns the bundle).
+            let shouldStage = UpdateLogic.shouldBeginStaging(brewManaged: isBrewManaged, version: manifest.version, userInitiated: userInitiated, state: state)
             if shouldStage, stagedVersion != manifest.version, stagingTracker.version != manifest.version {
                 beginStaging(manifest)
             }
             if userInitiated {
                 presentAvailable(manifest, userInitiated: true)
-            } else if !store.settings.notifyUpdates, store.settings.skippedUpdateVersion != manifest.version, stagedVersion == manifest.version,
+            } else if !store.settings.notifyUpdates, store.settings.skippedUpdateVersion != manifest.version,
+                      isBrewManaged || stagedVersion == manifest.version,
                       UpdateLogic.shouldEscalate(availableVersion: manifest.version, state: state, now: Date()) {
-                // The automatic 18-hour dwell escalation presents passively.
+                // The automatic 18-hour dwell escalation presents passively —
+                // in brew mode without a staged bundle (the copy-command
+                // window needs no download).
                 presentAvailable(manifest, userInitiated: false)
             }
             if !userInitiated { offerUpdateNotification() }
@@ -1395,7 +1441,8 @@ final class UpdateController: ObservableObject {
             keys: ["update:" + manifest.version], fingerprints: [],
             expires: Date().addingTimeInterval(30 * 86400), catchUp: false,
             updateVersion: manifest.version,
-            title: "now \(manifest.version) is available", body: "Open to review the update and install it.",
+            title: "now \(manifest.version) is available",
+            body: isBrewManaged ? "Open to review the update and copy the Homebrew upgrade command." : "Open to review the update and install it.",
             category: "", sound: false), now: Date())
     }
 
@@ -1464,6 +1511,12 @@ final class UpdateController: ObservableObject {
     /// the known-available update without re-checking.
     func presentAvailableFromMenu() {
         if let manifest = available {
+            if isBrewManaged {
+                // No staging, no preparation-failure lane: the brew window
+                // offers the copyable upgrade command.
+                presentAvailable(manifest, userInitiated: true)
+                return
+            }
             if let failure = preparationFailure, failure.version == manifest.version {
                 showWindow(.problem(title: "Couldn't prepare the update", message: failure.reason, retry: .preparation), userInitiated: true)
             } else {
@@ -1517,6 +1570,7 @@ final class UpdateController: ObservableObject {
     private func beginStaging(_ manifest: UpdateManifest) {
         #if NOW_NOTIFICATION_TESTS
         // Notification fixtures exercise offer state; archive/install coverage uses updater smoke.
+        smokeStagingRequests += 1
         return
         #else
         clearStaging()
@@ -1557,7 +1611,7 @@ final class UpdateController: ObservableObject {
     }
 
     func retryPreparation() {
-        guard let manifest = available else { return }
+        guard let manifest = available, !isBrewManaged else { return }
         beginStaging(manifest)
         presentAvailable(manifest, userInitiated: true)
     }
@@ -1578,6 +1632,7 @@ final class UpdateController: ObservableObject {
     // MARK: Install
 
     func install() {
+        guard !isBrewManaged else { return }
         guard installAttempt == nil else { return }
         guard let manifest = available else {
             showWindow(.problem(title: "No update staged", message: "Check for updates first.", retry: .check), userInitiated: true)
@@ -1714,6 +1769,10 @@ final class UpdateController: ObservableObject {
 #if NOW_TESTING
 // Test-only access to production transitions; absent from shipping compilation.
 extension UpdateController {
+    var smokeIsBrewManaged: Bool {
+        get { isBrewManaged }
+        set { isBrewManaged = newValue }
+    }
     var smokeStagedVersion: String? {
         get { stagedVersion }
         set { stagedVersion = newValue }

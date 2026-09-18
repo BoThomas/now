@@ -2933,6 +2933,38 @@ enum SelfTest {
         c.expect(UpdateLogic.installLocationProblem("/private/var/folders/xy/Ab/App Translocation/123/now.app") != nil, "translocated copy refused")
         c.expect(UpdateLogic.installLocationProblem("/Volumes/now/now.app") != nil, "disk image refused")
 
+        // -- Brew-management detection ---------------------------------------
+        // Probe-verified model (brew 7.0.1): the bundle is a REAL directory in
+        // the app dir and the Caskroom holds a tracking symlink back to it.
+        c.expect(BrewManagement.normalizedPath("/Applications/now.app") == "/Applications/now.app", "plain path normalizes to itself")
+        c.expect(BrewManagement.normalizedPath("/Applications/now.app/") == "/Applications/now.app", "trailing slash folded")
+        c.expect(BrewManagement.normalizedPath("/private/tmp/x/now.app") == "/tmp/x/now.app", "/private prefix folded")
+        c.expect(BrewManagement.normalizedPath("Applications/now.app") == nil, "relative path rejected")
+        let appleLink = BrewManagement.TrackingLink(linkPath: "/opt/homebrew/Caskroom/now/1.2.3/now.app",
+                                                     destination: "/Applications/now.app")
+        let intelLink = BrewManagement.TrackingLink(linkPath: "/usr/local/Caskroom/now/1.2.0/now.app",
+                                                    destination: "/Applications/now.app")
+        c.expect(BrewManagement.isBrewManaged(bundlePath: "/Applications/now.app", links: [appleLink]), "apple silicon tracking link matches")
+        c.expect(BrewManagement.isBrewManaged(bundlePath: "/Applications/now.app", links: [intelLink]), "intel tracking link matches")
+        c.expect(BrewManagement.isBrewManaged(bundlePath: "/Applications/now.app/", links: [appleLink]), "bundle spelling differences tolerated")
+        c.expect(BrewManagement.isBrewManaged(bundlePath: "/private/Applications/now.app", links: [appleLink]), "/private bundle spelling matches")
+        c.expect(!BrewManagement.isBrewManaged(bundlePath: "/Applications/now.app", links: []), "no tracking links means manual install")
+        let elsewhere = BrewManagement.TrackingLink(linkPath: "/opt/homebrew/Caskroom/now/1.2.3/now.app",
+                                                    destination: "/Applications/other.app")
+        c.expect(!BrewManagement.isBrewManaged(bundlePath: "/Applications/now.app", links: [elsewhere]), "link to another bundle does not match")
+        // Relative destinations resolve against the link's own directory.
+        // Five levels up from <prefix>/Caskroom/now/<version>/ reach the root.
+        let relativeLink = BrewManagement.TrackingLink(linkPath: "/opt/homebrew/Caskroom/now/1.2.3/now.app",
+                                                       destination: "../../../../../Applications/now.app")
+        c.expect(BrewManagement.resolvedDestination(of: relativeLink) == "/Applications/now.app", "relative destination resolves via link directory")
+        c.expect(BrewManagement.isBrewManaged(bundlePath: "/Applications/now.app", links: [relativeLink]), "relative tracking link matches")
+        c.expect(BrewManagement.resolvedDestination(of: BrewManagement.TrackingLink(linkPath: "/a/b/now.app", destination: "now.app")) == "/a/b/now.app", "sibling destination resolves")
+        // A custom app dir install (brew --appdir) is still tracked correctly:
+        // the tracking link points wherever brew actually put the bundle.
+        let customDirLink = BrewManagement.TrackingLink(linkPath: "/opt/homebrew/Caskroom/now/1.2.3/now.app",
+                                                        destination: "/Users/tboch/Applications/now.app")
+        c.expect(BrewManagement.isBrewManaged(bundlePath: "/Users/tboch/Applications/now.app", links: [customDirLink]), "custom app dir tracked through its link")
+
         c.notes.append("update decision matrix green")
     }
 }

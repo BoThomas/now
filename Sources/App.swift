@@ -572,6 +572,11 @@ enum NowApp {
             updateSmokeCLI(base)
             exit(0)
         }
+        if let index = arguments.firstIndex(of: "--update-smoke-brew") {
+            let base = updateCLIValue(after: index, arguments: arguments)
+            updateBrewSmokeCLI(base)
+            exit(0)
+        }
         if let reportPath = ProcessInfo.processInfo.environment["NOW_SMOKE_FAILURE_REPORT"], !reportPath.isEmpty {
             UpdateStaging.cleanupLaunchArtifacts(bundlePath: Bundle.main.bundlePath)
             let reason = ProcessInfo.processInfo.environment["NOW_UPDATE_ERROR"] ?? "unknown failure"
@@ -597,7 +602,7 @@ enum NowApp {
             exit(0)
         }
         #else
-        if arguments.contains("--update-smoke") {
+        if arguments.contains("--update-smoke") || arguments.contains("--update-smoke-brew") {
             print("Use scripts/update-smoke.sh with a separately built updater fixture.")
             exit(64)
         }
@@ -741,6 +746,8 @@ enum NowApp {
         let base = UpdateFetch.resolvedBase(baseArgument)
         let repo = UpdateFetch.resolvedRepo(repoArgument)
         print("NOW \(UpdateLogic.currentVersion) (build \(UpdateLogic.currentBuild))")
+        let brewManaged = BrewManagement.isBundleBrewManaged(bundlePath: Bundle.main.bundlePath)
+        print("BREW managed=\(brewManaged ? 1 : 0)\(brewManaged ? " upgrade=\(UpdateLogic.brewUpgradeCommand)" : "")")
         print("ACCEPTS \(UpdateLogic.pinnedFingerprints.joined(separator: " "))")
         for fingerprint in UpdateLogic.pinnedFingerprints {
             print("DR \(UpdateLogic.updateRequirement(fingerprint: fingerprint))")
@@ -986,6 +993,93 @@ enum NowApp {
             if let value = env[key], !value.isEmpty { extraEnv[key] = value }
         }
         return extraEnv
+    }
+
+    /// Hidden brew-mode scenario: proves against a locally served release
+    /// that (a) production Caskroom detection matches the harness-laid
+    /// tracking links, (b) the offered action is the copyable brew command,
+    /// and (c) the pure staging gate keeps brew mode from ever downloading.
+    /// Arguments: `--brew-caskroom <dir>` (search root instead of the default
+    /// prefixes) and `--brew-expect <0|1>` (expected detection; default 1).
+    /// Exit codes: 0 all assertions held, 3 up-to-date, 4 error/mismatch.
+    static func updateBrewSmokeCLI(_ baseArgument: String?) {
+        MainActor.assumeIsolated {
+            updateBrewSmokeCLIBody(baseArgument)
+        }
+    }
+
+    @MainActor private static func updateBrewSmokeCLIBody(_ baseArgument: String?) {
+        let arguments = ProcessInfo.processInfo.arguments
+        var repoArgument: String?
+        if let index = arguments.firstIndex(of: "--update-repo"), index + 1 < arguments.count {
+            repoArgument = arguments[index + 1]
+        }
+        var caskroomArgument: String?
+        if let index = arguments.firstIndex(of: "--brew-caskroom"), index + 1 < arguments.count {
+            caskroomArgument = arguments[index + 1]
+        }
+        var expect = 1
+        if let index = arguments.firstIndex(of: "--brew-expect"), index + 1 < arguments.count,
+           let value = Int(arguments[index + 1]), (0...1).contains(value) {
+            expect = value
+        }
+        let caskrooms = caskroomArgument.map { [$0] } ?? BrewManagement.defaultCaskroomPaths
+        let bundlePath = Bundle.main.bundlePath
+        let detected = BrewManagement.isBundleBrewManaged(bundlePath: bundlePath, caskroomPaths: caskrooms)
+        print("SMOKE: BREW old app \(bundlePath) v\(UpdateLogic.currentVersion)")
+        print("SMOKE: BREW caskrooms=\(caskrooms.joined(separator: ","))")
+        guard (detected ? 1 : 0) == expect else {
+            print("SMOKE: ERROR brew detection reported \(detected ? 1 : 0), expected \(expect)")
+            exit(4)
+        }
+        print("SMOKE: BREW detected=\(detected ? 1 : 0)")
+
+        let base = UpdateFetch.resolvedBase(baseArgument)
+        let repo = UpdateFetch.resolvedRepo(repoArgument)
+        guard let url = UpdateFetch.latestReleaseURL(base: base, repo: repo) else {
+            print("SMOKE: ERROR invalid URL for base \(base)")
+            exit(4)
+        }
+        let fetchSemaphore = DispatchSemaphore(value: 0)
+        var outcome: UpdateFetch.Outcome?
+        Task {
+            outcome = await UpdateFetch.fetch(url: url, base: base)
+            fetchSemaphore.signal()
+        }
+        runLoopWait(fetchSemaphore)
+        guard let outcome else {
+            print("SMOKE: ERROR no fetch outcome")
+            exit(4)
+        }
+        if outcome.status == 404 {
+            print("SMOKE: UPTODATE 404 no releases")
+            exit(3)
+        }
+        if let error = outcome.error {
+            print("SMOKE: ERROR \(error)")
+            exit(4)
+        }
+        guard UpdateFetch.isSuccessfulStatus(outcome.status), let data = outcome.data,
+              let manifest = UpdateLogic.parseLatestRelease(data) else {
+            print("SMOKE: ERROR no usable release (status \(outcome.status.map(String.init) ?? "?"))")
+            exit(4)
+        }
+        let decision = UpdateLogic.decide(manifest: manifest, currentVersion: UpdateLogic.currentVersion, skipped: nil, now: Date(), minAge: 0)
+        guard case .available = decision else {
+            print("SMOKE: UPTODATE \(decision)")
+            exit(3)
+        }
+        print("SMOKE: BREW latest v\(manifest.version)")
+        // The brew-mode presentation offers the copyable upgrade command —
+        // and the pure staging gate must never let brew mode download, not
+        // even for an explicit user action.
+        print("SMOKE: BREW action=copy-command \(UpdateLogic.brewUpgradeCommand)")
+        guard !UpdateLogic.shouldBeginStaging(brewManaged: true, version: manifest.version, userInitiated: true, state: UpdateState()) else {
+            print("SMOKE: ERROR brew mode would stage an update")
+            exit(4)
+        }
+        print("SMOKE: BREW staging skipped")
+        exit(0)
     }
 
     #endif

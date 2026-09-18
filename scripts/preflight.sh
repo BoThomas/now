@@ -21,6 +21,7 @@ NOW_TEST_CONFIGURATION=debug ./scripts/test-core.sh
 NOW_TEST_CONFIGURATION=release ./scripts/test-core.sh
 python3 scripts/module-boundary-smoke.py --parse
 python3 scripts/update-demo-tests.py
+python3 scripts/tap-bump-tests.py
 export NOW_TEST_CONFIGURATION=release
 python3 scripts/notification-smoke.py --all-smokes
 python3 scripts/reminder-state-smoke.py
