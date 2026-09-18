@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.1.0] - 2026-09-18
+
+### Added
+
+- Set up to three reminder times per meeting, with coordinated Snooze and Join behavior.
+- Choose whether fullscreen reminders appear on the focused display or the main display.
+- Install and update now through Homebrew, with a copyable upgrade command for managed
+  installations.
+
+### Improved
+
+- See release notes for skipped versions together in What's New.
+- More readable feature guides and update windows, with adaptive sizing and scrolling.
+
+### Fixed
+
+- More reliable foreground focus for reminders, settings, setup, and update windows.
+- Prevent feature-guide changes from applying after cancellation or conflicting settings edits.
+
 ## [2.0.0] - 2026-09-10
 
 ### Added
@@ -247,3 +266,4 @@
 [1.9.0]: https://github.com/BoThomas/now/compare/v1.8.0...v1.9.0
 [1.10.0]: https://github.com/BoThomas/now/compare/v1.9.0...v1.10.0
 [2.0.0]: https://github.com/BoThomas/now/compare/v1.10.0...v2.0.0
+[2.1.0]: https://github.com/BoThomas/now/compare/v2.0.0...v2.1.0
