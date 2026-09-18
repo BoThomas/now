@@ -59,8 +59,8 @@ isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
       `brew install --cask <user>/tap/now`. Fully qualified names install with item-level trust; the
       short name `now` requires `brew trust --cask <user>/tap/now` first, so the README leads with
       the full form.
-- [ ] Cask stanzas: `version` (plain `X.Y.Z`, no `v`), `sha256` of the published release ZIP,
-      `url` using `#{version}` interpolation
+- [ ] Cask stanzas: `version` (plain `X.Y.Z`, no `v`), `sha256` of the published release ZIP, `url`
+      using `#{version}` interpolation
       (`https://github.com/BoThomas/now/releases/download/v#{version}/now-v#{version}.zip`) so
       version bumps touch only the `version`/`sha256` stanzas, `name "now"` (required stanza),
       `desc`, `homepage`, `app "now.app"` (the ZIP contains exactly one top-level `now.app`), and
@@ -84,18 +84,18 @@ isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
 
 ## Slice 2: release automation and ordering
 
-- [ ] Bump the tap from the release pipeline after publication: `release.sh` keeps its existing
+- [x] Bump the tap from the release pipeline after publication: `release.sh` keeps its existing
       sequence through `gh release create`, then computes the SHA-256 of the final local ZIP
       (byte-identical to the uploaded asset), commits and pushes the cask version bump to the tap
       repository. Ordering rationale: the release is already live, so the only transient state is a
       briefly stale cask — brew users see the update a few seconds later. The reverse order would
       expose fresh installs to an asset URL that 404s until the release exists, which is the
       strictly worse failure.
-- [ ] The bump step clones the tap repository into a temporary directory at a pinned ref, never a
+- [x] The bump step clones the tap repository into a temporary directory at a pinned ref, never a
       durable local checkout (`release.sh` guarantees a clean tree only for `now`). Extend the
       `release_failed` trap with a recovery phase for the bump — "release published, cask stale:
       rerun the bump" — alongside the existing per-phase instructions.
-- [ ] Extend `release.sh --dry-run` to print the planned tap bump (repository, cask path, version,
+- [x] Extend `release.sh --dry-run` to print the planned tap bump (repository, cask path, version,
       SHA-256, commit message) without mutating anything; preflight continues to fetch or mutate
       nothing in either repository.
 - [ ] Credentials: none beyond what `release.sh` already gates on. It already fails without
@@ -111,7 +111,7 @@ isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
 
 ## Slice 3: brew-managed detection
 
-- [ ] Pure, nonisolated helper beside the updater policy in the shell (the updater lives in the
+- [x] Pure, nonisolated helper beside the updater policy in the shell (the updater lives in the
       shell target, `Sources/Updater.swift`; NowCore has no updater, and
       `scripts/module-boundary-smoke.py` guards that ownership): decide brew management from the
       resolved bundle path. Probe-corrected model (brew 7.0.1): cask apps are real bundles in the
@@ -122,40 +122,40 @@ isolated local probe (docs.brew.sh; brew 7.0.1, September 2026).
       the version directory keeps the check stable across upgrades. Symlink and path probing is the
       platform adapter, the match decision is the testable policy, and no `brew` CLI is invoked at
       runtime.
-- [ ] Selftest coverage, deterministic and EventKit-free: both default prefixes, versioned Caskroom
+- [x] Selftest coverage, deterministic and EventKit-free: both default prefixes, versioned Caskroom
       directories, matching versus unrelated symlink targets, absent Caskroom, and custom
       app-directory install locations.
-- [ ] Accepted heuristic risks, documented as behavior: a non-default Homebrew prefix or a user
+- [x] Accepted heuristic risks, documented as behavior: a non-default Homebrew prefix or a user
       manually copying the app elsewhere breaks the symlink match, and the app falls back to
       manual-updater behavior.
 
 ## Slice 4: brew mode in the updater
 
-- [ ] In brew mode, skip `UpdateFetch` staging, `UpdateStaging` extraction, the nested signature
+- [x] In brew mode, skip `UpdateFetch` staging, `UpdateStaging` extraction, the nested signature
       validation path, `UpdateInstaller`, and the startup-health acknowledgment contract. The
       offered update action becomes a copyable command containing the exact tap/cask name.
-- [ ] Keep version comparison, the six-hour spacing, and the offer presentation. Notifications that
+- [x] Keep version comparison, the six-hour spacing, and the offer presentation. Notifications that
       announce a staged or installed update must not fire in brew mode; the opt-in update-available
       notification can stay.
-- [ ] Transition handling: when brew mode is first detected, discard any already-staged update and
+- [x] Transition handling: when brew mode is first detected, discard any already-staged update and
       pending-install state instead of leaving a stale staged bundle or a pending marker that brew
       mode can never consume.
-- [ ] UI copy states that the running instance stays on the old version until relaunch, and the
+- [x] UI copy states that the running instance stays on the old version until relaunch, and the
       copied command is written to the pasteboard only on explicit user action.
-- [ ] "Update Complete", rollback, and backup flows remain in-app-updater-only and unreachable in
+- [x] "Update Complete", rollback, and backup flows remain in-app-updater-only and unreachable in
       brew mode.
-- [ ] Extend `scripts/update-smoke.sh` with a brew-mode scenario proving no staging or install is
+- [x] Extend `scripts/update-smoke.sh` with a brew-mode scenario proving no staging or install is
       attempted and the command presentation path is used.
 
 ## Slice 5: documentation
 
 - [ ] README: Homebrew install alongside the manual ZIP path; keep the manual quarantine guidance
       for manual installs only.
-- [ ] `docs/guide.md`: describe brew-mode update behavior and what differs from the in-app updater.
+- [x] `docs/guide.md`: describe brew-mode update behavior and what differs from the in-app updater.
 - [ ] Refresh the wiki through the AutoWiki skill (as `AGENTS.md` prescribes) once the feature
       lands: brew mode, detection, and the tap pipeline in `autowiki/development-and-updates.md`,
       referencing the signing notes for the TCC/identity coupling.
-- [ ] Run `npm run format-docs` and `npm run check-docs` after the Markdown edits.
+- [x] Run `npm run format-docs` and `npm run check-docs` after the Markdown edits.
 
 ## Verification gates
 
