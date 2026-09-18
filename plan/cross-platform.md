@@ -1,9 +1,11 @@
-# Current work target: cross-platform groundwork via core extraction
+# Cross-platform support: groundwork record and port roadmap
 
-Status: complete and merged into `main` through PR #17, merge commit `21a8452`. Shared
-calendar/cache/reminder policy and POSIX storage are implemented and validated on Linux and macOS.
-All macOS acceptance gates passed. No portability prerequisite blocks new macOS features; remaining
-product/platform shell decisions and implementation belong to a future shipping port.
+Status: the groundwork phase is complete and merged into `main` through PR #17, merge commit
+`21a8452`. Shared calendar/cache/reminder policy and POSIX storage are implemented and validated on
+Linux and macOS, and all macOS acceptance gates passed. No portability prerequisite blocks new macOS
+features. This file is the anchor for resuming Windows/Linux port work later: the roadmap below
+records what is already portable, which shell-owned gaps remain, and the agreed order of the next
+steps. No port work is scheduled yet.
 
 Completed branch: `feat/cross-platform-core`. Starting point: build/test modernization merged
 through PR #16, merge commit `d01dbd786159bc63b088dfc1254c880d088eccd9`.
@@ -11,6 +13,68 @@ through PR #16, merge commit `d01dbd786159bc63b088dfc1254c880d088eccd9`.
 The implementation and validation notes below preserve the sequence and authorization at each
 historical checkpoint. Their references to pending commits or merges describe that stage, not the
 current repository state.
+
+## Port roadmap: where to resume
+
+### Portable baseline (already done)
+
+Everything under `Sources/NowCore` compiles off the Apple SDK and is validated on the recorded Linux
+host, in Swift 5 mode with complete strict concurrency:
+
+- ICS parsing, recurrence expansion, meeting-link policy (`ICS.swift`, `Calendar/`), including the
+  Windows/Outlook TZID → IANA mapping for feeds.
+- Plain models, tolerant decoding/recovery, filtering (`Models.swift`, `PreferenceDecoding.swift`,
+  `TitleFilter.swift`), with decoder-local color policy so native palettes stay injected.
+- Cache snapshot policy and the serial POSIX storage adapter for macOS/Linux with directory
+  injection (`Storage/CalendarEventCache.swift`).
+- Reminder policy: occurrence identity, routing, ledger reconciliation, snooze, catch-up
+  (`Reminders/`).
+- SHA-256 identities via CryptoKit on macOS and pinned Swift Crypto 4.5.2 on Linux/Windows
+  (`Support/StableDigest.swift`); the Windows dependency condition already exists in
+  `Package.swift`.
+
+Portable checks that any port branch must keep passing: `./scripts/test-core.sh` (debug and
+release), `python3 scripts/analysis-smoke.py --compiler-only`, and
+`python3 scripts/module-boundary-smoke.py --parse`, in addition to the macOS gates in `AGENTS.md`.
+
+### Shell-owned gaps without a portable equivalent
+
+| Area                   | macOS owner today                                                                     | Needed for a port                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| App/UI shell           | AppKit/SwiftUI in `Sources/App.swift`, `MenuBar.swift`, `SettingsUI.swift`, …         | UI framework decision (e.g. SwiftCrossUI) after the probes below; tray/menu integration                                         |
+| Calendar access        | EventKit in `Sources/NativeCalendars.swift`                                           | Native-account equivalent or an explicit ICS-only first port                                                                    |
+| Notification transport | UserNotifications in `Sources/Notifications.swift`                                    | Native transport whose actions survive a cold restart                                                                           |
+| Local storage          | POSIX adapter, `#if os(macOS) \|\| os(Linux)` in `Storage/CalendarEventCache.swift`   | A separate Windows filesystem adapter (atomic replacement, permissions, quarantine semantics); Linux already shares the adapter |
+| Live preferences       | Combine/OSLog-backed store in `Sources/Preferences.swift`                             | Portable persistence with the same tolerant recovery rules (core decoding already exists)                                       |
+| Autostart              | `SMAppService` seam in `Sources/AppStore.swift`                                       | Per-desktop autostart (Linux `~/.config/autostart`, Windows Registry run key, …)                                                |
+| Meeting detection      | CoreAudio probe in `Sources/MeetingActivity.swift`                                    | Own probe or drop from first-port scope; debouncing policy is already core                                                      |
+| Updates/signing        | Code-signing-based updater in `Sources/Updater.swift`, `Sources/UpdateDownload.swift` | Per-platform packaging and update-trust design                                                                                  |
+| Text URL discovery     | `NSDataDetector` adapter in `Sources/ICS.swift`                                       | Portable detector or explicit-link-only parsing (selection policy is core)                                                      |
+| Native colors          | macOS palette accessors in `Sources/Models.swift`                                     | Per-platform palette injection (decoder-local color policy already exists)                                                      |
+
+### Resume sequence
+
+1. Product decision first: target OS and minimum feature set (proposal: ICS feeds, agenda/tray,
+   reminders, Join/Snooze, offline recovery) and whether native calendar accounts are required. This
+   choice drives the UI framework and the calendar-access gap. The groundwork-era probes are
+   itemized in “Product and shell decisions before a port” below.
+2. Target-platform probes before any UI-framework choice: background reminder visibility/focus,
+   notification actions after cold restart, tray/menu support, wake/catch-up, and autostart on the
+   actual target desktops (including the relevant Linux desktop environments).
+3. Concrete first technical steps per platform:
+   - Linux: a headless shell probe — a new executable target consuming only `NowCore` (ICS-only
+     feeds, injected directories, file-based preferences) that runs the fetch → merge → reminder
+     loop on a real desktop. This validates timers, wake behavior, and storage before any UI work.
+   - Windows: toolchain setup and validation plus the filesystem storage adapter first — the
+     documented gap. Passing Linux proves nothing for Windows; Windows gets its own gates.
+4. Only then: shell/UI framework, packaging, and update trust per platform.
+
+### Constraints that carry over
+
+From `AGENTS.md`, unchanged by the groundwork merge: never compile core sources into a second
+target; keep `package` access and Swift 5 language mode; keep the pinned Swift Crypto dependency
+(Swift 6.1+ compiler); Linux validation does not replace macOS signing/GUI/EventKit gates; do not
+claim Windows support without Windows toolchain and integration evidence.
 
 ## Objective and sequence
 
