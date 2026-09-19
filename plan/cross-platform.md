@@ -63,7 +63,8 @@ release), `./scripts/test-headless.sh` (debug and release),
    see "Product decision — 2026-09-19".
 2. Target-platform probes before any UI-framework choice: background reminder visibility/focus,
    notification actions after cold restart, tray/menu support, wake/catch-up, and autostart on the
-   actual target desktops (including the relevant Linux desktop environments).
+   actual target desktops (including the relevant Linux desktop environments). Hyprland done
+   2026-09-20 in an Omarchy VM — see "Hyprland desktop probes — 2026-09-20"; GNOME and KDE remain.
 3. Concrete first technical steps per platform:
    - Linux: a headless shell probe — a new executable target consuming only `NowCore` (ICS-only
      feeds, injected directories, file-based preferences) that runs the fetch → merge → reminder
@@ -516,3 +517,48 @@ Validation on this host:
   or desktop exists in this container. No tray/menu, native notification actions, wake-from-sleep or
   autostart behavior is validated — those remain real-desktop probes per the resume sequence. No
   Windows work is claimed.
+
+### Hyprland desktop probes — 2026-09-20
+
+First row of the probe matrix, run in an Omarchy VM (try-omarchy) on an Apple Silicon Mac: Arch
+Linux ARM aarch64, kernel 7.2.6, Hyprland 0.56.1 (Wayland), Quickshell as the shell — it owns both
+`org.freedesktop.Notifications` and `org.kde.StatusNotifierWatcher`; PipeWire 1.6.8 audio. Probe
+scripts and state stayed in `~/now-probes/` outside the repo; nothing was committed from the VM.
+macOS gates were unavailable there and are recorded as such.
+
+New validated host class: official Swift 6.4 Ubuntu 24.04 aarch64 toolchain (no Swift ≥ 6.1 exists
+in the Arch ARM repos). It runs on Arch glibc 2.43 only with soname-compat symlinks
+(ncursesw/form/panel, libedit, libxml2, libpython) installed in `/usr/lib` — a dependency note for
+the planned AUR PKGBUILD. All portable gates pass unchanged on aarch64/Arch: core 251 checks (debug
+and release), headless 51, module-boundary 11 configurations, compiler smoke. This is the first
+non-x86_64, non-Debian validation of the portable baseline.
+
+Probe results:
+
+1. Notification actions: **partial**. `GetCapabilities` advertises `actions`, but Quickshell's
+   notification service renders no per-action buttons; exactly one implicit `default` action fires
+   on toast-body click, and named actions (Join/Snooze/Dismiss) are silently dropped. Design
+   consequence (pending the GNOME/KDE rows before deciding): the portable common denominator is a
+   default-action-only toast; multi-action Join/Snooze needs either per-desktop capability detection
+   or an app-owned alert window, which mirrors the macOS fullscreen-alert path.
+2. Notification daemon restart: **works**. Killing the shell respawns it through an exit-code
+   watchdog (~4 s, ≤5 relaunches/min, then gives up; supervision is the shell launcher, not
+   systemd), and notifications plus the default action keep working. During the gap `Notify` calls
+   fail — the Linux transport must watch the bus name and retry/re-register.
+3. Tray: **infrastructure works**. StatusNotifierWatcher and a host are present and owned by the
+   shell, with zero items registered on the box. Registering a real item (and menu/icon rendering)
+   stays unverified until the tray prototype runs; re-registration must tolerate watcher restarts.
+4. Autostart: **honored via systemd** — `xdg-autostart-generator` materializes
+   `~/.config/autostart/*.desktop` as user units at login; entries created mid-session apply at next
+   login. The "start at login" toggle must set that expectation. The marker-file verification after
+   an actual re-login is still pending.
+5. Sound: **works** through PipeWire's host-forwarded path (audible beep confirmed). The install
+   ships an empty `/usr/share/sounds`, so the port must bundle its single reminder sound rather than
+   assume a freedesktop sound theme.
+6. Freeze catch-up: **works**. A live probe run was SIGSTOP-frozen for 232 s across the reminder's
+   due instant; the first post-resume tick delivered the reminder. NowCore's tick/ledger model needs
+   no wake-specific handling — the remaining gap is only the native notification transport.
+
+Open small items: confirm the autostart marker after the next re-login; render-test a real
+StatusNotifierItem with the eventual tray prototype. GNOME and KDE probe rows remain (separate VMs)
+before the UI-framework choice.
