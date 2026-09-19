@@ -34,7 +34,8 @@ host, in Swift 5 mode with complete strict concurrency:
   `Package.swift`.
 
 Portable checks that any port branch must keep passing: `./scripts/test-core.sh` (debug and
-release), `python3 scripts/analysis-smoke.py --compiler-only`, and
+release), `./scripts/test-headless.sh` (debug and release),
+`python3 scripts/analysis-smoke.py --compiler-only`, and
 `python3 scripts/module-boundary-smoke.py --parse`, in addition to the macOS gates in `AGENTS.md`.
 
 ### Shell-owned gaps without a portable equivalent
@@ -65,6 +66,9 @@ release), `python3 scripts/analysis-smoke.py --compiler-only`, and
    - Linux: a headless shell probe — a new executable target consuming only `NowCore` (ICS-only
      feeds, injected directories, file-based preferences) that runs the fetch → merge → reminder
      loop on a real desktop. This validates timers, wake behavior, and storage before any UI work.
+     Started: the probe target exists and its deterministic selftest passes in a headless Debian 12
+     container (see "Linux headless shell probe — 2026-09-19"); validation on a real desktop,
+     including wake and autostart, remains.
    - Windows: toolchain setup and validation plus the filesystem storage adapter first — the
      documented gap. Passing Linux proves nothing for Windows; Windows gets its own gates.
 4. Only then: shell/UI framework, packaging, and update trust per platform.
@@ -432,3 +436,49 @@ All requested macOS acceptance gates passed. At this validation checkpoint, chan
 the feature branch and no commit, push, PR, merge or release had been performed in that stage. The
 fixes and acceptance record were subsequently committed as `80e932e` and merged through PR #17
 (`21a8452`). Product/shell decisions above remain next steps when port development resumes.
+
+### Linux headless shell probe — 2026-09-19
+
+Implemented the resume sequence's first Linux technical step on the recorded Debian 12 x86_64 host
+(Swift 6.3.3, Swift 5 mode, complete strict concurrency, warnings as errors), in a headless
+container. New executable target `NowHeadless` (`Sources/Headless`, selected by
+`NOW_TEST_SUITE=headless`, product `now-headless`) consumes only the `NowCore` library — the module
+boundary smoke now covers eleven configurations — and owns, per the shell-owned gaps table:
+
+- File-based preferences and reminder history (`preferences.json`, `ledger.json`) with atomic
+  0700/0600 POSIX writes and the core tolerant-decoding/audit rules; core `Persisted`/`AppSettings`
+  recovery is exercised verbatim (damaged fields snap back, siblings survive, corrupt ledger
+  resets).
+- ICS-only feeds through a bounded transport: `file://` for offline fixtures and `http(s)` via
+  `URLSession` (5 MB cap mirroring the shell transport); a localhost HTTP feed fetch was exercised
+  manually.
+- A portable text URL discovery adapter (`PortableLinkDetector`): explicit http(s) token scanning
+  with sentence-punctuation trimming, parenthesized links, and entity-decoded variants, feeding
+  core's `LinkExtractor` selection policy. It is a deliberate first-port adapter; no
+  `NSDataDetector` parity is claimed, and macOS keeps its native adapter.
+- The fetch → merge → commit → tick loop mirroring `AppStore` ordering through core owners: fetch
+  generations, `CalendarSnapshotMerge` (failed/stale feeds retain accepted snapshots; failures never
+  become successful empty results), `commitEvents` reconciliation (handled-lead retention,
+  reschedule re-arm for fullscreen, mute ratchet), cache snapshot save/restore with injected
+  directories, launch catch-up boundary, and routing through `NotificationLogic`/`SnoozePolicy`.
+  Delivery is a logged line — the native notification transport gap stays open.
+- Join/Snooze/Pause agenda actions through `SnoozePolicy` and the shared ledger.
+
+Validation on this host:
+
+- `./scripts/test-headless.sh`: **51 checks** (debug and release), covering: portable link discovery
+  and core selection integration; preferences/ledger round-trip, recovery and file permissions; feed
+  materialization (window filtering, muted-by-filter, decoder-local palette); reminder lifecycle
+  (lead firing, no refire, snooze quiet/expiry, join suppression, pause blocking with usable
+  agenda); reschedule re-arm; failed-feed retention and disabled-calendar pruning; offline cache
+  restore; real cross-process restarts (children re-run the binary against the same state directory:
+  handled and snoozed state survives, catch-up delivery handled once, private file modes); and a
+  bounded live one-second tick loop delivering a reminder in real time.
+- Re-ran the portable gates after the target changes: core 251 checks (debug/release),
+  `python3 scripts/analysis-smoke.py --compiler-only`, and
+  `python3 scripts/module-boundary-smoke.py --parse` (now including `headless`) all pass. SwiftLint
+  0.65.1 (focused rule set) reports 0 violations for the new files.
+- macOS gates (signed build, selftest, full analysis, GUI) were not run here: no Apple SDK, keychain
+  or desktop exists in this container. No tray/menu, native notification actions, wake-from-sleep or
+  autostart behavior is validated — those remain real-desktop probes per the resume sequence. No
+  Windows work is claimed.

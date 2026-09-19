@@ -60,12 +60,14 @@ keys, or change keychain trust/access settings to work around it.
 
 For core changes, also run `./scripts/test-core.sh`,
 `NOW_TEST_CONFIGURATION=release ./scripts/test-core.sh`, and
-`python3 scripts/module-boundary-smoke.py --parse`. These use the host Swift toolchain without the
-macOS SDK wrapper. On a Linux devbox, record the macOS build/GUI/signing gates as unavailable; core
-tests do not replace them. Analysis-tooling changes can additionally exercise the portable compiler
-gates with `python3 scripts/analysis-smoke.py --compiler-only`. With pinned SwiftLint available,
-also use `python3 scripts/analysis-smoke.py --lint-only` for portable lint-gate probes. The default
-analyzer still checks the full macOS SDK configurations.
+`python3 scripts/module-boundary-smoke.py --parse`. For changes to the headless Linux probe
+(`Sources/Headless`), also run `./scripts/test-headless.sh` in both configurations. These use the
+host Swift toolchain without the macOS SDK wrapper. On a Linux devbox, record the macOS
+build/GUI/signing gates as unavailable; core tests do not replace them. Analysis-tooling changes can
+additionally exercise the portable compiler gates with
+`python3 scripts/analysis-smoke.py --compiler-only`. With pinned SwiftLint available, also use
+`python3 scripts/analysis-smoke.py --lint-only` for portable lint-gate probes. The default analyzer
+still checks the full macOS SDK configurations.
 
 The pinned Swift Crypto dependency requires a Swift 6.1+ compiler; app/core language mode remains
 Swift 5. Commit `Package.resolved` changes deliberately. macOS hashes use CryptoKit; portable hashes

@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-SUITES = [None, "core", "selftest", "notification", "reminder", "cache", "fetch", "workload", "parser", "updater"]
+SUITES = [None, "core", "headless", "selftest", "notification", "reminder", "cache", "fetch", "workload", "parser", "updater"]
 
 
 def main():
@@ -24,7 +24,7 @@ def main():
         # Dependency fetch progress is allowed; manifest warnings are not.
         assert "warning:" not in result.stderr, result.stderr
         targets = {target["name"]: target for target in json.loads(result.stdout)["targets"]}
-        name = "NowApp" if suite is None else "NowCoreTests" if suite == "core" else "NowHarness"
+        name = "NowApp" if suite is None else "NowCoreTests" if suite == "core" else "NowHeadless" if suite == "headless" else "NowHarness"
         assert set(targets) == {"NowCore", name}, targets.keys()
         core, consumer = targets["NowCore"], targets[name]
         assert consumer["target_dependencies"] == ["NowCore"], consumer
@@ -34,10 +34,13 @@ def main():
         assert all(source.is_relative_to(ROOT / "Sources/NowCore") for source in core_sources)
         if suite == "core":
             assert all(source.is_relative_to(ROOT / "Tests/NowCoreTests") for source in sources)
+        elif suite == "headless":
+            assert all(source.is_relative_to(ROOT / "Sources/Headless") for source in sources), sources
         else:
             assert not any(source.is_relative_to(ROOT / "Tests/NowCoreTests") for source in sources)
+            assert not any(source.is_relative_to(ROOT / "Sources/Headless") for source in sources)
         if args.parse:
-            flags = [] if suite in (None, "core") else ["-D", "NOW_TESTING", "-D", "NOW_" + suite.upper() + "_TESTS"]
+            flags = [] if suite in (None, "core", "headless") else ["-D", "NOW_TESTING", "-D", "NOW_" + suite.upper() + "_TESTS"]
             subprocess.run(["swiftc", "-frontend", "-parse", "-swift-version", "5", "-package-name", "now",
                             "-module-name", name] + flags + list(map(str, sources)), cwd=ROOT, check=True)
         print("PASS: module ownership" + (" / syntax only" if args.parse else "") + ": " + (suite or "shipping"))
