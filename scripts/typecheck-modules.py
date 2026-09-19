@@ -37,8 +37,12 @@ def main():
                                      "-emit-module-path", str(modules / "NowCore.swiftmodule")],
                  sorted(Path("Sources/NowCore").rglob("*.swift"))):
         return 1
+    # The shell excludes every separate consumer module: NowCore itself and the
+    # headless probe (a distinct NowCore consumer whose strict concurrency is
+    # checked by scripts/test-headless.sh, not by flattening it into the app).
     shell = sorted(source for source in Path("Sources").rglob("*.swift")
-                   if not source.is_relative_to(Path("Sources/NowCore")))
+                   if not source.is_relative_to(Path("Sources/NowCore"))
+                   and not source.is_relative_to(Path("Sources/Headless")))
     configurations = [
         ("concurrency-production", "NowApp", [], shell),
         ("concurrency", "NowHarness", ["-D", "NOW_TESTING", "-D", "NOW_SELFTEST_TESTS"],
