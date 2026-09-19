@@ -58,7 +58,9 @@ release), `./scripts/test-headless.sh` (debug and release),
 1. Product decision first: target OS and minimum feature set (proposal: ICS feeds, agenda/tray,
    reminders, Join/Snooze, offline recovery) and whether native calendar accounts are required. This
    choice drives the UI framework and the calendar-access gap. The groundwork-era probes are
-   itemized in “Product and shell decisions before a port” below.
+   itemized in “Product and shell decisions before a port” below. Decided 2026-09-19: Linux first,
+   ICS-only, no meeting detection, plan baseline, Wayland-only, single system sound, AUR packaging —
+   see "Product decision — 2026-09-19".
 2. Target-platform probes before any UI-framework choice: background reminder visibility/focus,
    notification actions after cold restart, tray/menu support, wake/catch-up, and autostart on the
    actual target desktops (including the relevant Linux desktop environments).
@@ -209,15 +211,47 @@ installed app's data.
 
 ## Product and shell decisions before a port
 
-Proposed first-port scope: ICS feeds, agenda/tray, reminders, Join/Snooze and offline recovery.
-Decide the first shipping OS and whether native calendar accounts and meeting detection are required
-before selecting a UI framework. These are proposed requirements, not promised parity.
+Decided 2026-09-19 — see "Product decision — 2026-09-19" below for the record. The remaining open
+item for this section is the UI framework, which is chosen only after the target-platform probes.
 
 Prototype background reminder visibility/focus, notification actions after cold restart, tray/menu
 support, wake/catch-up and autostart on the actual target desktops (including relevant Linux desktop
 environments). Packaging/update trust needs a per-platform design. SwiftCrossUI or another toolkit
 is chosen after these probes, not assumed by the core extraction. No UI dependency or production
 Windows/Linux shell is added in this stage.
+
+### Product decision — 2026-09-19
+
+The first-port product decisions are settled; they drive the probe matrix and the eventual UI
+framework choice, and they do not authorize shell work before the probes pass.
+
+- First target OS: **Linux**. Windows keeps its separate toolchain/storage gate order and is not
+  part of this port.
+- Calendar sources: **ICS-only** (subscription feeds, as validated by `NowCore` and the headless
+  probe). Native calendar accounts (Evolution Data Server/CalDAV) are a later slice, not a v1
+  requirement.
+- Meeting detection: **out of scope** for v1. In-meeting delivery modes degrade gracefully with
+  activity `unknown` (verified in core policy); no PipeWire/PulseAudio process-audio probe is built
+  for the first port.
+- Minimum feature set: the plan baseline — ICS feeds, agenda in a tray, reminders delivered through
+  native notifications, Join/Snooze notification actions, offline recovery, and autostart.
+  Fullscreen-style reminder windows are not in v1; native notification delivery is the only reminder
+  transport (the macOS fullscreen mode stays macOS-only until a port probe justifies more).
+- Display server: **Wayland-only**. All target desktops default to Wayland; X11 support is not in
+  v1.
+- Reminder sound: one built-in sound played through the system audio server (PipeWire/Pulse
+  compatible); no sound picker and no custom sounds in v1.
+- Probe desktops: **GNOME, KDE, and Hyprland** — Omarchy, verified at omarchy.org on 2026-09-19, is
+  Arch + Hyprland (Wayland) with Quickshell as its shell. All three differ materially in tray (GNOME
+  extension vs KDE StatusNotifierItem vs Quickshell-hosted), so the tray probe must cover each.
+- Packaging: **AUR first** (PKGBUILD), updated through pacman. No in-app updater on Linux; the
+  update-check UI is suppressed there. Other formats (`.deb`, Flatpak) are not in v1 — Flatpak's
+  portals would change the notification/autostart probe matrix.
+
+Consequences for the next steps: the step-3 probes run on GNOME, KDE and Hyprland under Wayland
+only, covering notification actions surviving cold restart, tray/menu support per desktop,
+wake/catch-up, autostart via `~/.config/autostart`, and single-sound playback. Only after those
+probes is a UI framework (e.g. SwiftCrossUI or a Qt/Quickshell-aligned alternative) chosen.
 
 ## Handoff
 
