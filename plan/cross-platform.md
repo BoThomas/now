@@ -561,4 +561,48 @@ Probe results:
 
 Open small items: confirm the autostart marker after the next re-login; render-test a real
 StatusNotifierItem with the eventual tray prototype. GNOME and KDE probe rows remain (separate VMs)
-before the UI-framework choice.
+before the UI-framework choice. Both open items were closed by the second Hyprland probe round
+below.
+
+### Hyprland probe round 2 — tray item and notification behavior — 2026-09-21
+
+Same Omarchy VM, same rules (probe scripts under `~/now-probes/`, nothing committed). Ran at repo
+commit `a3c973a`; Swift 6.4 re-verified.
+
+Closed leftovers:
+
+- Autostart marker: **works** — created ~4 s after the first post-creation login, exactly the
+  next-login semantics the generator predicts.
+- Real StatusNotifierItem: **works end to end** — icon rendered in the Quickshell bar, left-click
+  delivered `Activate` (coordinates always 0,0 — no positional info), property updates reached the
+  bar, and a watcher restart (kill → new owner ~1.2 s) was survived by idempotent re-registration
+  (~1.5 s; the watcher dedupes duplicate registrations). A real `com.canonical.dbusmenu` export at
+  the item's Menu path renders a working menu — but only with `ItemIsMenu=true`, which makes the
+  item menu-only: left and right click both open the menu, and no left-click-Activate plus
+  right-click-menu combination exists. A misconfigured dbusmenu fails silently (empty popup, no bus
+  calls, no errors).
+
+Notification behavior (as reported; the per-row table was partially lost in transit, findings are
+verbatim):
+
+1. `expire_timeout` is decorative on Omarchy — only `urgency=critical` persists; every other
+   notification dies within ~30 s regardless of the requested timeout.
+2. `replaces_id` in-place update fails in practice despite source-level support — each call produces
+   a new toast.
+3. Critical urgency is the single reliable "stay until seen" mechanism, and its do-not-disturb
+   bypass is `app_name`-gated and therefore unusable by this app's name.
+4. The daemon never plays notification sounds — the only audio path is the app playing through
+   PipeWire itself.
+
+Design consequences recorded for the port (still Omarchy-specific; lock nothing until the GNOME and
+KDE rows are probed):
+
+- The primary reminder alert should be an app-owned surface (mirroring the macOS fullscreen alert
+  path), with toasts as the ambient/secondary channel at best: no persistence, no in-place update,
+  no toast action buttons on this desktop.
+- Join/Snooze/Pause actions live in the tray's dbusmenu and/or the app window — the tray menu is
+  proven viable (`ItemIsMenu=true`, real dbusmenu at the menu object path, idempotent one-shot
+  re-registration on watcher owner changes).
+- Bundle and play the reminder sound directly through PipeWire; do not rely on the notification
+  daemon for audio.
+- Autostart copy must say "applies at next login".
