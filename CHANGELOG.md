@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1] - 2026-09-22
+
+### Fixed
+
+- Recognize native Zoom meeting links in calendar locations and descriptions.
+- Show friendly provider names for join-link-only locations in meeting details.
+
 ## [2.1.0] - 2026-09-18
 
 ### Added
@@ -267,3 +274,4 @@
 [1.10.0]: https://github.com/BoThomas/now/compare/v1.9.0...v1.10.0
 [2.0.0]: https://github.com/BoThomas/now/compare/v1.10.0...v2.0.0
 [2.1.0]: https://github.com/BoThomas/now/compare/v2.0.0...v2.1.0
+[2.1.1]: https://github.com/BoThomas/now/compare/v2.1.0...v2.1.1
