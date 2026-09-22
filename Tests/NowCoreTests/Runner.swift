@@ -176,8 +176,17 @@ import NowCore
         check.expect(LinkExtractor.link(from: item, urlsInText: { _ in [zoom] }) == docs, "explicit conference remains authoritative")
         item.conference = nil
         check.expect(LinkExtractor.link(from: item, urlsInText: { _ in [docs] }) == nil, "no arbitrary web-link fallback")
+        let native = URL(string: "zoomus://zoom.us/join?confno=987&pwd=k")!
+        item.location = native.absoluteString
+        check.expect(LinkExtractor.link(from: item, urlsInText: { _ in [native] }) == URL(string: "https://zoom.us/j/987?pwd=k")!,
+                     "native zoomus link in text converts like structured properties")
+        check.expect(LinkExtractor.link(from: item, urlsInText: { _ in [URL(string: "javascript:alert(1)")!] }) == nil,
+                     "non-web scheme in text stays ignored")
         check.expect(LinkExtractor.joinURL("zoommtg://zoom.us/join?confno=123&pwd=abc") == zoom, "native Zoom conversion preserves password")
+        check.expect(LinkExtractor.joinURL("zoomus://zoom.us/join?confno=123&pwd=abc") == zoom, "zoomus conversion matches zoommtg")
         check.expect(LinkExtractor.joinURL("javascript:alert(1)") == nil, "non-web scheme rejected")
+        check.expect(LinkExtractor.isBareJoinLink("zoommtg://zoom.us/join?confno=123&pwd=abc", of: zoom), "native spelling counts as the join link")
+        check.expect(!LinkExtractor.isBareJoinLink("zoommtg://zoom.us/join?confno=124", of: zoom), "different native meeting stays content")
         check.expect(LinkExtractor.isMeetingLink(URL(string: "https://example.webex.com/site/j.php?MTID=opaque")!), "Webex scheduled shape")
         check.expect(!LinkExtractor.isMeetingLink(URL(string: "https://webex.com.evil.invalid/site/j.php?MTID=opaque")!), "Webex lookalike rejected")
         check.expect(LinkExtractor.decodeHTMLEntities("&amp;lt;") == "&lt;", "HTML entities decoded only once")

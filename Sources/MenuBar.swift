@@ -411,10 +411,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return lines.joined(separator: "\n")
     }
 
-    /// True when `text` (trimmed) is exactly the event's join link.
+    /// True when `text` (trimmed) is exactly the event's join link, including
+    /// native-scheme spellings (`zoomus://…`) that convert to it.
     private static func isJustJoinLink(_ text: String, event: MeetingEvent) -> Bool {
-        guard let link = event.link else { return false }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines) == link.absoluteString
+        LinkExtractor.isBareJoinLink(text, of: event.link)
     }
 
     nonisolated static func menuStatusText(for event: MeetingEvent, elapsedStartMinutes: Int, now: Date) -> String {
