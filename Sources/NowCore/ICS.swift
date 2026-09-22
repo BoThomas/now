@@ -1270,6 +1270,15 @@ package enum LinkExtractor {
         return trimmed == link.absoluteString || joinURL(trimmed)?.absoluteString == link.absoluteString
     }
 
+    /// The place worth a maps lookup: a location that names a real place rather
+    /// than a URL or (only) the event's join link, whose display is covered by
+    /// the provider-name fallback instead.
+    package static func searchablePlace(_ location: String?, link: URL?) -> String? {
+        guard let trimmed = location?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        guard URL(string: trimmed)?.scheme == nil, !isBareJoinLink(trimmed, of: link) else { return nil }
+        return trimmed
+    }
+
     /// Ruler lines (`---===---`, `-----`) and decorated labels (`----( Video Call )----`).
     /// The dashes are required: a bare parenthetical like "( see doc )" is real content.
     package static func isDecorationLine(_ line: String) -> Bool {

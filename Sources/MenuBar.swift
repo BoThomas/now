@@ -655,8 +655,10 @@ private struct EventDetailsPopover: View {
     }
 
     private var location: String? {
-        guard let value = event.location?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
-        return value
+        // Same display policy as the fullscreen reminder: a location that is
+        // nothing beyond the join link (web or native spelling) shows the
+        // friendly provider name instead of a redundant URL.
+        LinkExtractor.displayLocation(event.location, link: event.link)
     }
 
     private var notes: String? {
@@ -665,9 +667,11 @@ private struct EventDetailsPopover: View {
     }
 
     private var mapsURL: URL? {
-        guard let location, URL(string: location)?.scheme == nil else { return nil }
+        // A maps search only makes sense for a real place, not for a join
+        // link or the provider-name fallback shown in its place.
+        guard let place = LinkExtractor.searchablePlace(event.location, link: event.link) else { return nil }
         var components = URLComponents(string: "https://maps.apple.com/")
-        components?.queryItems = [URLQueryItem(name: "q", value: location)]
+        components?.queryItems = [URLQueryItem(name: "q", value: place)]
         return components?.url
     }
 
