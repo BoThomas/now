@@ -1515,6 +1515,42 @@ enum SelfTest {
         c.expect(LinkExtractor.displayLocation(nil, link: zoom) == "Zoom", "missing location falls back to provider")
         c.expect(LinkExtractor.displayLocation(nil, link: nil) == nil, "missing location and link stays absent")
 
+        // Native-scheme meeting links in free text get the same conversion as
+        // structured properties, then pass the identical join-shape check.
+        let nativeLocation = link("""
+        BEGIN:VEVENT
+        UID:native-zoomus@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Standup
+        LOCATION:zoomus://zoom.us/join?confno=482
+        END:VEVENT
+        """)
+        c.expect(nativeLocation?.absoluteString == "https://zoom.us/j/482", "zoomus location converts to web join link (got \(nativeLocation?.absoluteString ?? "nil"))")
+        let nativeDescription = link("""
+        BEGIN:VEVENT
+        UID:native-zoommtg@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Sync
+        DESCRIPTION:Bridge zoommtg://zoom.us/join?confno=777&pwd=raw
+        END:VEVENT
+        """)
+        c.expect(nativeDescription?.absoluteString == "https://zoom.us/j/777?pwd=raw", "zoommtg description link converts with password")
+        let nativeUnknown = link("""
+        BEGIN:VEVENT
+        UID:native-unknown@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Call
+        LOCATION:gopher://example.com/join/1
+        END:VEVENT
+        """)
+        c.expect(nativeUnknown == nil, "unknown native scheme does not become a join link")
+        c.expect(LinkExtractor.displayLocation("zoomus://zoom.us/join?confno=482", link: nativeLocation) == "Zoom",
+                 "native-scheme-only location displays provider name")
+        c.expect(LinkExtractor.isJoinLinkOnlyText("zoommtg://zoom.us/join?confno=777", link: URL(string: "https://zoom.us/j/777")!),
+                 "native-only text counts as join-link-only")
+        c.expect(!LinkExtractor.isJoinLinkOnlyText("Room 5\nzoommtg://zoom.us/join?confno=777", link: URL(string: "https://zoom.us/j/777")!),
+                 "native join line beside real content keeps content visible")
+
         let mailOnly = link("""
         BEGIN:VEVENT
         UID:mailonly@test

@@ -1072,6 +1072,8 @@ package enum LinkExtractor {
     /// are authoritative. Every other field, including URL, must contain a URL
     /// with a recognized provider shape or an explicit generic join path; an
     /// arbitrary event/document/recording URL must never be labelled "Join".
+    /// Native-scheme links discovered in free text are converted to their web
+    /// form first, exactly like structured properties.
     package static func link(from event: ParsedEvent, urlsInText: (String) -> [URL]) -> URL? {
         if let conference = event.conference, let url = joinURL(conference) { return url }
         if let urlValue = event.url, let url = joinURL(urlValue), isMeetingLink(url) { return url }
@@ -1086,16 +1088,21 @@ package enum LinkExtractor {
         for (text, rank) in fields {
             guard let text, !text.isEmpty else { continue }
             for url in urlsInText(text) {
-                if let scheme = url.scheme?.lowercased(),
-                   (scheme == "http" || scheme == "https"),
-                   isMeetingLink(url) {
-                    candidates.append((url, rank))
-                }
+                guard let candidate = webForm(of: url), isMeetingLink(candidate) else { continue }
+                candidates.append((candidate, rank))
             }
         }
         return candidates
             .sorted { $0.field < $1.field }
             .first?.url
+    }
+
+    /// A URL usable in the join pipeline: web URLs pass through unchanged,
+    /// native-scheme meeting links convert to their web form, everything else
+    /// is nil. Structured properties and free-text discovery share this gate.
+    package static func webForm(of url: URL) -> URL? {
+        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" { return url }
+        return joinURL(url.absoluteString)
     }
 
     /// Accepts an http(s) URL and also converts common native-scheme meeting links
@@ -1249,10 +1256,27 @@ package enum LinkExtractor {
         guard !lines.isEmpty else { return false }
         for line in lines {
             if isDecorationLine(line) { continue }
-            if let link, line == link.absoluteString { continue }
+            if isBareJoinLink(line, of: link) { continue }
             return false
         }
         return true
+    }
+
+    /// True when `text` is nothing but the event's join link — the web URL itself
+    /// or a native-scheme spelling (`zoomus://…`) that converts to it.
+    package static func isBareJoinLink(_ text: String, of link: URL?) -> Bool {
+        guard let link else { return false }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == link.absoluteString || joinURL(trimmed)?.absoluteString == link.absoluteString
+    }
+
+    /// The place worth a maps lookup: a location that names a real place rather
+    /// than a URL or (only) the event's join link, whose display is covered by
+    /// the provider-name fallback instead.
+    package static func searchablePlace(_ location: String?, link: URL?) -> String? {
+        guard let trimmed = location?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        guard URL(string: trimmed)?.scheme == nil, !isBareJoinLink(trimmed, of: link) else { return nil }
+        return trimmed
     }
 
     /// Ruler lines (`---===---`, `-----`) and decorated labels (`----( Video Call )----`).
