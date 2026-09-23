@@ -1,7 +1,6 @@
 import AppKit
 import NowCore
 import SwiftUI
-import Combine
 
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
@@ -13,7 +12,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let quitHandler: () -> Void
     private var buttonTimer: Timer?
     private var lastSyncItem: NSMenuItem?
-    private var displayClockObserver: AnyCancellable?
     /// While the dropdown is tracking, updater state changes (a check
     /// finishing, an update appearing) rebuild the OPEN menu in place —
     /// `menuNeedsUpdate` alone only fires on the next open.
@@ -54,13 +52,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // .common mode: the countdown keeps updating while the dropdown is
         // tracking (menu tracking runs a modal-ish run loop in .default mode).
         buttonTimer = AppStore.commonTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateButton() }
-        }
-        displayClockObserver = store.$displayTime.sink { [weak self] date in
-            MainActor.assumeIsolated {
-                guard let self, let last = self.store.lastChecked else { return }
-                self.updateLastSyncItem(last: last, at: date)
-            }
+            MainActor.assumeIsolated { self?.tickPerSecond() }
         }
         updateButton()
     }
@@ -68,6 +60,23 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     deinit {
         buttonTimer?.invalidate()
         for observer in trackingObservers { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    /// Everything the menu bar refreshes on its own 1 Hz cadence: the status
+    /// countdown button, the open dropdown's in-place row updates, and the
+    /// "Last synced" item. The store's display clock is deliberately not
+    /// published (a 1 Hz objectWillChange would re-render every observing
+    /// view each second), so this timer also keeps time-derived menu text
+    /// fresh.
+    private func tickPerSecond() {
+        updateButton()
+        if let last = store.lastChecked {
+            // A fresh `now`, like the Settings captions' local TimelineView:
+            // this timer races the store's own tick that advances
+            // `displayTime`, so the display clock could be up to a second
+            // stale here and lag the caption.
+            updateLastSyncItem(last: last, at: store.now())
+        }
     }
 
     private func updateButton() {

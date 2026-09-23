@@ -273,7 +273,9 @@ struct FeatureGuideView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(width: 230)
+                    // Intrinsic width, never a constrained frame — see the
+                    // segmented-picker note in SettingsUI.swift.
+                    .fixedSize()
                     .accessibilityLabel("Fullscreen reminder display")
                 }
             case .information(let title, let message):
