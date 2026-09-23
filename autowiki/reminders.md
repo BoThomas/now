@@ -86,10 +86,11 @@ pure [JoinTarget.resolve](../Sources/NowCore/Reminders/JoinTarget.swift). The ev
 never changes; only the click-time target adapts. Native-scheme links (`zoomus://`, `zoommtg://`,
 `msteams:`) open the meeting app directly when LaunchServices finds one for the scheme, otherwise
 they fall back to their web form. Ordinary https join links upgrade to the native form only when the
-**Always open join links in the meeting app, if installed** setting (Settings → General) is on and
-the app is installed; otherwise they open in the browser unchanged. Zoom and Teams are the providers
-with verified native forms (`nativeForm(of:)` is their inverse mapping). Preview actions never open
-any URL. The `--join-target <url> native|web` CLI prints exactly what a Join click would open.
+**Always open join links in the meeting app, if installed** setting (Settings → General, on by
+default — an explicit off persists) is on and the app is installed; otherwise they open in the
+browser unchanged. Zoom and Teams are the providers with verified native forms (`nativeForm(of:)` is
+their inverse mapping). Preview actions never open any URL. The `--join-target <url> native|web` CLI
+prints exactly what a Join click would open.
 
 ## Fullscreen controls and menu presentation
 

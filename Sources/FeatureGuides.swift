@@ -26,10 +26,11 @@ enum FeatureGuideCatalog {
         // screen count: a user who updates while docked to one display may
         // still use several.
         FeatureGuideDefinition(id: displayID, content: .displayChoice),
-        // Interactive: the opt-in for upgrading ordinary https join links to
-        // direct app links applies on Continue; closing the card keeps the
-        // off default. Native-protocol links (zoomus://, msteams:…) are
-        // always honored and need no setting.
+        // Interactive: the join-in-app choice applies on Continue. The card
+        // starts checked from the setting's on-by-default state; closing the
+        // card keeps the current setting, unchecking plus Complete disables
+        // the https upgrade. Native-protocol links (zoomus://, msteams:…)
+        // are always honored and need no setting.
         FeatureGuideDefinition(id: joinInAppID, content: .joinInApp)
     ]
 }

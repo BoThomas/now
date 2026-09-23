@@ -315,16 +315,16 @@ browser detour), so the "fix" shipped the opposite of the request. Native links 
 to end (extraction keeps the native spelling; `event.link` is the calendar's own URL), and the web
 form is only a click-time fallback for machines without the app plus the canonical comparison for
 `isBareJoinLink`. Upgrading ordinary https links to native form
-(`JoinTarget.resolve`/`LinkExtractor.nativeForm`) is opt-in via the **Always open join links in the
-meeting app, if installed** setting (Settings → General) and probes the exact URL's scheme through
-`NSWorkspace.urlForApplication(toOpen:)` — never bundle-ID hardcoding. Every join surface must route
-through `JoinOpener`; the Settings upcoming-event join button once bypassed it and silently opened
-the browser despite the enabled setting. Zoom (`zoommtg://zoom.us/join?confno=…&pwd=…`) and Teams
-(`msteams:/l/meetup-join/…`, single-slash opaque form) are the only verified mappings. Note the
-URLComponents trap: `query` decodes+re-encodes and can double-encode meeting context parameters —
-copy `percentEncodedQuery` instead. Reminder identity includes `link.absoluteString`, so feeds whose
-links change https→native with this feature re-key once; accepted caches keep working through the
-web fallback until the next refresh.
+(`JoinTarget.resolve`/`LinkExtractor.nativeForm`) runs via the **Always open join links in the
+meeting app, if installed** setting (Settings → General, on by default; an explicit off persists)
+and probes the exact URL's scheme through `NSWorkspace.urlForApplication(toOpen:)` — never bundle-ID
+hardcoding. Every join surface must route through `JoinOpener`; the Settings upcoming-event join
+button once bypassed it and silently opened the browser despite the enabled setting. Zoom
+(`zoommtg://zoom.us/join?confno=…&pwd=…`) and Teams (`msteams:/l/meetup-join/…`, single-slash opaque
+form) are the only verified mappings. Note the URLComponents trap: `query` decodes+re-encodes and
+can double-encode meeting context parameters — copy `percentEncodedQuery` instead. Reminder identity
+includes `link.absoluteString`, so feeds whose links change https→native with this feature re-key
+once; accepted caches keep working through the web fallback until the next refresh.
 
 ### Feed line endings/folding
 

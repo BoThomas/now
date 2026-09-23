@@ -88,10 +88,12 @@ package struct AppSettings: Codable, Equatable, Sendable {
     package var notifyOnCatchUp = false
     package var skipMeetingsOnCatchUp = false
     /// Open join links directly in the installed meeting app (Zoom, Microsoft
-    /// Teams) instead of routing through the browser. Links that already carry
-    /// a native app protocol are always honored natively regardless of this
-    /// setting; it only upgrades ordinary https join links.
-    package var openJoinsInMeetingApp = false
+    /// Teams) instead of routing through the browser. On by default — without
+    /// the app installed links simply open in the browser — and an explicit
+    /// off persists. Links that already carry a native app protocol are always
+    /// honored natively regardless of this setting; it only upgrades ordinary
+    /// https join links.
+    package var openJoinsInMeetingApp = true
 
     package var catchUpDelivery: CatchUpDelivery {
         get { skipMeetingsOnCatchUp ? .skip : (notifyOnCatchUp ? .notification : .normal) }
@@ -218,7 +220,7 @@ package struct AppSettings: Codable, Equatable, Sendable {
         automaticUpdateChecks = c.recover(Bool.self, forKey: .automaticUpdateChecks, decoder: decoder) ?? true
         suppressRemindersDuringMeetings = c.recover(Bool.self, forKey: .suppressRemindersDuringMeetings, decoder: decoder) ?? false
         includeBrowserMeetings = c.recover(Bool.self, forKey: .includeBrowserMeetings, decoder: decoder) ?? false
-        openJoinsInMeetingApp = c.recover(Bool.self, forKey: .openJoinsInMeetingApp, decoder: decoder) ?? false
+        openJoinsInMeetingApp = c.recover(Bool.self, forKey: .openJoinsInMeetingApp, decoder: decoder) ?? true
         reminderDelivery = c.recover(ReminderDelivery.self, forKey: .reminderDelivery, decoder: decoder) ?? .fullscreen
         reminderScreen = c.recover(ReminderScreen.self, forKey: .reminderScreen, decoder: decoder) ?? .focused
         notifyDuringMeetings = c.recover(Bool.self, forKey: .notifyDuringMeetings, decoder: decoder) ?? false

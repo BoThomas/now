@@ -1151,9 +1151,9 @@ package enum LinkExtractor {
 
     /// The direct-app spelling of a web join link for providers whose apps
     /// register a native scheme (Zoom `zoommtg://`, Teams `msteams:`) — the
-    /// inverse of the web-form conversion. Used only at Join time and only on
-    /// explicit user opt-in; nil when the provider has no native scheme or
-    /// the link is not a concrete meeting join.
+    /// inverse of the web-form conversion. Used only at Join time and only
+    /// while the join-in-app setting is on; nil when the provider has no
+    /// native scheme or the link is not a concrete meeting join.
     package static func nativeForm(of url: URL) -> URL? {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = url.host?.lowercased(), !host.isEmpty else { return nil }

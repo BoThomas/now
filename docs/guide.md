@@ -60,8 +60,8 @@ open the app directly, without a browser detour. If the app is not installed, th
 its browser page.
 
 **Always open join links in the meeting app, if installed** in **Settings → General** also opens
-ordinary Zoom and Microsoft Teams links in the installed app. It is off by default; without the app,
-links open in your browser as before.
+ordinary Zoom and Microsoft Teams links in the installed app. It is on by default; turn it off to
+always use the browser. Without the app installed, links open in your browser either way.
 
 ## Everyday controls
 
