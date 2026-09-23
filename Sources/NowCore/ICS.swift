@@ -1160,12 +1160,23 @@ package enum LinkExtractor {
         let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
         if host == "zoom.us" || host.hasSuffix(".zoom.us") || host == "zoom.com" || host.hasSuffix(".zoom.com") {
             let segments = url.path.split(separator: "/").map(String.init)
-            guard segments.count == 2, segments[0] == "j", !segments[1].isEmpty else { return nil }
+            // Every confno-bearing web join shape: `/j/<id>`, Zoom Workplace
+            // `/w/<id>`, and webinar-client `/wc/join/<id>`. `/my/<name>`
+            // personal-room links carry no meeting number and never upgrade.
+            let confno: String
+            if segments.count == 2, segments[0] == "j" || segments[0] == "w" {
+                confno = segments[1]
+            } else if segments.count == 3, segments[0] == "wc", segments[1] == "join" {
+                confno = segments[2]
+            } else {
+                return nil
+            }
+            guard !confno.isEmpty else { return nil }
             var comps = URLComponents()
             comps.scheme = "zoommtg"
             comps.host = "zoom.us"
             comps.path = "/join"
-            var items = [URLQueryItem(name: "confno", value: segments[1])]
+            var items = [URLQueryItem(name: "confno", value: confno)]
             if let pwd = parts?.queryItems?.first(where: { $0.name == "pwd" })?.value, !pwd.isEmpty {
                 items.append(URLQueryItem(name: "pwd", value: pwd))
             }

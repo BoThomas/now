@@ -59,9 +59,9 @@ Links that use a meeting app's own protocol — for example `zoomus://` from a Z
 open the app directly, without a browser detour. If the app is not installed, the link falls back to
 its browser page.
 
-**Open join links in the meeting app** in **Settings → Reminder** also opens ordinary Zoom and
-Microsoft Teams links in the installed app. It is off by default; without the app, links open in
-your browser as before.
+**Always open join links in the meeting app, if installed** in **Settings → General** also opens
+ordinary Zoom and Microsoft Teams links in the installed app. It is off by default; without the app,
+links open in your browser as before.
 
 ## Everyday controls
 

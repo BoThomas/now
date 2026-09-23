@@ -435,7 +435,7 @@ struct UpcomingEventList: View {
     private func joinButton(_ link: URL, event: MeetingEvent, compact: Bool) -> some View {
         Button {
             store.joinedMeeting(event)
-            NSWorkspace.shared.open(link)
+            JoinOpener.open(link, preferNative: store.settings.openJoinsInMeetingApp)
         } label: {
             Label(hostText(link), systemImage: "video.fill")
                 .font(.system(size: 10))
@@ -1839,27 +1839,6 @@ struct SettingsView: View {
                 }
             }
             Divider()
-            HStack(spacing: 6) {
-                Toggle("Open join links in the meeting app", isOn: $store.settings.openJoinsInMeetingApp)
-                Button {
-                    showJoinInAppInfo.toggle()
-                } label: {
-                    Image(systemName: "info.circle")
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("About opening join links in the meeting app")
-                .help("About opening join links in the meeting app")
-                .popover(isPresented: $showJoinInAppInfo, arrowEdge: .trailing) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Open join links in the meeting app").font(.headline)
-                        Text("Join links that already use an app protocol such as zoomus:// always open the installed meeting app directly. With this option on, Zoom and Teams browser links also open in the app when it is installed. Without the app, links open in your browser as before.")
-                    }
-                    .font(.callout)
-                    .padding(14)
-                    .frame(width: 320, alignment: .leading)
-                }
-            }
-            Divider()
             ViewThatFits(in: .horizontal) {
                 HStack { reminderPreviewButtons }
                 VStack(alignment: .leading) { reminderPreviewButtons }
@@ -1892,6 +1871,26 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             .frame(maxWidth: 240, alignment: .leading)
+            HStack(spacing: 6) {
+                Toggle("Always open join links in the meeting app, if installed", isOn: $store.settings.openJoinsInMeetingApp)
+                Button {
+                    showJoinInAppInfo.toggle()
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("About opening join links in the meeting app")
+                .help("About opening join links in the meeting app")
+                .popover(isPresented: $showJoinInAppInfo, arrowEdge: .trailing) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Always open join links in the meeting app, if installed").font(.headline)
+                        Text("Join links that already use an app protocol such as zoomus:// always open the installed meeting app directly. With this option on, Zoom and Teams browser links also open in the app when it is installed. Without the app, links open in your browser as before.")
+                    }
+                    .font(.callout)
+                    .padding(14)
+                    .frame(width: 320, alignment: .leading)
+                }
+            }
             HStack(spacing: 6) {
                 Picker("Show elapsed start time for", selection: $store.settings.elapsedStartMinutes) {
                     Text("Never").tag(-1)

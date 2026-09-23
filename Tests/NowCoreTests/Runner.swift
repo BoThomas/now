@@ -204,6 +204,10 @@ import NowCore
         check.expect(LinkExtractor.nativeForm(of: zoom) == URL(string: "zoommtg://zoom.us/join?confno=123&pwd=abc")!, "web zoom upgrades to zoommtg")
         check.expect(LinkExtractor.nativeForm(of: URL(string: "https://us02web.zoom.us/j/987?pwd=k")!) == URL(string: "zoommtg://zoom.us/join?confno=987&pwd=k")!,
                      "zoom upgrade normalizes the host and keeps the password")
+        check.expect(LinkExtractor.nativeForm(of: URL(string: "https://us02web.zoom.us/w/987?pwd=k")!) == URL(string: "zoommtg://zoom.us/join?confno=987&pwd=k")!,
+                     "zoom workplace path upgrades with its confno")
+        check.expect(LinkExtractor.nativeForm(of: URL(string: "https://us02web.zoom.us/wc/join/987?pwd=k")!) == URL(string: "zoommtg://zoom.us/join?confno=987&pwd=k")!,
+                     "zoom webinar-client path upgrades with its confno")
         check.expect(LinkExtractor.nativeForm(of: teamsNative) == nil, "already-native link has no second native form")
         check.expect(LinkExtractor.nativeForm(of: URL(string: "https://teams.microsoft.com/l/meetup-join/19:m@t.v2/0?context=%7B%22Tid%22%3A%22x%22%7D")!)?.absoluteString
                      == "msteams:/l/meetup-join/19:m@t.v2/0?context=%7B%22Tid%22%3A%22x%22%7D",

@@ -80,15 +80,16 @@ state through the [fake-transport harness](../scripts/notification-smoke.py).
 
 ## Which URL Join opens
 
-Every join surface (menu rows, details popover, fullscreen reminder, notification action) funnels
-through [JoinOpener](../Sources/JoinOpener.swift) into the pure
-[JoinTarget.resolve](../Sources/NowCore/Reminders/JoinTarget.swift). The event's stored link never
-changes; only the click-time target adapts. Native-scheme links (`zoomus://`, `zoommtg://`,
+Every join surface (menu rows, details popover, fullscreen reminder, notification action, and the
+Settings upcoming-event rows) funnels through [JoinOpener](../Sources/JoinOpener.swift) into the
+pure [JoinTarget.resolve](../Sources/NowCore/Reminders/JoinTarget.swift). The event's stored link
+never changes; only the click-time target adapts. Native-scheme links (`zoomus://`, `zoommtg://`,
 `msteams:`) open the meeting app directly when LaunchServices finds one for the scheme, otherwise
 they fall back to their web form. Ordinary https join links upgrade to the native form only when the
-**Open join links in the meeting app** setting is on and the app is installed; otherwise they open
-in the browser unchanged. Zoom and Teams are the providers with verified native forms
-(`nativeForm(of:)` is their inverse mapping). Preview actions never open any URL.
+**Always open join links in the meeting app, if installed** setting (Settings → General) is on and
+the app is installed; otherwise they open in the browser unchanged. Zoom and Teams are the providers
+with verified native forms (`nativeForm(of:)` is their inverse mapping). Preview actions never open
+any URL. The `--join-target <url> native|web` CLI prints exactly what a Join click would open.
 
 ## Fullscreen controls and menu presentation
 
