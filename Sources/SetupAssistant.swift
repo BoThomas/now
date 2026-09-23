@@ -273,7 +273,9 @@ struct SetupAssistantView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(width: 230)
+                    // Intrinsic width, never a constrained frame — see the
+                    // segmented-picker note in SettingsUI.swift.
+                    .fixedSize()
                     .accessibilityLabel("Fullscreen reminder display")
                     .help("Focused Display takes over whichever display you are working on. Main Display always uses your main display, even when you are working on another one.")
                 }

@@ -283,10 +283,8 @@ struct FeatureGuideView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    // Intrinsic width, not a fixed frame: a constrained
-                    // NSSegmentedControl pulses between its content-fit width
-                    // and the frame on SwiftUI update passes (SettingsUI.swift
-                    // has the longer note).
+                    // Intrinsic width, never a constrained frame — see the
+                    // segmented-picker note in SettingsUI.swift.
                     .fixedSize()
                     .accessibilityLabel("Fullscreen reminder display")
                 }

@@ -85,6 +85,20 @@ on recovery/removal/disable, and participate in open-menu refresh signatures. `w
 (`SelfTest.fetchMergeTests`) — never construct `AppStore` there (it owns an `EKEventStore`; selftest
 must stay EventKit-free).
 
+### Publish cadence (store → views)
+
+`AppStore.displayTime` is deliberately NOT `@Published`: it advances every second, and a 1 Hz
+`objectWillChange` re-rendered every observing view (Settings, setup assistant, guides) each second
+for the sake of one caption — and poked every AppKit-backed control each pass, which is how layout
+fights surface. Views that need a ticking clock own it locally: `TimelineView` for the Settings
+"Last synced"/"Last checked" captions, the menu bar's own 1 Hz `.common` timer for its items.
+Content derived from passing time — event-list membership at a meeting end, `Fmt.dayHeader` day
+rollovers, saved-coverage captions — changes only at boundaries: `tick()` runs the pure
+`AppStore.listContentChanged(events:cacheInfo:from:to:)` each second and bumps `listContentVersion`
+only when one flipped (interval-based, so a late post-sleep tick catches up in one step). New
+render-time inputs derived from the clock must join that predicate or arrive as real events — never
+as a periodic whole-store publish.
+
 ### Reminder timing
 
 Multiple reminders use per-lead handled membership inside each occurrence's ledger entry. Snooze and
@@ -415,6 +429,15 @@ immediately (fetchNativeEvents' unauthorized branch wipes them), not at the next
 nothing shifts); below it collapses to the plain form. Section titles/icons live in
 `SettingsSection` — keep `sectionHeader(...)` calls routed through it so sidebar and headers stay in
 sync. Default window 940×720, min 520×480.
+
+### Segmented picker width
+
+a `Picker(.pickerStyle(.segmented))` must never be constrained below its intrinsic width — use
+`.fixedSize()`, not a narrow `.frame(width:)`. AppKit re-fits `NSSegmentedControl` to its content
+during SwiftUI update passes, so a tighter constraint visibly pulses the control between both widths
+whenever its view updates (seen as the "Show on" selector dancing ~17 pt left/right; `.clipped()`
+does not help because the control itself resizes). Applies to all three copies of the row: Settings,
+setup assistant, and the What's New card.
 
 ### Colors
 

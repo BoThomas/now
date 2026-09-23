@@ -1416,8 +1416,12 @@ struct SettingsView: View {
 
     @ViewBuilder private var lastSyncedText: some View {
         if let last = store.lastChecked {
-            Text(Fmt.syncStatus(last, relativeTo: store.displayTime))
-                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            // Owns its 1 Hz refresh locally; the store's display clock is not
+            // published (see AppStore.displayTime).
+            TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                Text(Fmt.syncStatus(last, relativeTo: timeline.date))
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -1701,7 +1705,11 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(width: 230)
+                    // Intrinsic width, never a fixed frame below it: AppKit
+                    // re-fits an NSSegmentedControl to its content during
+                    // SwiftUI update passes, and a tighter constraint makes
+                    // the control visibly pulse between both widths.
+                    .fixedSize()
                     .accessibilityLabel("Fullscreen reminder display")
                     .help("Focused Display takes over whichever display you are working on. Main Display always uses your main display, even when you are working on another one.")
                 }
@@ -1994,9 +2002,12 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         } else if let last = updates.lastSuccessfulCheck {
-            Text("Last checked \(Fmt.ago(last))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            // Owns its 1 Hz refresh locally (see AppStore.displayTime).
+            TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                Text("Last checked \(Fmt.ago(last, relativeTo: timeline.date))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

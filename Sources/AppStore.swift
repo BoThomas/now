@@ -75,7 +75,20 @@ final class AppStore: ObservableObject {
     /// Per-calendar errors report the outcome separately.
     @Published private(set) var lastChecked: Date?
     /// One common-run-loop clock for elapsed labels in Settings and the menu.
-    @Published private(set) var displayTime = Date()
+    /// Deliberately not `@Published`: tick() advances it once per second, and a
+    /// 1 Hz objectWillChange would re-render every observing view (Settings,
+    /// setup assistant, guides) each second. The two consumers that need
+    /// per-second freshness refresh themselves — the menu bar's "Last synced"
+    /// item rides on its own 1 Hz timer, and the Settings caption uses a local
+    /// TimelineView. Logic reads this property directly.
+    private(set) var displayTime = Date()
+    /// Publishes when advancing time changes derived list content — a meeting
+    /// crossing its end (list membership), local midnight (day headers), or
+    /// saved-calendar coverage expiring (offline captions). Observers never
+    /// read the value; the point is a boundary-scoped objectWillChange instead
+    /// of a once-per-second re-render. See
+    /// `listContentChanged(events:cacheInfo:from:to:)`.
+    @Published private(set) var listContentVersion = 0
     @Published private(set) var meetingActivity: MeetingActivity = .unknown
     @Published private(set) var meetingDetectionChecking = false
     @Published private(set) var meetingDetectionAvailable: Bool? = MeetingActivityProbe.platformPotentiallySupported ? nil : false
@@ -356,6 +369,17 @@ final class AppStore: ObservableObject {
     /// remain available in the dropdown until their scheduled end.
     nonisolated static func isVisible(_ event: MeetingEvent, at now: Date) -> Bool {
         now < event.start || now < event.end
+    }
+
+    /// Pure boundary check: does time advancing from `previous` to `now`
+    /// change anything observers render from derived state — event-list
+    /// visibility (a meeting ending), day headers, or saved-coverage labels?
+    /// `tick()` re-renders observers only when this flips, not every second.
+    nonisolated static func listContentChanged(events: [MeetingEvent], cacheInfo: [UUID: CalendarCacheInfo],
+                                               from previous: Date, to now: Date) -> Bool {
+        if !Calendar.current.isDate(previous, inSameDayAs: now) { return true }
+        if cacheInfo.values.contains(where: { $0.covers(previous) != $0.covers(now) }) { return true }
+        return events.contains { isVisible($0, at: previous) != isVisible($0, at: now) }
     }
 
     var emptyAgendaText: String {
@@ -1020,11 +1044,25 @@ final class AppStore: ObservableObject {
         commitEvents(reconciled.events + native)
     }
 
+    /// Advances the display clock and, when passing time changed derived list
+    /// content, publishes for observing views — see `listContentVersion`.
+    private func advanceDisplayClock(to now: Date) {
+        let previous = displayTime
+        displayTime = now
+        // The display clock itself is not published; re-render observers only
+        // when passing time changed derived content (a meeting ending, a day
+        // rollover, coverage expiring).
+        if Self.listContentChanged(events: events, cacheInfo: cacheInfo,
+                                   from: previous, to: now) {
+            listContentVersion += 1
+        }
+    }
+
     private func tick() {
         guard cacheLoaded, !shuttingDown else { return }
         retryMeetingDetection()
         let now = self.now()
-        displayTime = now
+        advanceDisplayClock(to: now)
         if let until = pausedUntil, now >= until { pausedUntil = nil }
         if let alerts = alertController, alerts.isOpen {
             if alerts.shownEvents.allSatisfy({ now.timeIntervalSince($0.end) > 120 }) {

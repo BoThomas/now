@@ -2593,6 +2593,29 @@ enum SelfTest {
         c.expect(!AppStore.isVisible(ended, at: now), "ended meetings are hidden even inside the configured elapsed-start window")
         c.expect(AppStore.isVisible(expired, at: now), "running meetings stay in lists after the elapsed-start window")
 
+        // Boundary-only re-renders: plain second ticks change nothing, but a
+        // meeting ending, a day rollover, or expiring saved coverage must.
+        let runningNow = focusEvent("running", startIn: -5 * 60, endIn: 55 * 60)
+        let futureSoon = focusEvent("future", startIn: 10 * 60, endIn: 40 * 60)
+        c.expect(!AppStore.listContentChanged(events: [runningNow, futureSoon], cacheInfo: [:], from: now, to: now.addingTimeInterval(1)),
+                 "an ordinary second tick does not re-render observing views")
+        let endingSoon = focusEvent("ending", startIn: -5 * 60, endIn: 30)
+        c.expect(AppStore.listContentChanged(events: [runningNow, endingSoon], cacheInfo: [:], from: now, to: now.addingTimeInterval(31)),
+                 "a meeting crossing its end changes list content")
+        c.expect(AppStore.listContentChanged(events: [], cacheInfo: [:], from: now, to: now.addingTimeInterval(60 * 60 * 25)),
+                 "a day rollover changes list day headers")
+        let coveredUntilMidnight = Calendar.current.startOfDay(for: now).addingTimeInterval(3600).addingTimeInterval(-14 * 86400)
+        let coveredSnapshot = CalendarCacheSnapshot(subscription: otherSub, events: [], fetchedAt: coveredUntilMidnight, warning: nil)
+        let coverage: [UUID: CalendarCacheInfo] = [otherSub.id: CalendarCacheInfo(snapshot: coveredSnapshot, usingSavedData: true)]
+        c.expect(!AppStore.listContentChanged(events: [], cacheInfo: coverage,
+                                              from: coveredUntilMidnight.addingTimeInterval(14 * 86400 - 1800),
+                                              to: coveredUntilMidnight.addingTimeInterval(14 * 86400 - 60)),
+                 "still-covered saved data keeps list content unchanged")
+        c.expect(AppStore.listContentChanged(events: [], cacheInfo: coverage,
+                                             from: coveredUntilMidnight.addingTimeInterval(14 * 86400 - 1800),
+                                             to: coveredUntilMidnight.addingTimeInterval(14 * 86400 + 60)),
+                 "expiring saved coverage changes list content")
+
         let sharedStartA = focusEvent("shared-a", startIn: 15 * 60, endIn: 45 * 60, colorIndex: 1)
         let sharedStartB = focusEvent("shared-b", startIn: 15 * 60, endIn: 75 * 60, colorIndex: 2)
         let mutedShared = focusEvent("shared-muted", startIn: 15 * 60, endIn: 45 * 60, muted: true, colorIndex: 3)
