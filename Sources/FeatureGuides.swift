@@ -8,6 +8,7 @@ struct FeatureGuideDefinition: Identifiable, Equatable {
     enum Content: Equatable {
         case notifications
         case displayChoice
+        case joinInApp
         case information(title: String, message: String)
     }
     let id: String
@@ -17,13 +18,20 @@ struct FeatureGuideDefinition: Identifiable, Equatable {
 enum FeatureGuideCatalog {
     static let notificationsID = "notification-setup-v1"
     static let displayID = "fullscreen-display-v1"
+    static let joinInAppID = "join-links-in-app-v1"
     static let entries = [
         FeatureGuideDefinition(id: notificationsID, content: .notifications),
         // Interactive: the card's Show on choice applies on Continue; closing
         // it keeps the focused default. Deliberately not gated on the current
         // screen count: a user who updates while docked to one display may
         // still use several.
-        FeatureGuideDefinition(id: displayID, content: .displayChoice)
+        FeatureGuideDefinition(id: displayID, content: .displayChoice),
+        // Interactive: the join-in-app choice applies on Continue. The card
+        // starts checked from the setting's on-by-default state; closing the
+        // card keeps the current setting, unchecking plus Complete disables
+        // the https upgrade. Native-protocol links (zoomus://, msteams:…)
+        // are always honored and need no setting.
+        FeatureGuideDefinition(id: joinInAppID, content: .joinInApp)
     ]
 }
 
@@ -173,6 +181,7 @@ struct FeatureGuideView: View {
     var usesKeyboardShortcuts: Bool
     @State private var choices: NotificationSetupChoices
     @State private var displayChoice: ReminderScreen
+    @State private var joinInAppChoice: Bool
     @State private var busy = false
     @State private var problem: String?
     @State private var permissionBlocked = false
@@ -191,6 +200,7 @@ struct FeatureGuideView: View {
         self.usesKeyboardShortcuts = usesKeyboardShortcuts
         _choices = State(initialValue: NotificationSetupChoices(settings: store.settings))
         _displayChoice = State(initialValue: store.settings.reminderScreen)
+        _joinInAppChoice = State(initialValue: store.settings.openJoinsInMeetingApp)
     }
 
     private var cards: [FeatureGuideDefinition] { guides.definitions(for: ids) }
@@ -278,6 +288,11 @@ struct FeatureGuideView: View {
                     .fixedSize()
                     .accessibilityLabel("Fullscreen reminder display")
                 }
+            case .joinInApp:
+                Text("New in this version: Open meetings directly in the app").font(.headline)
+                Text("Join links with a direct app protocol such as zoomus:// now open the meeting app right away without a browser detour. Ordinary Zoom and Teams links can do the same when the app is installed.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Toggle("Open Zoom and Teams links always in the meeting app, if installed", isOn: $joinInAppChoice)
             case .information(let title, let message):
                 Text(title).font(.headline)
                 Text(message).font(.callout).fixedSize(horizontal: false, vertical: true)
@@ -331,6 +346,9 @@ struct FeatureGuideView: View {
             }
         case .displayChoice:
             store.settings.reminderScreen = displayChoice
+            advancePage()
+        case .joinInApp:
+            store.settings.openJoinsInMeetingApp = joinInAppChoice
             advancePage()
         case .information:
             advancePage()

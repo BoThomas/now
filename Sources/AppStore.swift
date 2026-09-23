@@ -1356,7 +1356,9 @@ final class AppStore: ObservableObject {
             notifications?.removeDelivery(item)
             if action == "join" { current.forEach(joinedMeeting) }
             if action == "choose" || (!item.catchUp && item.keys.count > 1 && action != UNNotificationDismissActionIdentifier) { openNotificationAgenda?() }
-            else if action == "join", current.count == 1, let url = current[0].link { openNotificationLink(url) }
+            else if action == "join", current.count == 1, let url = current[0].link {
+                openNotificationLink(JoinOpener.target(for: url, preferNative: settings.openJoinsInMeetingApp))
+            }
             else if action != UNNotificationDismissActionIdentifier { openNotificationMeetings?(current) }
         }
     }

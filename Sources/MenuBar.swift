@@ -517,7 +517,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func joinAction(_ sender: NSMenuItem) {
         if let event = sender.representedObject as? MeetingEvent, let url = event.link {
             store.joinedMeeting(event)
-            NSWorkspace.shared.open(url)
+            JoinOpener.open(url, preferNative: store.settings.openJoinsInMeetingApp)
         }
     }
 
@@ -551,7 +551,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                       current.end > Date(), let url = current.link else { return }
                 self.store.joinedMeeting(current)
                 self.eventPopover?.close()
-                NSWorkspace.shared.open(url)
+                JoinOpener.open(url, preferNative: self.store.settings.openJoinsInMeetingApp)
             },
             close: { [weak self] in self?.eventPopover?.close() }
         ))
