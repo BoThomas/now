@@ -93,6 +93,9 @@ extension CoreTests {
         var expectedFields = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         var expectedSettings = expectedFields["settings"] as! [String: Any]
         expectedSettings["reminderLeadSeconds"] = [300]
+        // Settings introduced after this legacy snapshot decode back to their
+        // defaults and are written on the next save.
+        expectedSettings["openJoinsInMeetingApp"] = false
         expectedFields["settings"] = expectedSettings
         let expected = expectedFields as NSDictionary
         let actual = try JSONSerialization.jsonObject(with: encoded) as! NSDictionary

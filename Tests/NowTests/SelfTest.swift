@@ -215,7 +215,7 @@ enum SelfTest {
         c.expect(!runA.contains { $0.uid == "cancel@test" }, "cancelled skipped")
         c.expect(!runA.contains { $0.uid == "allday@test" }, "all-day skipped")
         c.expect(runA.contains { $0.uid == "altdesc@test" && $0.link?.host == "teams.microsoft.com" }, "X-ALT-DESC teams link")
-        c.expect(runA.first { $0.uid == "zoommtg@test" }?.link?.absoluteString == "https://zoom.us/j/123456789?pwd=abc123", "zoommtg conference converted")
+        c.expect(runA.first { $0.uid == "zoommtg@test" }?.link?.absoluteString == "zoommtg://zoom.us/join?confno=123456789&pwd=abc123", "zoommtg conference stays native")
         c.expect(runA.contains { $0.uid == "attach@test" && $0.link?.host == "meetings.ringcentral.com" }, "ATTACH ringcentral link")
         c.expect(runA.first { $0.uid == "joiny@test" }?.link?.host == "meet.corp.example.com", "join-path heuristic link")
         c.expect(runA.first { $0.uid == "titlelink@test" }?.link?.host == "meet.internal.test", "title fallback link")
@@ -1515,8 +1515,10 @@ enum SelfTest {
         c.expect(LinkExtractor.displayLocation(nil, link: zoom) == "Zoom", "missing location falls back to provider")
         c.expect(LinkExtractor.displayLocation(nil, link: nil) == nil, "missing location and link stays absent")
 
-        // Native-scheme meeting links in free text get the same conversion as
-        // structured properties, then pass the identical join-shape check.
+        // Native-scheme meeting links keep their native spelling everywhere —
+        // Join must open the meeting app directly, never the browser detour.
+        // (v2.1.1 wrongly converted them to https; the user report that broke
+        // is the regression anchor for this block.)
         let nativeLocation = link("""
         BEGIN:VEVENT
         UID:native-zoomus@test
@@ -1525,7 +1527,17 @@ enum SelfTest {
         LOCATION:zoomus://zoom.us/join?confno=482
         END:VEVENT
         """)
-        c.expect(nativeLocation?.absoluteString == "https://zoom.us/j/482", "zoomus location converts to web join link (got \(nativeLocation?.absoluteString ?? "nil"))")
+        c.expect(nativeLocation?.absoluteString == "zoomus://zoom.us/join?confno=482", "zoomus location stays native (got \(nativeLocation?.absoluteString ?? "nil"))")
+        let nativeRealWorld = link("""
+        BEGIN:VEVENT
+        UID:native-zoomus-web@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Standup
+        LOCATION:zoomus://us02web.zoom.us/?action=join&confno=89716875352&pwd=SWlmUmExdW9STmtNVlhpdHA5cXVZdz09
+        END:VEVENT
+        """)
+        c.expect(nativeRealWorld?.absoluteString == "zoomus://us02web.zoom.us/?action=join&confno=89716875352&pwd=SWlmUmExdW9STmtNVlhpdHA5cXVZdz09",
+                 "real-world zoomus location stays native (got \(nativeRealWorld?.absoluteString ?? "nil"))")
         let nativeDescription = link("""
         BEGIN:VEVENT
         UID:native-zoommtg@test
@@ -1534,7 +1546,17 @@ enum SelfTest {
         DESCRIPTION:Bridge zoommtg://zoom.us/join?confno=777&pwd=raw
         END:VEVENT
         """)
-        c.expect(nativeDescription?.absoluteString == "https://zoom.us/j/777?pwd=raw", "zoommtg description link converts with password")
+        c.expect(nativeDescription?.absoluteString == "zoommtg://zoom.us/join?confno=777&pwd=raw", "zoommtg description link stays native with password")
+        let nativeTeamsURL = link("""
+        BEGIN:VEVENT
+        UID:native-teams@test
+        DTSTART:20260826T100000Z
+        SUMMARY:Teams Call
+        URL:msteams:/l/meetup-join/19:meeting_abc@thread.v2/0?context=%7B%22Tid%22%3A%22x%22%7D
+        END:VEVENT
+        """)
+        c.expect(nativeTeamsURL?.absoluteString == "msteams:/l/meetup-join/19:meeting_abc@thread.v2/0?context=%7B%22Tid%22%3A%22x%22%7D",
+                 "teams URL property stays native byte-exactly (got \(nativeTeamsURL?.absoluteString ?? "nil"))")
         let nativeUnknown = link("""
         BEGIN:VEVENT
         UID:native-unknown@test
@@ -1546,8 +1568,13 @@ enum SelfTest {
         c.expect(nativeUnknown == nil, "unknown native scheme does not become a join link")
         c.expect(LinkExtractor.displayLocation("zoomus://zoom.us/join?confno=482", link: nativeLocation) == "Zoom",
                  "native-scheme-only location displays provider name")
+        let teamsDisplay = nativeTeamsURL.flatMap { LinkExtractor.displayLocation($0.absoluteString, link: $0) }
+        c.expect(teamsDisplay == "Microsoft Teams",
+                 "teams native link displays provider name without a host")
         c.expect(LinkExtractor.isJoinLinkOnlyText("zoommtg://zoom.us/join?confno=777", link: URL(string: "https://zoom.us/j/777")!),
                  "native-only text counts as join-link-only")
+        c.expect(LinkExtractor.isJoinLinkOnlyText("https://zoom.us/j/777?pwd=raw", link: nativeDescription),
+                 "web spelling beside native link counts as join-link-only")
         c.expect(!LinkExtractor.isJoinLinkOnlyText("Room 5\nzoommtg://zoom.us/join?confno=777", link: URL(string: "https://zoom.us/j/777")!),
                  "native join line beside real content keeps content visible")
 

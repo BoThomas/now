@@ -1194,6 +1194,7 @@ struct SettingsView: View {
     @State private var showBrowserMeetingInfo = false
     @State private var showReminderSoundInfo = false
     @State private var showStartedCountdownInfo = false
+    @State private var showJoinInAppInfo = false
     @StateObject private var commandHints = CommandHoldTracker()
     @State private var selectedSection: SettingsSection = .calendars
     /// While a sidebar jump animates, the scroll-position tracker is paused —
@@ -1835,6 +1836,27 @@ struct SettingsView: View {
                         Image(systemName: "play.circle")
                     }
                     .buttonStyle(.borderless)
+                }
+            }
+            Divider()
+            HStack(spacing: 6) {
+                Toggle("Open join links in the meeting app", isOn: $store.settings.openJoinsInMeetingApp)
+                Button {
+                    showJoinInAppInfo.toggle()
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("About opening join links in the meeting app")
+                .help("About opening join links in the meeting app")
+                .popover(isPresented: $showJoinInAppInfo, arrowEdge: .trailing) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Open join links in the meeting app").font(.headline)
+                        Text("Join links that already use an app protocol such as zoomus:// always open the installed meeting app directly. With this option on, Zoom and Teams browser links also open in the app when it is installed. Without the app, links open in your browser as before.")
+                    }
+                    .font(.callout)
+                    .padding(14)
+                    .frame(width: 320, alignment: .leading)
                 }
             }
             Divider()

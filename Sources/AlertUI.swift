@@ -179,7 +179,7 @@ final class AlertController: ObservableObject {
         case .dismissPreview: close()
         case .open(let url):
             store?.joinedMeeting(current)
-            NSWorkspace.shared.open(url)
+            JoinOpener.open(url, preferNative: store?.settings.openJoinsInMeetingApp ?? false)
             close()
         }
     }

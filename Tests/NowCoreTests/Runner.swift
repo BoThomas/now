@@ -178,15 +178,58 @@ import NowCore
         check.expect(LinkExtractor.link(from: item, urlsInText: { _ in [docs] }) == nil, "no arbitrary web-link fallback")
         let native = URL(string: "zoomus://zoom.us/join?confno=987&pwd=k")!
         item.location = native.absoluteString
-        check.expect(LinkExtractor.link(from: item, urlsInText: { _ in [native] }) == URL(string: "https://zoom.us/j/987?pwd=k")!,
-                     "native zoomus link in text converts like structured properties")
+        check.expect(LinkExtractor.link(from: item, urlsInText: { _ in [native] }) == native,
+                     "native zoomus link in text stays native")
         check.expect(LinkExtractor.link(from: item, urlsInText: { _ in [URL(string: "javascript:alert(1)")!] }) == nil,
                      "non-web scheme in text stays ignored")
-        check.expect(LinkExtractor.joinURL("zoommtg://zoom.us/join?confno=123&pwd=abc") == zoom, "native Zoom conversion preserves password")
-        check.expect(LinkExtractor.joinURL("zoomus://zoom.us/join?confno=123&pwd=abc") == zoom, "zoomus conversion matches zoommtg")
+        let nativeZoomUsWeb = URL(string: "zoomus://us02web.zoom.us/?action=join&confno=89716875352&pwd=SWlmUmExdW9STmtNVlhpdHA5cXVZdz09")!
+        item.location = nativeZoomUsWeb.absoluteString
+        check.expect(LinkExtractor.link(from: item, urlsInText: { _ in [nativeZoomUsWeb] }) == nativeZoomUsWeb,
+                     "real-world zoomus location form stays native")
+        let teamsNative = URL(string: "msteams:/l/meetup-join/19:meeting_abc@thread.v2/0?context=%7B%22Tid%22%3A%22x%22%7D")!
+        item.location = nil
+        item.url = teamsNative.absoluteString
+        check.expect(LinkExtractor.link(from: item, urlsInText: { _ in [] }) == teamsNative,
+                     "native teams URL property stays native")
+        item.url = nil
+        check.expect(LinkExtractor.isNativeJoinLink(nativeZoomUsWeb), "zoomus with confno is a native join link")
+        check.expect(LinkExtractor.isNativeJoinLink(URL(string: "zoommtg://zoom.us/join?confno=123&pwd=abc")!), "zoommtg is a native join link")
+        check.expect(LinkExtractor.isNativeJoinLink(teamsNative), "msteams launch path is a native join link")
+        check.expect(!LinkExtractor.isNativeJoinLink(URL(string: "zoomus://zoom.us/join?pwd=abc")!), "zoomus without confno is incomplete")
+        check.expect(!LinkExtractor.isNativeJoinLink(URL(string: "zoomus://zoom.us.evil.invalid/join?confno=1")!), "zoomus lookalike host rejected")
+        check.expect(!LinkExtractor.isNativeJoinLink(URL(string: "gopher://example.com/join/1")!), "unknown scheme is not a native join link")
+        check.expect(LinkExtractor.joinURL("zoommtg://zoom.us/join?confno=123&pwd=abc") == zoom, "web-form conversion preserves password")
+        check.expect(LinkExtractor.joinURL("zoomus://zoom.us/join?confno=123&pwd=abc") == zoom, "zoomus web form matches zoommtg")
         check.expect(LinkExtractor.joinURL("javascript:alert(1)") == nil, "non-web scheme rejected")
+        check.expect(LinkExtractor.nativeForm(of: zoom) == URL(string: "zoommtg://zoom.us/join?confno=123&pwd=abc")!, "web zoom upgrades to zoommtg")
+        check.expect(LinkExtractor.nativeForm(of: URL(string: "https://us02web.zoom.us/j/987?pwd=k")!) == URL(string: "zoommtg://zoom.us/join?confno=987&pwd=k")!,
+                     "zoom upgrade normalizes the host and keeps the password")
+        check.expect(LinkExtractor.nativeForm(of: teamsNative) == nil, "already-native link has no second native form")
+        check.expect(LinkExtractor.nativeForm(of: URL(string: "https://teams.microsoft.com/l/meetup-join/19:m@t.v2/0?context=%7B%22Tid%22%3A%22x%22%7D")!)?.absoluteString
+                     == "msteams:/l/meetup-join/19:m@t.v2/0?context=%7B%22Tid%22%3A%22x%22%7D",
+                     "teams upgrade preserves the encoded context byte-exactly")
+        check.expect(LinkExtractor.nativeForm(of: URL(string: "https://meet.google.com/abc-defg-hij")!) == nil, "google meet has no native form")
+        check.expect(LinkExtractor.nativeForm(of: URL(string: "https://zoom.us/my/room")!) == nil, "personal room links do not upgrade")
         check.expect(LinkExtractor.isBareJoinLink("zoommtg://zoom.us/join?confno=123&pwd=abc", of: zoom), "native spelling counts as the join link")
+        check.expect(LinkExtractor.isBareJoinLink(zoom.absoluteString, of: URL(string: "zoommtg://zoom.us/join?confno=123&pwd=abc")!), "web spelling matches a native link")
         check.expect(!LinkExtractor.isBareJoinLink("zoommtg://zoom.us/join?confno=124", of: zoom), "different native meeting stays content")
+        check.expect(LinkExtractor.providerName(for: teamsNative) == "Microsoft Teams", "teams native link shows provider name")
+        check.expect(LinkExtractor.providerName(for: nativeZoomUsWeb) == "Zoom", "zoomus link shows provider name")
+        // Click-time policy: the stored link never changes, only the opened target.
+        check.expect(JoinTarget.resolve(link: nativeZoomUsWeb, preferNative: false, canOpen: { _ in true }) == nativeZoomUsWeb,
+                     "native link opens natively when the app is installed")
+        check.expect(JoinTarget.resolve(link: nativeZoomUsWeb, preferNative: false, canOpen: { _ in false })
+                     == URL(string: "https://us02web.zoom.us/j/89716875352?pwd=SWlmUmExdW9STmtNVlhpdHA5cXVZdz09")!,
+                     "native link falls back to the web form without the app")
+        check.expect(JoinTarget.resolve(link: zoom, preferNative: true, canOpen: { $0.scheme == "zoommtg" })
+                     == URL(string: "zoommtg://zoom.us/join?confno=123&pwd=abc")!,
+                     "opt-in upgrades a web zoom link when the app is installed")
+        check.expect(JoinTarget.resolve(link: zoom, preferNative: true, canOpen: { _ in false }) == zoom,
+                     "web link stays web without the app")
+        check.expect(JoinTarget.resolve(link: zoom, preferNative: false, canOpen: { _ in true }) == zoom,
+                     "disabled setting never upgrades")
+        check.expect(JoinTarget.resolve(link: meet, preferNative: true, canOpen: { _ in true }) == meet,
+                     "providers without a native scheme never upgrade")
         check.expect(LinkExtractor.searchablePlace("  Room 4  ", link: zoom) == "Room 4", "real place searchable, trimmed")
         check.expect(LinkExtractor.searchablePlace(zoom.absoluteString, link: zoom) == nil, "join-link location is not a place")
         check.expect(LinkExtractor.searchablePlace("zoommtg://zoom.us/join?confno=123&pwd=abc", link: zoom) == nil, "native join spelling is not a place")

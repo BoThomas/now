@@ -309,6 +309,21 @@ See [calendar link extraction](calendars.md#recurrence-and-identity) and
 [NowCore/ICS.swift](../Sources/NowCore/ICS.swift). The recognized-provider search does not fall back
 to arbitrary HTTP(S) URLs.
 
+**Never normalize native-scheme join links to https.** v2.1.1 recognized `zoomus://` links but
+converted them to their web form — the reporter wanted Join to open the Zoom app directly (no
+browser detour), so the "fix" shipped the opposite of the request. Native links now stay native end
+to end (extraction keeps the native spelling; `event.link` is the calendar's own URL), and the web
+form is only a click-time fallback for machines without the app plus the canonical comparison for
+`isBareJoinLink`. Upgrading ordinary https links to native form
+(`JoinTarget.resolve`/`LinkExtractor.nativeForm`) is opt-in via the **Open join links in the meeting
+app** setting and probes the exact URL's scheme through `NSWorkspace.urlForApplication(toOpen:)` —
+never bundle-ID hardcoding. Zoom (`zoommtg://zoom.us/join?confno=…&pwd=…`) and Teams
+(`msteams:/l/meetup-join/…`, single-slash opaque form) are the only verified mappings. Note the
+URLComponents trap: `query` decodes+re-encodes and can double-encode meeting context parameters —
+copy `percentEncodedQuery` instead. Reminder identity includes `link.absoluteString`, so feeds whose
+links change https→native with this feature re-key once; accepted caches keep working through the
+web fallback until the next refresh.
+
 ### Feed line endings/folding
 
 RFC 5545 continuation lines (leading space/tab) are unfolded before parsing; text values are

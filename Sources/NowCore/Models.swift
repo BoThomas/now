@@ -87,6 +87,11 @@ package struct AppSettings: Codable, Equatable, Sendable {
     package var notifyDuringMeetings = false
     package var notifyOnCatchUp = false
     package var skipMeetingsOnCatchUp = false
+    /// Open join links directly in the installed meeting app (Zoom, Microsoft
+    /// Teams) instead of routing through the browser. Links that already carry
+    /// a native app protocol are always honored natively regardless of this
+    /// setting; it only upgrades ordinary https join links.
+    package var openJoinsInMeetingApp = false
 
     package var catchUpDelivery: CatchUpDelivery {
         get { skipMeetingsOnCatchUp ? .skip : (notifyOnCatchUp ? .notification : .normal) }
@@ -137,7 +142,7 @@ package struct AppSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case reminderDelivery, reminderScreen, notifyDuringMeetings, notifyOnCatchUp, skipMeetingsOnCatchUp, hideNotificationDetails, notifySyncErrors, notifyUpdates
-        case reminderLeadSeconds, menuMeetingLimit, leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
+        case reminderLeadSeconds, menuMeetingLimit, leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, openJoinsInMeetingApp, skippedUpdateVersion
     }
 
     package func encode(to encoder: Encoder) throws {
@@ -164,6 +169,7 @@ package struct AppSettings: Codable, Equatable, Sendable {
         try c.encode(automaticUpdateChecks, forKey: .automaticUpdateChecks)
         try c.encode(suppressRemindersDuringMeetings, forKey: .suppressRemindersDuringMeetings)
         try c.encode(includeBrowserMeetings, forKey: .includeBrowserMeetings)
+        try c.encode(openJoinsInMeetingApp, forKey: .openJoinsInMeetingApp)
         try c.encodeIfPresent(skippedUpdateVersion, forKey: .skippedUpdateVersion)
     }
 
@@ -212,6 +218,7 @@ package struct AppSettings: Codable, Equatable, Sendable {
         automaticUpdateChecks = c.recover(Bool.self, forKey: .automaticUpdateChecks, decoder: decoder) ?? true
         suppressRemindersDuringMeetings = c.recover(Bool.self, forKey: .suppressRemindersDuringMeetings, decoder: decoder) ?? false
         includeBrowserMeetings = c.recover(Bool.self, forKey: .includeBrowserMeetings, decoder: decoder) ?? false
+        openJoinsInMeetingApp = c.recover(Bool.self, forKey: .openJoinsInMeetingApp, decoder: decoder) ?? false
         reminderDelivery = c.recover(ReminderDelivery.self, forKey: .reminderDelivery, decoder: decoder) ?? .fullscreen
         reminderScreen = c.recover(ReminderScreen.self, forKey: .reminderScreen, decoder: decoder) ?? .focused
         notifyDuringMeetings = c.recover(Bool.self, forKey: .notifyDuringMeetings, decoder: decoder) ?? false
