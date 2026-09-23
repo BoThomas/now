@@ -71,7 +71,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func tickPerSecond() {
         updateButton()
         if let last = store.lastChecked {
-            updateLastSyncItem(last: last, at: store.displayTime)
+            // A fresh `now`, like the Settings captions' local TimelineView:
+            // this timer races the store's own tick that advances
+            // `displayTime`, so the display clock could be up to a second
+            // stale here and lag the caption.
+            updateLastSyncItem(last: last, at: store.now())
         }
     }
 
