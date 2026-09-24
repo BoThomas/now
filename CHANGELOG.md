@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.2.0] - 2026-09-24
+
+### Added
+
+- Open join links directly in the meeting app when Zoom or Teams is installed, skipping the browser
+  detour.
+- The meeting-app join preference is on by default and can be turned off in Settings → General.
+
+### Fixed
+
+- Stop the Show on picker pulsing in width every second.
+- Keep the menu Last synced caption accurate to the current second.
+
 ## [2.1.1] - 2026-09-22
 
 ### Fixed
@@ -275,3 +288,4 @@
 [2.0.0]: https://github.com/BoThomas/now/compare/v1.10.0...v2.0.0
 [2.1.0]: https://github.com/BoThomas/now/compare/v2.0.0...v2.1.0
 [2.1.1]: https://github.com/BoThomas/now/compare/v2.1.0...v2.1.1
+[2.2.0]: https://github.com/BoThomas/now/compare/v2.1.1...v2.2.0
