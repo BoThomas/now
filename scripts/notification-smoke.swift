@@ -305,7 +305,7 @@ struct NotificationSmoke {
         let updater = UpdateController(store: store)
         require(guides.updateIDs.isEmpty, "update guide remains hidden before health commit")
         updater.startupHealthAcknowledged()
-        require(guides.updateIDs == [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID], "successful update presents new guides")
+        require(guides.updateIDs == [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID, FeatureGuideCatalog.joinInAppID], "successful update presents new guides")
         if case .installed = updater.windowContent {} else { require(false, "success dialog follows health commit") }
         NotificationPreview.verifyPopupLayout()
         if let directory = ProcessInfo.processInfo.environment["NOW_NOTIFICATION_RENDER_DIR"] {
@@ -322,11 +322,11 @@ struct NotificationSmoke {
             previewStore.connectNotifications(previewDelivery)
             let previewUpdates = UpdateController(store: previewStore)
             previewUpdates.windowContent = .installed(version: "1.11.0")
-            // Realistic v2.x upgrader: the notifications guide is already
-            // encountered, so the window shows only the interactive display
-            // card.
+            // Realistic v2.1.x upgrader: the notifications and display
+            // guides are already encountered, so the window shows only the
+            // interactive join-in-app card.
             var guideHistory = FeatureGuideState()
-            guideHistory.encountered = [FeatureGuideCatalog.notificationsID]
+            guideHistory.encountered = [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID]
             StoredPreferences.save(guideHistory, key: FeatureGuideController.storageKey, label: "Guide history", defaults: previewDefaults)
             let updateGuides = FeatureGuideController(defaults: previewDefaults)
             updateGuides.startupHealthAcknowledged(installedUpdate: true)
@@ -378,7 +378,7 @@ struct NotificationSmoke {
         resumedStore.featureGuides = deferredGuides
         let resumedUpdater = UpdateController(store: resumedStore)
         resumedUpdater.startupHealthAcknowledged()
-        require(deferredGuides.updateIDs == [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID], "unseen guides survive process state restore without install marker")
+        require(deferredGuides.updateIDs == [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID, FeatureGuideCatalog.joinInAppID], "unseen guides survive process state restore without install marker")
         if case .features = resumedUpdater.windowContent {} else { require(false, "unseen guide gets a new window after restart") }
         let failureStore = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent("guide-failure")), initialState: Persisted())
         failureStore.featureGuides = FeatureGuideController()
