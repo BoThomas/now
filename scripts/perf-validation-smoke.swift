@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import NowCore
 import AppKit
@@ -101,6 +102,15 @@ enum PerfValidationSmoke {
         // M1 — identity hashing done per event inside the 1 Hz tick's due filter.
         print("\n=== M1: per-event identity work in tick() ===")
         let probeEvent = windowEvents(count: 1, calendarID: subscription.id, calendarName: subscription.name, now: clock)[0]
+        // Split benchmark (F1.1 decision input): how much of the per-key cost is
+        // the SHA-256 digest itself vs the hex rendering around it.
+        let identityInput = probeEvent.calendarID.uuidString + ":" + (probeEvent.notificationIdentity ?? probeEvent.id)
+        _ = measure("SHA256 digest only (no hex render)", iterations: 2000, scale: 1000, unit: "us/op") {
+            _ = SHA256.hash(data: Data(identityInput.utf8))
+        }
+        _ = measure("StableDigest.sha256 (digest + hex render)", iterations: 2000, scale: 1000, unit: "us/op") {
+            _ = StableDigest.sha256(identityInput)
+        }
         _ = measure("NotificationLogic.eventKey(event)", iterations: 2000, scale: 1000, unit: "us/op") {
             _ = NotificationLogic.eventKey(probeEvent)
         }
@@ -265,7 +275,7 @@ enum PerfValidationSmoke {
 
         // M6 — accelerated multi-day soak on a fresh store: boundedness of
         // events, ledger, and receipts across simulated weeks.
-        print("\n=== M6: accelerated 16-day soak (15-min refresh + 1 Hz tick cadence) ===")
+        print("\n=== M6: accelerated 16-day soak (one commit + one tick per 15-min step) ===")
         let soakDomain = domain + ".soak"
         let soakDefaults = UserDefaults(suiteName: soakDomain)!
         defer { soakDefaults.removePersistentDomain(forName: soakDomain) }
@@ -327,6 +337,8 @@ enum PerfValidationSmoke {
         print("PERF soak deliveries:     \(soakDeliveries)")
         try require(abs(eventsSamples[2] - eventsSamples[eventsSamples.count - 1]) <= 2,
                     "event list stays bounded across simulated days (rolling fetch window)")
+        try require((ledgerEntriesSamples.min() ?? -1) >= 0,
+                    "soak ledger samples read the domain the store writes (non-vacuous boundedness)")
         try require((ledgerEntriesSamples.max() ?? 0) <= 200,
                     "reminder ledger stays bounded across simulated days")
         try require((ledgerBytesSamples.max() ?? 0) <= 200_000,
