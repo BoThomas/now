@@ -6,6 +6,7 @@ import pathlib
 import plistlib
 import subprocess
 import tempfile
+import time
 import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -20,14 +21,22 @@ with tempfile.TemporaryDirectory(prefix="now-perf-smoke-") as directory:
     }))
     executable = bundle / "MacOS/perf-smoke"
     build("perf", executable)
-    # cfprefsd flushes asynchronously, so removePersistentDomain can leave the
-    # disposable domains' plists behind after exit. Sweep them (unique prefix,
-    # never the installed app's com.thomasboch.now domain).
     preferences = pathlib.Path.home() / "Library" / "Preferences"
     before = set(preferences.glob("com.thomasboch.now.perf-smoke.*"))
+
+    def sweep() -> None:
+        # cfprefsd may flush the disposable domains' plists after the process
+        # exits, so a single immediate sweep can race a late write.
+        for leftover in set(preferences.glob("com.thomasboch.now.perf-smoke.*")) | before:
+            leftover.unlink(missing_ok=True)
+
     try:
         subprocess.run([str(executable)], check=True, timeout=900,
                        env=dict(os.environ, NOW_TEST_CACHE_ROOT=str(directory / "cache")))
     finally:
-        for leftover in set(preferences.glob("com.thomasboch.now.perf-smoke.*")) | before:
-            leftover.unlink(missing_ok=True)
+        sweep()
+        for _ in range(10):
+            if not any(preferences.glob("com.thomasboch.now.perf-smoke.*")):
+                break
+            time.sleep(0.5)
+            sweep()

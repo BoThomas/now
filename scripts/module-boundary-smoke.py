@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-SUITES = [None, "core", "selftest", "notification", "reminder", "cache", "fetch", "workload", "parser", "updater"]
+SUITES = [None, "core", "selftest", "notification", "reminder", "cache", "fetch", "workload", "parser", "updater", "perf"]
 
 
 def main():
