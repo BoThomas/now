@@ -978,19 +978,29 @@ final class AppStore: ObservableObject {
         catchUpIDs.formIntersection(retainedIDs)
         persistReminderLedger()
         recentMutedByID = Self.retainedMutedStates(previous: recentMutedByID, current: sorted, retainedIDs: retainedIDs)
+        // The notification lookup dictionaries are a pure function of the committed
+        // list: every other use is a read, and the legacy-ambiguity set only grows
+        // (idempotent for an identical list). When the list is unchanged — the
+        // common case for per-second EventKit changes and periodic refreshes with
+        // no edits — reuse them instead of re-deriving every key and fingerprint.
+        // Time-dependent work above (ledger reconcile, ratchet, persistence) still
+        // runs on every commit.
+        let listUnchanged = sorted == events
         events = sorted
-        notificationEventsByKey = [:]
-        notificationFingerprints = [:]
-        let legacyCounts = Dictionary(grouping: sorted, by: \.legacyID).mapValues(\.count)
-        ambiguousLegacyNotificationIDs.formUnion(legacyCounts.filter { $0.value > 1 }.keys)
-        for event in sorted {
-            let key = NotificationLogic.eventKey(event)
-            notificationEventsByKey[key] = event
-            notificationEventsByKey[NotificationLogic.key(event.id)] = event
-            if legacyCounts[event.legacyID] == 1 && !ambiguousLegacyNotificationIDs.contains(event.legacyID) {
-                notificationEventsByKey[NotificationLogic.key(event.legacyID)] = event
+        if !listUnchanged {
+            notificationEventsByKey = [:]
+            notificationFingerprints = [:]
+            let legacyCounts = Dictionary(grouping: sorted, by: \.legacyID).mapValues(\.count)
+            ambiguousLegacyNotificationIDs.formUnion(legacyCounts.filter { $0.value > 1 }.keys)
+            for event in sorted {
+                let key = NotificationLogic.eventKey(event)
+                notificationEventsByKey[key] = event
+                notificationEventsByKey[NotificationLogic.key(event.id)] = event
+                if legacyCounts[event.legacyID] == 1 && !ambiguousLegacyNotificationIDs.contains(event.legacyID) {
+                    notificationEventsByKey[NotificationLogic.key(event.legacyID)] = event
+                }
+                notificationFingerprints[key] = NotificationLogic.fingerprint(event)
             }
-            notificationFingerprints[key] = NotificationLogic.fingerprint(event)
         }
         // Keep an open alert in sync: cancelled/removed/disabled events drop
         // off the cards, changed events update in place.

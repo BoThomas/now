@@ -312,7 +312,7 @@ package struct Persisted: Codable, Sendable {
     }
 }
 
-package struct MeetingEvent: Identifiable, Sendable {
+package struct MeetingEvent: Identifiable, Equatable, Sendable {
     package let id: String
     package let uid: String
     /// Pre-v2 agenda identity, retained only for unambiguous saved-state migration.

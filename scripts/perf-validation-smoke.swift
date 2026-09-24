@@ -192,7 +192,22 @@ enum PerfValidationSmoke {
             let committed = windowEvents(count: size, calendarID: subscription.id, calendarName: subscription.name, now: clock)
             store.smokeCommitEvents(committed)
             tickSteady[size] = measure("tick(), \(size) events, steady", iterations: 120) { store.smokeTick() }
-            _ = measure("commitEvents(), \(size) events [per refresh/source]", iterations: 10, warmup: 2) {
+            // A minimally different list (one title edited) forces the full key/
+            // fingerprint rebuild; the identical list exercises the unchanged-skip
+            // path (per-EventKit-change and no-op refresh commits).
+            var edited = committed
+            let first = committed[0]
+            edited[0] = MeetingEvent(uid: first.uid, title: first.title + " ", start: first.start, end: first.end,
+                                     location: first.location, notes: first.notes, link: first.link,
+                                     calendarID: first.calendarID, calendarName: first.calendarName,
+                                     colorIndex: first.colorIndex, colorHex: first.colorHex,
+                                     isMuted: first.isMuted, notificationIdentity: first.notificationIdentity)
+            var flip = false
+            _ = measure("commitEvents() changed list, \(size) events [per edit]", iterations: 10, warmup: 2) {
+                flip.toggle()
+                store.smokeCommitEvents(flip ? edited : committed)
+            }
+            _ = measure("commitEvents() unchanged list, \(size) events [per no-op sync]", iterations: 10, warmup: 2) {
                 store.smokeCommitEvents(committed)
             }
         }
