@@ -771,5 +771,6 @@ extension MenuBarController {
     func smokeBeginTracking() { menuIsTracking = true }
     func smokeEndTracking() { menuIsTracking = false }
     func smokeRefreshMenu(at date: Date) { refreshOpenMenu(now: date) }
+    func smokeMenuTick() { tickPerSecond() }
 }
 #endif
