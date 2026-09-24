@@ -816,3 +816,23 @@ Publish the release asset before updating the tap. A tap failure must remain a f
 with recovery instructions, not a successful release command with an unnoticed stale cask. Recovery
 uses the existing ZIP and must reject downgrades. Keep the disposable remote regressions in
 [tap-bump-tests.py](../scripts/tap-bump-tests.py) in preflight.
+
+### CPU overhead and cache correctness
+
+Keep the dot-image `NSCache` on the main actor with its AppKit callers. Image keys must include size
+and all RGBA components: muted agenda rows use the same calendar RGB with lower alpha. Notification
+lookup reuse requires unchanged event values and exact UTF-8 equality for identity and fingerprint
+inputs; Swift's normal string equality accepts canonically equivalent Unicode whose hashes differ.
+`MeetingEvent.hasSameNotificationLookup(as:)` enforces that distinction. `StableDigest` may optimize
+hex rendering, but must retain exact input bytes and lowercase output; the independent vectors in
+`Tests/NowCoreTests/CacheTests.swift` protect persisted identities.
+
+Persist the sync notification tracker only when its state changes. An absent saved value loads as an
+empty tracker, so skipping an unchanged empty tracker preserves startup behavior. Production and the
+performance harness share `AppStore.syncLedgerKey`; keep changed-state and unchanged-state
+assertions together. Time-dependent ledger reconciliation still runs on every event commit.
+
+The open-menu signature and row builder must select the same limited list through `displayedEvents`.
+Only displayed rows determine the time-column width; a wider time beyond the menu limit no longer
+widens the dropdown. The disposable `scripts/perf-validation-smoke.py` harness measures these paths;
+its timings are informational and depend on build configuration and the host.

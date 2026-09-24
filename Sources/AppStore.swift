@@ -116,7 +116,7 @@ final class AppStore: ObservableObject {
     private var catchUpBoundary: [UUID: Date] = [:]
     private var catchUpIDs: Set<String> = []
     private var syncNotificationTracker = SyncNotificationTracker()
-    private let syncLedgerKey = "local.tboch.now.sync-notifications.v1"
+    static let syncLedgerKey = "local.tboch.now.sync-notifications.v1"
     private var completedInitialRefresh = false
     private var pendingNotificationResponses: [(ReminderNotification, String)] = []
     private var previousNotificationSettings: AppSettings?
@@ -195,7 +195,7 @@ final class AppStore: ObservableObject {
         pausedUntil = state.pausedUntil
         if initialState == nil {
             reminderLedger = StoredPreferences.load(ReminderLedger.self, key: ledgerKey, label: "Reminder history", maxBytes: 8_000_000) ?? ReminderLedger()
-            syncNotificationTracker = StoredPreferences.load(SyncNotificationTracker.self, key: syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000) ?? SyncNotificationTracker()
+            syncNotificationTracker = StoredPreferences.load(SyncNotificationTracker.self, key: Self.syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000) ?? SyncNotificationTracker()
         }
         reminderLedger.migrateLegacy(lead: settings.leadSeconds)
         previousNotificationSettings = settings
@@ -978,19 +978,31 @@ final class AppStore: ObservableObject {
         catchUpIDs.formIntersection(retainedIDs)
         persistReminderLedger()
         recentMutedByID = Self.retainedMutedStates(previous: recentMutedByID, current: sorted, retainedIDs: retainedIDs)
+        // The notification lookup dictionaries are a pure function of the committed
+        // list: every other use is a read, and the legacy-ambiguity set only grows
+        // (idempotent for an identical list). When the list is unchanged — the
+        // common case for per-second EventKit changes and periodic refreshes with
+        // no edits — reuse them instead of re-deriving every key and fingerprint.
+        // Time-dependent work above (ledger reconcile, ratchet, persistence) still
+        // runs on every commit.
+        let listUnchanged = sorted.count == events.count && zip(sorted, events).allSatisfy { pair in
+            pair.0.hasSameNotificationLookup(as: pair.1)
+        }
         events = sorted
-        notificationEventsByKey = [:]
-        notificationFingerprints = [:]
-        let legacyCounts = Dictionary(grouping: sorted, by: \.legacyID).mapValues(\.count)
-        ambiguousLegacyNotificationIDs.formUnion(legacyCounts.filter { $0.value > 1 }.keys)
-        for event in sorted {
-            let key = NotificationLogic.eventKey(event)
-            notificationEventsByKey[key] = event
-            notificationEventsByKey[NotificationLogic.key(event.id)] = event
-            if legacyCounts[event.legacyID] == 1 && !ambiguousLegacyNotificationIDs.contains(event.legacyID) {
-                notificationEventsByKey[NotificationLogic.key(event.legacyID)] = event
+        if !listUnchanged {
+            notificationEventsByKey = [:]
+            notificationFingerprints = [:]
+            let legacyCounts = Dictionary(grouping: sorted, by: \.legacyID).mapValues(\.count)
+            ambiguousLegacyNotificationIDs.formUnion(legacyCounts.filter { $0.value > 1 }.keys)
+            for event in sorted {
+                let key = NotificationLogic.eventKey(event)
+                notificationEventsByKey[key] = event
+                notificationEventsByKey[NotificationLogic.key(event.id)] = event
+                if legacyCounts[event.legacyID] == 1 && !ambiguousLegacyNotificationIDs.contains(event.legacyID) {
+                    notificationEventsByKey[NotificationLogic.key(event.legacyID)] = event
+                }
+                notificationFingerprints[key] = NotificationLogic.fingerprint(event)
             }
-            notificationFingerprints[key] = NotificationLogic.fingerprint(event)
         }
         // Keep an open alert in sync: cancelled/removed/disabled events drop
         // off the cards, changed events update in place.
@@ -998,9 +1010,10 @@ final class AppStore: ObservableObject {
         if cacheLoaded { notifications?.reconcile() }
         if completedInitialRefresh {
             let failed = syncFailureIDs
+            let trackerBefore = syncNotificationTracker
             syncNotificationTracker.firstFailure = syncNotificationTracker.firstFailure.filter { failed.contains($0.key) }
             syncNotificationTracker.notified.formIntersection(failed)
-            persistSyncNotificationTracker()
+            if syncNotificationTracker != trackerBefore { persistSyncNotificationTracker() }
         }
     }
 
@@ -1125,8 +1138,9 @@ final class AppStore: ObservableObject {
             guard let self else { return }
             if item.updateVersion != nil { self.updateNotificationSubmitted?(item); return }
             if item.sync {
+                let trackerBefore = self.syncNotificationTracker
                 self.syncNotificationTracker.notified.formUnion(item.keys.compactMap(UUID.init(uuidString:)))
-                self.persistSyncNotificationTracker()
+                if self.syncNotificationTracker != trackerBefore { self.persistSyncNotificationTracker() }
             }
             else if !item.test { self.acceptNotification(item) }
         }
@@ -1371,11 +1385,18 @@ final class AppStore: ObservableObject {
 
     private func notifySyncProblems(at date: Date) {
         guard settings.notifySyncErrors else {
-            syncNotificationTracker = SyncNotificationTracker(); persistSyncNotificationTracker(); return
+            // Persist only when the reset actually changed stored state; this
+            // branch runs every tick.
+            let reset = SyncNotificationTracker()
+            guard syncNotificationTracker != reset else { return }
+            syncNotificationTracker = reset
+            persistSyncNotificationTracker()
+            return
         }
         guard completedInitialRefresh else { return }
+        let trackerBefore = syncNotificationTracker
         let candidates = syncNotificationTracker.candidates(failed: syncFailureIDs, now: date)
-        persistSyncNotificationTracker()
+        if syncNotificationTracker != trackerBefore { persistSyncNotificationTracker() }
         guard !candidates.isEmpty else { return }
         let failures = candidates.sorted { $0.uuidString < $1.uuidString }.compactMap { id -> (String, String)? in
             guard let first = syncNotificationTracker.firstFailure[id] else { return nil }
@@ -1390,7 +1411,7 @@ final class AppStore: ObservableObject {
     }
 
     private func persistSyncNotificationTracker() {
-        StoredPreferences.save(syncNotificationTracker, key: syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000)
+        StoredPreferences.save(syncNotificationTracker, key: Self.syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000)
     }
 
     var notificationProblemTitle: String? {
