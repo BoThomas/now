@@ -335,6 +335,19 @@ package struct MeetingEvent: Identifiable, Equatable, Sendable {
     /// never alert (`dueForAlert` skips them).
     package var isMuted: Bool = false
 
+    /// Swift string equality accepts canonically equivalent Unicode, but the
+    /// notification keys and fingerprints hash exact UTF-8 bytes. Lookup reuse
+    /// must preserve both the event snapshot and those byte-sensitive inputs.
+    package func hasSameNotificationLookup(as other: MeetingEvent) -> Bool {
+        guard self == other else { return false }
+        let inputs = [id, legacyID, notificationIdentity ?? "", title, location ?? "", link?.absoluteString ?? ""]
+        let otherInputs = [other.id, other.legacyID, other.notificationIdentity ?? "", other.title,
+                           other.location ?? "", other.link?.absoluteString ?? ""]
+        return zip(inputs, otherInputs).allSatisfy { pair in
+            pair.0.utf8.elementsEqual(pair.1.utf8)
+        }
+    }
+
     package init(uid: String, title: String, start: Date, end: Date, location: String?, notes: String?, link: URL?, calendarID: UUID, calendarName: String, colorIndex: Int, colorHex: String, isMuted: Bool = false, notificationIdentity: String? = nil) {
         self.uid = uid
         self.notificationIdentity = notificationIdentity

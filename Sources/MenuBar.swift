@@ -124,7 +124,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         // Rebuild the title/dot cluster only when the rendered content actually
         // changed; identical assignments every second were measurable waste at
-        // large event counts (see docs/local CPU investigation, F3).
+        // large event counts (see scripts/perf-validation-smoke.swift, M3).
         let dotColors = focus.events.map(\.colorHex)
         let titleState = "\(countdown)|\(dotColors.joined(separator: ","))"
         if titleState != lastButtonTitleState {

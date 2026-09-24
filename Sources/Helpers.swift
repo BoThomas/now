@@ -130,7 +130,12 @@ enum Palette {
     @MainActor static func dotClusterImage(colors: [NSColor], size: CGFloat = 12) -> NSImage {
         let visibleColors = Array(colors.prefix(3))
         guard !visibleColors.isEmpty else { return NSImage(size: .zero) }
-        let cacheKey = (["\(size)"] + visibleColors.map { Palette.hexString(from: $0) })
+        let cacheKey = (["\(size)"] + visibleColors.map { color in
+            let srgb = color.usingColorSpace(.sRGB) ?? color
+            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+            srgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+            return "\(red),\(green),\(blue),\(alpha)"
+        })
             .joined(separator: "|") as NSString
         if let cached = dotClusterCache.object(forKey: cacheKey) { return cached }
         let imageSize = dotClusterSize(colorCount: visibleColors.count, dotSize: size)

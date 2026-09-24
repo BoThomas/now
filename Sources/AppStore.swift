@@ -116,7 +116,7 @@ final class AppStore: ObservableObject {
     private var catchUpBoundary: [UUID: Date] = [:]
     private var catchUpIDs: Set<String> = []
     private var syncNotificationTracker = SyncNotificationTracker()
-    private let syncLedgerKey = "local.tboch.now.sync-notifications.v1"
+    static let syncLedgerKey = "local.tboch.now.sync-notifications.v1"
     private var completedInitialRefresh = false
     private var pendingNotificationResponses: [(ReminderNotification, String)] = []
     private var previousNotificationSettings: AppSettings?
@@ -195,7 +195,7 @@ final class AppStore: ObservableObject {
         pausedUntil = state.pausedUntil
         if initialState == nil {
             reminderLedger = StoredPreferences.load(ReminderLedger.self, key: ledgerKey, label: "Reminder history", maxBytes: 8_000_000) ?? ReminderLedger()
-            syncNotificationTracker = StoredPreferences.load(SyncNotificationTracker.self, key: syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000) ?? SyncNotificationTracker()
+            syncNotificationTracker = StoredPreferences.load(SyncNotificationTracker.self, key: Self.syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000) ?? SyncNotificationTracker()
         }
         reminderLedger.migrateLegacy(lead: settings.leadSeconds)
         previousNotificationSettings = settings
@@ -985,7 +985,9 @@ final class AppStore: ObservableObject {
         // no edits — reuse them instead of re-deriving every key and fingerprint.
         // Time-dependent work above (ledger reconcile, ratchet, persistence) still
         // runs on every commit.
-        let listUnchanged = sorted == events
+        let listUnchanged = sorted.count == events.count && zip(sorted, events).allSatisfy { pair in
+            pair.0.hasSameNotificationLookup(as: pair.1)
+        }
         events = sorted
         if !listUnchanged {
             notificationEventsByKey = [:]
@@ -1409,7 +1411,7 @@ final class AppStore: ObservableObject {
     }
 
     private func persistSyncNotificationTracker() {
-        StoredPreferences.save(syncNotificationTracker, key: syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000)
+        StoredPreferences.save(syncNotificationTracker, key: Self.syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000)
     }
 
     var notificationProblemTitle: String? {

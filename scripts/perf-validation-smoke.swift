@@ -187,10 +187,10 @@ enum PerfValidationSmoke {
         // Persistence is change-conditional: a fresh, empty tracker with no sync
         // problems must not be re-written every tick. An absent key decodes to a
         // fresh tracker at load, so this is semantically identical to before.
-        try require(UserDefaults.standard.data(forKey: "local.tboch.now.sync-notifications.v1") == nil,
+        try require(UserDefaults.standard.data(forKey: AppStore.syncLedgerKey) == nil,
                     "an unchanged empty sync tracker is not persisted per tick")
 
-        print("\n=== M2b: tick() steady state, sync-problem notifications OFF (still persists each tick) ===")
+        print("\n=== M2b: tick() steady state, sync-problem notifications OFF (unchanged tracker skips persistence) ===")
         for size in sizes {
             let committed = windowEvents(count: size, calendarID: subscription.id, calendarName: subscription.name, now: clock)
             store.smokeCommitEvents(committed)
@@ -221,7 +221,7 @@ enum PerfValidationSmoke {
         store.smokeCommitEvents(windowEvents(count: 1000, calendarID: subscription.id, calendarName: subscription.name, now: clock))
         _ = measure("tick(), 1000 events, sync-on failing source", iterations: 120) { store.smokeTick() }
         try require(store.errors[subscription.id] != nil, "synthetic merge produced a persistent source error")
-        try require(UserDefaults.standard.data(forKey: "local.tboch.now.sync-notifications.v1") != nil,
+        try require(UserDefaults.standard.data(forKey: AppStore.syncLedgerKey) != nil,
                     "a changed sync tracker persists (failing source recorded)")
 
         // M3 — status-item per-second rebuild and the retained Last-synced item.
@@ -238,6 +238,12 @@ enum PerfValidationSmoke {
         _ = measure("Fmt.syncStatus (RelativeDateTimeFormatter alloc)", iterations: 400, scale: 1000, unit: "us/op") {
             _ = Fmt.syncStatus(clock.addingTimeInterval(-120), relativeTo: clock)
         }
+        let dotColor = NSColor(srgbRed: 0.2, green: 0.4, blue: 0.6, alpha: 1)
+        let normalDot = Palette.dotImage(color: dotColor)
+        let mutedDot = Palette.dotImage(color: dotColor.withAlphaComponent(0.35))
+        try require(normalDot !== mutedDot, "muted and ordinary dots have separate cached images")
+        try require(Palette.dotImage(color: dotColor) === normalDot,
+                    "ordinary dot remains cached after rendering a muted dot")
         let focusColors = [NSColor.systemBlue, NSColor.systemPurple, NSColor.systemGreen]
         _ = measure("Palette.dotClusterImage (3 dots)", iterations: 400, scale: 1000, unit: "us/op") {
             _ = Palette.dotClusterImage(colors: focusColors, size: 7)
