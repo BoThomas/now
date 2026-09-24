@@ -110,7 +110,13 @@ enum Palette {
         return .black
     }
 
-    static func dotImage(color: NSColor, size: CGFloat = 12) -> NSImage {
+    /// Rendered clusters are content-addressed by color tuple and size: the 1 Hz
+    /// status rebuild asks for the same few calendar-colored clusters all day.
+    /// Main-actor confined (like every renderer caller); NSCache is thread-safe
+    /// but not Sendable, so the static cache must stay isolated.
+    @MainActor private static let dotClusterCache = NSCache<NSString, NSImage>()
+
+    @MainActor static func dotImage(color: NSColor, size: CGFloat = 12) -> NSImage {
         dotClusterImage(colors: [color], size: size)
     }
 
@@ -121,9 +127,12 @@ enum Palette {
     /// circle keeps equal-colored calendars visibly distinct on any menu-bar
     /// material. More than three meetings remain a compact visual cluster; the
     /// exact count belongs in the accessibility text and dropdown.
-    static func dotClusterImage(colors: [NSColor], size: CGFloat = 12) -> NSImage {
+    @MainActor static func dotClusterImage(colors: [NSColor], size: CGFloat = 12) -> NSImage {
         let visibleColors = Array(colors.prefix(3))
         guard !visibleColors.isEmpty else { return NSImage(size: .zero) }
+        let cacheKey = (["\(size)"] + visibleColors.map { Palette.hexString(from: $0) })
+            .joined(separator: "|") as NSString
+        if let cached = dotClusterCache.object(forKey: cacheKey) { return cached }
         let imageSize = dotClusterSize(colorCount: visibleColors.count, dotSize: size)
         let step = size * 0.60
         let image = NSImage(size: imageSize)
@@ -148,6 +157,7 @@ enum Palette {
         }
         image.unlockFocus()
         image.isTemplate = false
+        dotClusterCache.setObject(image, forKey: cacheKey)
         return image
     }
 
@@ -171,6 +181,10 @@ enum Fmt {
         formatter.dateStyle = .none
         return formatter
     }()
+    // Computed on purpose: a stored static would add a new non-Sendable global
+    // (RelativeDateTimeFormatter) to the strict-concurrency report — the same
+    // category as the baselined `time` formatter, not worth a new finding for
+    // ~1 us per call.
     private static var relativeFormatter: RelativeDateTimeFormatter {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated

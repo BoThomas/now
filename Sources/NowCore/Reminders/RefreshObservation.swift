@@ -16,7 +16,7 @@ package struct CatchUpRefreshTracker: Sendable {
 }
 
 /// One notification per continuous failure episode, after five minutes.
-package struct SyncNotificationTracker: Codable, Sendable {
+package struct SyncNotificationTracker: Codable, Equatable, Sendable {
     package var firstFailure: [UUID: Date] = [:]
     package var notified: Set<UUID> = []
     package init() {}

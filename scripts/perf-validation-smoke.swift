@@ -184,8 +184,11 @@ enum PerfValidationSmoke {
         // Complete the initial refresh once: notifySyncProblems now runs every tick.
         let request = store.smokeBeginFullRefresh(subscriptionIDs: [subscription.id])
         store.smokeFinishRefresh(fetched: [subscription], requestID: request)
-        try require(UserDefaults.standard.data(forKey: "local.tboch.now.sync-notifications.v1") != nil,
-                    "a completed initial refresh persists the sync tracker at least once")
+        // Persistence is change-conditional: a fresh, empty tracker with no sync
+        // problems must not be re-written every tick. An absent key decodes to a
+        // fresh tracker at load, so this is semantically identical to before.
+        try require(UserDefaults.standard.data(forKey: "local.tboch.now.sync-notifications.v1") == nil,
+                    "an unchanged empty sync tracker is not persisted per tick")
 
         print("\n=== M2b: tick() steady state, sync-problem notifications OFF (still persists each tick) ===")
         for size in sizes {
@@ -218,6 +221,8 @@ enum PerfValidationSmoke {
         store.smokeCommitEvents(windowEvents(count: 1000, calendarID: subscription.id, calendarName: subscription.name, now: clock))
         _ = measure("tick(), 1000 events, sync-on failing source", iterations: 120) { store.smokeTick() }
         try require(store.errors[subscription.id] != nil, "synthetic merge produced a persistent source error")
+        try require(UserDefaults.standard.data(forKey: "local.tboch.now.sync-notifications.v1") != nil,
+                    "a changed sync tracker persists (failing source recorded)")
 
         // M3 — status-item per-second rebuild and the retained Last-synced item.
         print("\n=== M3: menu bar 1 Hz rebuild ===")

@@ -1008,9 +1008,10 @@ final class AppStore: ObservableObject {
         if cacheLoaded { notifications?.reconcile() }
         if completedInitialRefresh {
             let failed = syncFailureIDs
+            let trackerBefore = syncNotificationTracker
             syncNotificationTracker.firstFailure = syncNotificationTracker.firstFailure.filter { failed.contains($0.key) }
             syncNotificationTracker.notified.formIntersection(failed)
-            persistSyncNotificationTracker()
+            if syncNotificationTracker != trackerBefore { persistSyncNotificationTracker() }
         }
     }
 
@@ -1135,8 +1136,9 @@ final class AppStore: ObservableObject {
             guard let self else { return }
             if item.updateVersion != nil { self.updateNotificationSubmitted?(item); return }
             if item.sync {
+                let trackerBefore = self.syncNotificationTracker
                 self.syncNotificationTracker.notified.formUnion(item.keys.compactMap(UUID.init(uuidString:)))
-                self.persistSyncNotificationTracker()
+                if self.syncNotificationTracker != trackerBefore { self.persistSyncNotificationTracker() }
             }
             else if !item.test { self.acceptNotification(item) }
         }
@@ -1381,11 +1383,18 @@ final class AppStore: ObservableObject {
 
     private func notifySyncProblems(at date: Date) {
         guard settings.notifySyncErrors else {
-            syncNotificationTracker = SyncNotificationTracker(); persistSyncNotificationTracker(); return
+            // Persist only when the reset actually changed stored state; this
+            // branch runs every tick.
+            let reset = SyncNotificationTracker()
+            guard syncNotificationTracker != reset else { return }
+            syncNotificationTracker = reset
+            persistSyncNotificationTracker()
+            return
         }
         guard completedInitialRefresh else { return }
+        let trackerBefore = syncNotificationTracker
         let candidates = syncNotificationTracker.candidates(failed: syncFailureIDs, now: date)
-        persistSyncNotificationTracker()
+        if syncNotificationTracker != trackerBefore { persistSyncNotificationTracker() }
         guard !candidates.isEmpty else { return }
         let failures = candidates.sorted { $0.uuidString < $1.uuidString }.compactMap { id -> (String, String)? in
             guard let first = syncNotificationTracker.firstFailure[id] else { return nil }
