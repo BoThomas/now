@@ -1,4 +1,12 @@
 # Changelog
+## [2.2.1] - 2026-09-29
+
+### Improved
+- now uses less CPU while idle: menu bar title, notification lookups, and internal bookkeeping skip work when nothing actually changed.
+### Fixed
+- Calendar color dots in the menu bar no longer render with the wrong transparency when two colors differ only in opacity.
+- Editing an event in a way that only changes the underlying text encoding (for example, accented characters) now correctly refreshes its reminder instead of reusing stale state.
+
 
 ## [2.2.0] - 2026-09-24
 
@@ -289,3 +297,4 @@
 [2.1.0]: https://github.com/BoThomas/now/compare/v2.0.0...v2.1.0
 [2.1.1]: https://github.com/BoThomas/now/compare/v2.1.0...v2.1.1
 [2.2.0]: https://github.com/BoThomas/now/compare/v2.1.1...v2.2.0
+[2.2.1]: https://github.com/BoThomas/now/compare/v2.2.0...v2.2.1
