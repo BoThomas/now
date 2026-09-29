@@ -71,6 +71,14 @@ enum UpdaterTestRunner {
             precondition(delegate.store.featureGuides?.updateIDs == [FeatureGuideCatalog.displayID])
             try! Data(target.utf8).write(to: demoRoot!.appendingPathComponent("gui-success"))
             smokeTimer?.invalidate()
+        } else if case .features = controller.windowContent {
+            // A fixture newer than the last release can present guides the
+            // seeded profile has not encountered (releasing 2.2.1 after 2.2.0
+            // introduced join-in-app). The launch check no-ops while any
+            // update window is open, so close the card like a user would and
+            // check again; closing an encountered guide never re-presents it.
+            controller.dismissWindow()
+            controller.check(userInitiated: true)
         } else if controller.stagedVersion == target && !installStarted {
             installStarted = true
             controller.install()
