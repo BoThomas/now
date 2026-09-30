@@ -1194,8 +1194,17 @@ private struct JoinHookSettings: View {
     let onTest: () -> Void
     let onClear: () -> Void
 
-    private var hasCommand: Bool {
-        !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// The command a run would actually execute; nil when it is blank or
+    /// oversized. Oversized is shown as an explicit error and keeps Run Test
+    /// disabled — validation must be visible, never a silent no-op.
+    private var runnableCommand: String? {
+        JoinHook.normalizedCommand(command)
+    }
+
+    private var lengthError: String? {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > JoinHook.maxCommandLength else { return nil }
+        return "Command is too long (\(trimmed.count) of \(JoinHook.maxCommandLength) characters)"
     }
 
     /// Click-to-insert variables, already quoted — the one shell mistake the
@@ -1219,6 +1228,11 @@ private struct JoinHookSettings: View {
             TextField(#"watson start meetings "$NOW_TITLE""#, text: $command)
                 .font(.system(size: 12, design: .monospaced))
                 .textFieldStyle(.roundedBorder)
+            if let lengthError {
+                Text(lengthError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
             HStack(spacing: 4) {
                 ForEach(Self.variables, id: \.name) { variable in
                     Button {
@@ -1240,7 +1254,7 @@ private struct JoinHookSettings: View {
             }
             HStack {
                 Button(testRunning ? "Testing…" : "Run Test", action: onTest)
-                    .disabled(testRunning || !hasCommand)
+                    .disabled(testRunning || runnableCommand == nil)
                 if !runs.isEmpty {
                     Button("Clear History", action: onClear)
                 }
