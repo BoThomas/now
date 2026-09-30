@@ -1260,9 +1260,9 @@ private struct JoinHookSettings: View {
     }
 }
 
-/// One history line: outcome icon, time, meeting title, test badge, exit
-/// status. Failed runs show a one-line excerpt inline; the eye button opens
-/// the full error output in a popover.
+/// One history line: outcome icon, time, meeting title, test badge, status.
+/// The eye button opens the run's output in a popover; runs without output
+/// just describe their outcome.
 private struct JoinHookRunRow: View {
     let run: JoinHookRun
     @State private var showingError = false
@@ -1287,10 +1287,22 @@ private struct JoinHookRunRow: View {
 
     private var statusText: String {
         switch run.outcome {
-        case .success: return "exit 0"
+        case .success: return "success"
         case .failure(let exitCode): return "exit \(exitCode)"
         case .timeout: return "timed out"
         case .launchFailure: return "didn't start"
+        }
+    }
+
+    /// The popover text: captured output when there is any, otherwise a
+    /// plain description of the outcome.
+    private var popoverText: String {
+        if let detail = errorDetail { return detail }
+        switch run.outcome {
+        case .success: return "Success (no error output)"
+        case .failure(let exitCode): return "Exit \(exitCode) (no error output)"
+        case .timeout: return "Timed out (no error output)"
+        case .launchFailure: return "Failed to start"
         }
     }
 
@@ -1302,63 +1314,50 @@ private struct JoinHookRunRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Image(systemName: symbol)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(tint)
-                    .frame(width: 12)
-                Text(Fmt.time.string(from: run.date))
-                    .font(.system(size: 10).monospacedDigit())
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 12)
+            Text(Fmt.time.string(from: run.date))
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(.secondary)
+            Text(run.title.isEmpty ? "Untitled" : run.title)
+                .font(.system(size: 10))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if run.isTest {
+                Text("Test")
+                    .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
-                Text(run.title.isEmpty ? "Untitled" : run.title)
-                    .font(.system(size: 10))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if run.isTest {
-                    Text("Test")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.primary.opacity(0.08)))
-                }
-                Spacer(minLength: 4)
-                Text(statusText)
-                    .font(.system(size: 10).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                if errorDetail != nil {
-                    Button {
-                        showingError.toggle()
-                    } label: {
-                        Image(systemName: showingError ? "eye.fill" : "eye")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .cursor(.pointingHand)
-                    .help("Show error output")
-                    .accessibilityLabel("Show error output for \(run.title.isEmpty ? "Untitled" : run.title)")
-                    .popover(isPresented: $showingError, arrowEdge: .bottom) {
-                        ScrollView {
-                            Text(errorDetail ?? "")
-                                .font(.system(size: 11, design: .monospaced))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
-                        }
-                        .frame(width: 380, height: 160)
-                    }
-                }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.primary.opacity(0.08)))
             }
-            // Failed runs show their error inline, not only in the popover.
-            if let excerpt = run.errorExcerpt {
-                Text(excerpt.replacingOccurrences(of: "\n", with: " · "))
-                    .font(.system(size: 9, design: .monospaced))
+            Spacer(minLength: 4)
+            Text(statusText)
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(.secondary)
+            Button {
+                showingError.toggle()
+            } label: {
+                Image(systemName: showingError ? "eye.fill" : "eye")
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.leading, 18)
+            }
+            .buttonStyle(.borderless)
+            .cursor(.pointingHand)
+            .help("Show run output")
+            .accessibilityLabel("Show run output for \(run.title.isEmpty ? "Untitled" : run.title)")
+            .popover(isPresented: $showingError, arrowEdge: .bottom) {
+                ScrollView {
+                    Text(popoverText)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+                .frame(width: 380, height: 160)
             }
         }
     }
