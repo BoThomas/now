@@ -1304,30 +1304,41 @@ private struct JoinHookRunRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(tint)
-                .frame(width: 12)
-            Text(Fmt.time.string(from: run.date))
-                .font(.system(size: 10).monospacedDigit())
-                .foregroundStyle(.secondary)
-            Text(run.title.isEmpty ? "Untitled" : run.title)
-                .font(.system(size: 10))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            if run.isTest {
-                Text("Test")
-                    .font(.system(size: 9, weight: .semibold))
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(tint)
+                    .frame(width: 12)
+                Text(Fmt.time.string(from: run.date))
+                    .font(.system(size: 10).monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.primary.opacity(0.08)))
+                Text(run.title.isEmpty ? "Untitled" : run.title)
+                    .font(.system(size: 10))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if run.isTest {
+                    Text("Test")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.primary.opacity(0.08)))
+                }
+                Spacer(minLength: 4)
+                Text(statusText)
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 4)
-            Text(statusText)
-                .font(.system(size: 10).monospacedDigit())
-                .foregroundStyle(.secondary)
+            // Failed runs show their error inline, not only in the tooltip.
+            if let excerpt = run.errorExcerpt {
+                Text(excerpt.replacingOccurrences(of: "\n", with: " · "))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.leading, 18)
+            }
         }
         .help(tooltip)
     }
