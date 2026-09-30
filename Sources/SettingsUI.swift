@@ -1201,11 +1201,11 @@ private struct JoinHookSettings: View {
     /// Click-to-insert variables, already quoted — the one shell mistake the
     /// UI can prevent is a forgotten "$NOW_TITLE" around spaces.
     private static let variables: [(name: String, help: String)] = [
-        ("NOW_TITLE", "Append \"$NOW_TITLE\" — the meeting title"),
-        ("NOW_CALENDAR", "Append \"$NOW_CALENDAR\" — the calendar name"),
-        ("NOW_URL", "Append \"$NOW_URL\" — the join link"),
-        ("NOW_START", "Append \"$NOW_START\" — start time (ISO 8601)"),
-        ("NOW_END", "Append \"$NOW_END\" — end time (ISO 8601)"),
+        ("NOW_TITLE", "Append \"$NOW_TITLE\" (meeting title)"),
+        ("NOW_CALENDAR", "Append \"$NOW_CALENDAR\" (calendar name)"),
+        ("NOW_URL", "Append \"$NOW_URL\" (join link)"),
+        ("NOW_START", "Append \"$NOW_START\" (start time, ISO 8601)"),
+        ("NOW_END", "Append \"$NOW_END\" (end time, ISO 8601)"),
     ]
 
     private func insertVariable(_ name: String) {
@@ -1238,10 +1238,6 @@ private struct JoinHookSettings: View {
                     .accessibilityLabel(variable.help)
                 }
             }
-            Text("Runs in your login shell. Meeting details arrive as environment variables: NOW_TITLE, NOW_CALENDAR, NOW_URL, NOW_START, NOW_END. Runs once per meeting, times out after 10 seconds.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button(testRunning ? "Testing…" : "Run Test", action: onTest)
                     .disabled(testRunning || !hasCommand)
@@ -1297,7 +1293,7 @@ private struct JoinHookRunRow: View {
     }
 
     private var tooltip: String {
-        var text = "\(run.isTest ? "Test run" : "Run") for “\(run.title.isEmpty ? "Untitled" : run.title)” — \(statusText)."
+        var text = "\(run.isTest ? "Test run" : "Run") for “\(run.title.isEmpty ? "Untitled" : run.title)”: \(statusText)."
         if case .launchFailure(let reason) = run.outcome {
             text += "\n\(reason)"
         }
@@ -2101,7 +2097,7 @@ struct SettingsView: View {
                 .popover(isPresented: $showJoinHookInfo, arrowEdge: .trailing) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Run a command when joining a meeting").font(.headline)
-                        Text("The command runs once per meeting when you click Join anywhere in now, including from notifications — but never from preview buttons. It runs in your login shell exactly as you type it. Meeting details arrive as environment variables, never inside the command, so titles or links cannot inject shell syntax. Runs longer than 10 seconds are stopped. The command is stored with your settings but never logged.")
+                        Text("Runs once per meeting when you join. It runs in your login shell; meeting details arrive as environment variables, never inside the command. Commands longer than 10 seconds are stopped. The command is stored with your settings but never logged.")
                     }
                     .font(.callout)
                     .padding(14)
