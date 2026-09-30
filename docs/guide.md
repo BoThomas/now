@@ -82,7 +82,8 @@ the command itself, so meeting titles and links cannot inject shell syntax:
 | `NOW_END`      | Scheduled end (ISO 8601)                   |
 
 For example, time tracking with [watson](https://github.com/TailorDev/watson):
-`watson start meetings "$NOW_TITLE"`.
+`watson start meetings "$NOW_TITLE"`. In Settings, click a variable to append it to the command,
+already quoted.
 
 **Run Test** executes the command against a sample meeting; the list below shows the last runs with
 their outcome, including a short error excerpt for failed ones. Commands that take longer than 10

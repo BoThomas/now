@@ -1198,11 +1198,46 @@ private struct JoinHookSettings: View {
         !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Click-to-insert variables, already quoted — the one shell mistake the
+    /// UI can prevent is a forgotten "$NOW_TITLE" around spaces.
+    private static let variables: [(name: String, help: String)] = [
+        ("NOW_TITLE", "Append \"$NOW_TITLE\" — the meeting title"),
+        ("NOW_CALENDAR", "Append \"$NOW_CALENDAR\" — the calendar name"),
+        ("NOW_URL", "Append \"$NOW_URL\" — the join link"),
+        ("NOW_START", "Append \"$NOW_START\" — start time (ISO 8601)"),
+        ("NOW_END", "Append \"$NOW_END\" — end time (ISO 8601)"),
+    ]
+
+    private func insertVariable(_ name: String) {
+        let quoted = "\"$\(name)\""
+        let needsSpace = !command.isEmpty && !command.hasSuffix(" ") && !command.hasSuffix("\n")
+        command += (needsSpace ? " " : "") + quoted
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField(#"watson start meetings "$NOW_TITLE""#, text: $command)
                 .font(.system(size: 12, design: .monospaced))
                 .textFieldStyle(.roundedBorder)
+            HStack(spacing: 4) {
+                ForEach(Self.variables, id: \.name) { variable in
+                    Button {
+                        insertVariable(variable.name)
+                    } label: {
+                        Text(variable.name)
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
+                            .contentShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                    .cursor(.pointingHand)
+                    .help(variable.help)
+                    .accessibilityLabel(variable.help)
+                }
+            }
             Text("Runs in your login shell. Meeting details arrive as environment variables: NOW_TITLE, NOW_CALENDAR, NOW_URL, NOW_START, NOW_END. Runs once per meeting, times out after 10 seconds.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
