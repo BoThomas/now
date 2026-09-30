@@ -93,6 +93,9 @@ extension CoreTests {
         var expectedFields = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         var expectedSettings = expectedFields["settings"] as! [String: Any]
         expectedSettings["reminderLeadSeconds"] = [300]
+        // Settings introduced after this legacy snapshot decode back to their
+        // defaults and are written on the next save.
+        expectedSettings["openJoinsInMeetingApp"] = true
         expectedFields["settings"] = expectedSettings
         let expected = expectedFields as NSDictionary
         let actual = try JSONSerialization.jsonObject(with: encoded) as! NSDictionary
@@ -140,6 +143,14 @@ extension CoreTests {
 
     static func meetingIdentity(_ check: inout Check) {
         let id = UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!
+        let composed = modelEvent(calendarID: id, title: "Caf\u{00E9}")
+        let decomposed = modelEvent(calendarID: id, title: "Cafe\u{0301}")
+        check.expect(composed == decomposed, "fixture titles are canonically equivalent")
+        check.expect(ReminderIdentity.fingerprint(composed) != ReminderIdentity.fingerprint(decomposed),
+                     "notification fingerprints preserve distinct Unicode bytes")
+        check.expect(!composed.hasSameNotificationLookup(as: decomposed),
+                     "Unicode normalization changes invalidate notification lookup snapshots")
+        check.expect(composed.hasSameNotificationLookup(as: composed), "identical snapshots reuse notification lookups")
         let plain = modelEvent(calendarID: id)
         let first = modelEvent(calendarID: id, identity: "ics:3:uid:1800000000.0")
         let second = modelEvent(calendarID: id, identity: "ics:3:uid:1800086400.0")

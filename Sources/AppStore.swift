@@ -75,7 +75,20 @@ final class AppStore: ObservableObject {
     /// Per-calendar errors report the outcome separately.
     @Published private(set) var lastChecked: Date?
     /// One common-run-loop clock for elapsed labels in Settings and the menu.
-    @Published private(set) var displayTime = Date()
+    /// Deliberately not `@Published`: tick() advances it once per second, and a
+    /// 1 Hz objectWillChange would re-render every observing view (Settings,
+    /// setup assistant, guides) each second. The two consumers that need
+    /// per-second freshness refresh themselves — the menu bar's "Last synced"
+    /// item rides on its own 1 Hz timer, and the Settings caption uses a local
+    /// TimelineView. Logic reads this property directly.
+    private(set) var displayTime = Date()
+    /// Publishes when advancing time changes derived list content — a meeting
+    /// crossing its end (list membership), local midnight (day headers), or
+    /// saved-calendar coverage expiring (offline captions). Observers never
+    /// read the value; the point is a boundary-scoped objectWillChange instead
+    /// of a once-per-second re-render. See
+    /// `listContentChanged(events:cacheInfo:from:to:)`.
+    @Published private(set) var listContentVersion = 0
     @Published private(set) var meetingActivity: MeetingActivity = .unknown
     @Published private(set) var meetingDetectionChecking = false
     @Published private(set) var meetingDetectionAvailable: Bool? = MeetingActivityProbe.platformPotentiallySupported ? nil : false
@@ -103,7 +116,7 @@ final class AppStore: ObservableObject {
     private var catchUpBoundary: [UUID: Date] = [:]
     private var catchUpIDs: Set<String> = []
     private var syncNotificationTracker = SyncNotificationTracker()
-    private let syncLedgerKey = "local.tboch.now.sync-notifications.v1"
+    static let syncLedgerKey = "local.tboch.now.sync-notifications.v1"
     private var completedInitialRefresh = false
     private var pendingNotificationResponses: [(ReminderNotification, String)] = []
     private var previousNotificationSettings: AppSettings?
@@ -182,7 +195,7 @@ final class AppStore: ObservableObject {
         pausedUntil = state.pausedUntil
         if initialState == nil {
             reminderLedger = StoredPreferences.load(ReminderLedger.self, key: ledgerKey, label: "Reminder history", maxBytes: 8_000_000) ?? ReminderLedger()
-            syncNotificationTracker = StoredPreferences.load(SyncNotificationTracker.self, key: syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000) ?? SyncNotificationTracker()
+            syncNotificationTracker = StoredPreferences.load(SyncNotificationTracker.self, key: Self.syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000) ?? SyncNotificationTracker()
         }
         reminderLedger.migrateLegacy(lead: settings.leadSeconds)
         previousNotificationSettings = settings
@@ -356,6 +369,17 @@ final class AppStore: ObservableObject {
     /// remain available in the dropdown until their scheduled end.
     nonisolated static func isVisible(_ event: MeetingEvent, at now: Date) -> Bool {
         now < event.start || now < event.end
+    }
+
+    /// Pure boundary check: does time advancing from `previous` to `now`
+    /// change anything observers render from derived state — event-list
+    /// visibility (a meeting ending), day headers, or saved-coverage labels?
+    /// `tick()` re-renders observers only when this flips, not every second.
+    nonisolated static func listContentChanged(events: [MeetingEvent], cacheInfo: [UUID: CalendarCacheInfo],
+                                               from previous: Date, to now: Date) -> Bool {
+        if !Calendar.current.isDate(previous, inSameDayAs: now) { return true }
+        if cacheInfo.values.contains(where: { $0.covers(previous) != $0.covers(now) }) { return true }
+        return events.contains { isVisible($0, at: previous) != isVisible($0, at: now) }
     }
 
     var emptyAgendaText: String {
@@ -954,19 +978,31 @@ final class AppStore: ObservableObject {
         catchUpIDs.formIntersection(retainedIDs)
         persistReminderLedger()
         recentMutedByID = Self.retainedMutedStates(previous: recentMutedByID, current: sorted, retainedIDs: retainedIDs)
+        // The notification lookup dictionaries are a pure function of the committed
+        // list: every other use is a read, and the legacy-ambiguity set only grows
+        // (idempotent for an identical list). When the list is unchanged — the
+        // common case for per-second EventKit changes and periodic refreshes with
+        // no edits — reuse them instead of re-deriving every key and fingerprint.
+        // Time-dependent work above (ledger reconcile, ratchet, persistence) still
+        // runs on every commit.
+        let listUnchanged = sorted.count == events.count && zip(sorted, events).allSatisfy { pair in
+            pair.0.hasSameNotificationLookup(as: pair.1)
+        }
         events = sorted
-        notificationEventsByKey = [:]
-        notificationFingerprints = [:]
-        let legacyCounts = Dictionary(grouping: sorted, by: \.legacyID).mapValues(\.count)
-        ambiguousLegacyNotificationIDs.formUnion(legacyCounts.filter { $0.value > 1 }.keys)
-        for event in sorted {
-            let key = NotificationLogic.eventKey(event)
-            notificationEventsByKey[key] = event
-            notificationEventsByKey[NotificationLogic.key(event.id)] = event
-            if legacyCounts[event.legacyID] == 1 && !ambiguousLegacyNotificationIDs.contains(event.legacyID) {
-                notificationEventsByKey[NotificationLogic.key(event.legacyID)] = event
+        if !listUnchanged {
+            notificationEventsByKey = [:]
+            notificationFingerprints = [:]
+            let legacyCounts = Dictionary(grouping: sorted, by: \.legacyID).mapValues(\.count)
+            ambiguousLegacyNotificationIDs.formUnion(legacyCounts.filter { $0.value > 1 }.keys)
+            for event in sorted {
+                let key = NotificationLogic.eventKey(event)
+                notificationEventsByKey[key] = event
+                notificationEventsByKey[NotificationLogic.key(event.id)] = event
+                if legacyCounts[event.legacyID] == 1 && !ambiguousLegacyNotificationIDs.contains(event.legacyID) {
+                    notificationEventsByKey[NotificationLogic.key(event.legacyID)] = event
+                }
+                notificationFingerprints[key] = NotificationLogic.fingerprint(event)
             }
-            notificationFingerprints[key] = NotificationLogic.fingerprint(event)
         }
         // Keep an open alert in sync: cancelled/removed/disabled events drop
         // off the cards, changed events update in place.
@@ -974,9 +1010,10 @@ final class AppStore: ObservableObject {
         if cacheLoaded { notifications?.reconcile() }
         if completedInitialRefresh {
             let failed = syncFailureIDs
+            let trackerBefore = syncNotificationTracker
             syncNotificationTracker.firstFailure = syncNotificationTracker.firstFailure.filter { failed.contains($0.key) }
             syncNotificationTracker.notified.formIntersection(failed)
-            persistSyncNotificationTracker()
+            if syncNotificationTracker != trackerBefore { persistSyncNotificationTracker() }
         }
     }
 
@@ -1020,11 +1057,25 @@ final class AppStore: ObservableObject {
         commitEvents(reconciled.events + native)
     }
 
+    /// Advances the display clock and, when passing time changed derived list
+    /// content, publishes for observing views — see `listContentVersion`.
+    private func advanceDisplayClock(to now: Date) {
+        let previous = displayTime
+        displayTime = now
+        // The display clock itself is not published; re-render observers only
+        // when passing time changed derived content (a meeting ending, a day
+        // rollover, coverage expiring).
+        if Self.listContentChanged(events: events, cacheInfo: cacheInfo,
+                                   from: previous, to: now) {
+            listContentVersion += 1
+        }
+    }
+
     private func tick() {
         guard cacheLoaded, !shuttingDown else { return }
         retryMeetingDetection()
         let now = self.now()
-        displayTime = now
+        advanceDisplayClock(to: now)
         if let until = pausedUntil, now >= until { pausedUntil = nil }
         if let alerts = alertController, alerts.isOpen {
             if alerts.shownEvents.allSatisfy({ now.timeIntervalSince($0.end) > 120 }) {
@@ -1087,8 +1138,9 @@ final class AppStore: ObservableObject {
             guard let self else { return }
             if item.updateVersion != nil { self.updateNotificationSubmitted?(item); return }
             if item.sync {
+                let trackerBefore = self.syncNotificationTracker
                 self.syncNotificationTracker.notified.formUnion(item.keys.compactMap(UUID.init(uuidString:)))
-                self.persistSyncNotificationTracker()
+                if self.syncNotificationTracker != trackerBefore { self.persistSyncNotificationTracker() }
             }
             else if !item.test { self.acceptNotification(item) }
         }
@@ -1318,7 +1370,9 @@ final class AppStore: ObservableObject {
             notifications?.removeDelivery(item)
             if action == "join" { current.forEach(joinedMeeting) }
             if action == "choose" || (!item.catchUp && item.keys.count > 1 && action != UNNotificationDismissActionIdentifier) { openNotificationAgenda?() }
-            else if action == "join", current.count == 1, let url = current[0].link { openNotificationLink(url) }
+            else if action == "join", current.count == 1, let url = current[0].link {
+                openNotificationLink(JoinOpener.target(for: url, preferNative: settings.openJoinsInMeetingApp))
+            }
             else if action != UNNotificationDismissActionIdentifier { openNotificationMeetings?(current) }
         }
     }
@@ -1331,11 +1385,18 @@ final class AppStore: ObservableObject {
 
     private func notifySyncProblems(at date: Date) {
         guard settings.notifySyncErrors else {
-            syncNotificationTracker = SyncNotificationTracker(); persistSyncNotificationTracker(); return
+            // Persist only when the reset actually changed stored state; this
+            // branch runs every tick.
+            let reset = SyncNotificationTracker()
+            guard syncNotificationTracker != reset else { return }
+            syncNotificationTracker = reset
+            persistSyncNotificationTracker()
+            return
         }
         guard completedInitialRefresh else { return }
+        let trackerBefore = syncNotificationTracker
         let candidates = syncNotificationTracker.candidates(failed: syncFailureIDs, now: date)
-        persistSyncNotificationTracker()
+        if syncNotificationTracker != trackerBefore { persistSyncNotificationTracker() }
         guard !candidates.isEmpty else { return }
         let failures = candidates.sorted { $0.uuidString < $1.uuidString }.compactMap { id -> (String, String)? in
             guard let first = syncNotificationTracker.firstFailure[id] else { return nil }
@@ -1350,7 +1411,7 @@ final class AppStore: ObservableObject {
     }
 
     private func persistSyncNotificationTracker() {
-        StoredPreferences.save(syncNotificationTracker, key: syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000)
+        StoredPreferences.save(syncNotificationTracker, key: Self.syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000)
     }
 
     var notificationProblemTitle: String? {

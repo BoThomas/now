@@ -552,6 +552,22 @@ enum NowApp {
             parseCLI(arguments[index + 1])
             exit(0)
         }
+        // Joins the same URL a Join click would: native links stay native when
+        // the app is installed, https links only upgrade with "native". CLI
+        // diagnostics run on the process's main thread.
+        if let index = arguments.firstIndex(of: "--join-target"), index + 2 < arguments.count,
+           let url = URL(string: arguments[index + 1]) {
+            let preferNative = arguments[index + 2] == "native"
+            let resolved = MainActor.assumeIsolated { () -> (handler: String, target: String) in
+                (NSWorkspace.shared.urlForApplication(toOpen: url)?.path ?? "none",
+                 JoinOpener.target(for: url, preferNative: preferNative).absoluteString)
+            }
+            print("input:       \(url.absoluteString)")
+            print("preferNative: \(preferNative)")
+            print("handler:     \(resolved.handler)")
+            print("target:      \(resolved.target)")
+            exit(0)
+        }
         if let index = arguments.firstIndex(of: "--native") {
             let subcommand = arguments.count > index + 1 ? arguments[index + 1] : nil
             nativeCLI(subcommand)

@@ -14,7 +14,8 @@ let suites: [String: [String]] = [
     "cache": ["scripts/calendar-cache-smoke.swift"],
     "fetch": ["scripts/calendar-fetch-smoke.swift"],
     "workload": ["scripts/feed-workload-smoke.swift"],
-    "parser": ["scripts/parser-performance-smoke.swift"]
+    "parser": ["scripts/parser-performance-smoke.swift"],
+    "perf": ["scripts/perf-validation-smoke.swift"]
 ]
 let suite = ProcessInfo.processInfo.environment["NOW_TEST_SUITE"]
 let core = Target.target(name: "NowCore", dependencies: [

@@ -220,9 +220,12 @@ struct ReminderStateSmoke {
 
         clock = clock.addingTimeInterval(7)
         store.smokeTick()
-        let expectedSyncLabel = Fmt.syncStatus(store.lastChecked!, relativeTo: store.displayTime)
-        try require(store.displayTime == clock && trackedMenu.items.contains { $0.title == expectedSyncLabel },
-                    "menu sync label follows the same published clock as Settings without a menu timer tick")
+        let rowsBeforeMenuTick = trackedMenu.items
+        controller.smokeMenuTick()
+        let expectedSyncLabel = Fmt.syncStatus(store.lastChecked!, relativeTo: store.now())
+        try require(store.displayTime == clock && trackedMenu.items.contains { $0.title == expectedSyncLabel }
+                        && zip(trackedMenu.items, rowsBeforeMenuTick).allSatisfy { $0 === $1 },
+                    "menu sync label refreshes on the menu timer's fresh clock without replacing rows")
 
         let reference = Date()
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)

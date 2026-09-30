@@ -44,7 +44,7 @@ extension SelfTest {
         }
         let catalog = FeatureGuideCatalog.entries
         var guides = FeatureGuideState()
-        c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true) == [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID], "guide: legacy user sees every feature on crossing its introduction")
+        c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true) == [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID, FeatureGuideCatalog.joinInAppID], "guide: legacy user sees every feature on crossing its introduction")
         guides.pendingPresentation.removeAll() // The guide window became visible.
         for _ in 0..<3 {
             c.expect(guides.acknowledge(catalog: catalog, installedUpdate: true).isEmpty, "guide: subsequent updates never repeat introduction")
@@ -53,12 +53,12 @@ extension SelfTest {
         c.expect(guides.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true) == [futureGuide.id], "guide: future update introduces only its new feature")
         guides.pendingPresentation.removeAll()
         var skipped = FeatureGuideState()
-        c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true).count == 3, "guide: skipped releases collect all new features")
+        c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true).count == 4, "guide: skipped releases collect all new features")
         skipped.pendingPresentation.removeAll() // All guides were displayed.
         _ = skipped.acknowledge(catalog: catalog, installedUpdate: true)
         c.expect(skipped.acknowledge(catalog: catalog + [futureGuide], installedUpdate: true).isEmpty, "guide: downgrade preserves feature history")
         var manual = FeatureGuideState()
-        c.expect(manual.acknowledge(catalog: catalog, installedUpdate: false, existingProfile: true) == [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID], "guide: manual upgrade discovers unseen features without updater marker")
+        c.expect(manual.acknowledge(catalog: catalog, installedUpdate: false, existingProfile: true) == [FeatureGuideCatalog.notificationsID, FeatureGuideCatalog.displayID, FeatureGuideCatalog.joinInAppID], "guide: manual upgrade discovers unseen features without updater marker")
         manual.pendingPresentation.removeAll()
         c.expect(manual.acknowledge(catalog: catalog, installedUpdate: false, existingProfile: true).isEmpty, "guide: manual upgrade guide does not repeat")
         c.expect(manual.acknowledge(catalog: catalog + [futureGuide], installedUpdate: false, existingProfile: true) == [futureGuide.id], "guide: later manual upgrade discovers only new features")
@@ -111,7 +111,7 @@ extension SelfTest {
         c.expect(NotificationSetupChoices(settings: configuredNotifications).syncErrors, "guide: keep enabled sync-problem alerts selected")
         let legacyGuides = Data(#"{"encountered":["notification-setup-v1"],"pendingSettings":["notification-setup-v1"]}"#.utf8)
         var migratedGuides = try? JSONDecoder().decode(FeatureGuideState.self, from: legacyGuides)
-        c.expect(migratedGuides?.acknowledge(catalog: catalog, installedUpdate: true) == [FeatureGuideCatalog.displayID],
+        c.expect(migratedGuides?.acknowledge(catalog: catalog, installedUpdate: true) == [FeatureGuideCatalog.displayID, FeatureGuideCatalog.joinInAppID],
                  "guide: retired pending cards decode without forgetting encountered history")
         struct LegacyGuideState: Decodable { let encountered: Set<String>; let pendingSettings: Set<String> }
         let downgradeGuide = savedGuides.flatMap { try? JSONDecoder().decode(LegacyGuideState.self, from: $0) }

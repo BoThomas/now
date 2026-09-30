@@ -1,7 +1,6 @@
 import AppKit
 import NowCore
 import SwiftUI
-import Combine
 
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
@@ -13,7 +12,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let quitHandler: () -> Void
     private var buttonTimer: Timer?
     private var lastSyncItem: NSMenuItem?
-    private var displayClockObserver: AnyCancellable?
     /// While the dropdown is tracking, updater state changes (a check
     /// finishing, an update appearing) rebuild the OPEN menu in place —
     /// `menuNeedsUpdate` alone only fires on the next open.
@@ -45,6 +43,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: menu, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     self?.menuIsTracking = false
+                    // The rows (and the Last-synced item) are rebuilt on the next
+                    // open; stop the per-second timer from mutating dead items.
+                    self?.lastSyncItem = nil
                     if let trackedMenu = self?.statusItem.menu {
                         self?.clearEventTooltips(in: trackedMenu)
                     }
@@ -54,13 +55,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // .common mode: the countdown keeps updating while the dropdown is
         // tracking (menu tracking runs a modal-ish run loop in .default mode).
         buttonTimer = AppStore.commonTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateButton() }
-        }
-        displayClockObserver = store.$displayTime.sink { [weak self] date in
-            MainActor.assumeIsolated {
-                guard let self, let last = self.store.lastChecked else { return }
-                self.updateLastSyncItem(last: last, at: date)
-            }
+            MainActor.assumeIsolated { self?.tickPerSecond() }
         }
         updateButton()
     }
@@ -70,33 +65,56 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         for observer in trackingObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
+    /// Everything the menu bar refreshes on its own 1 Hz cadence: the status
+    /// countdown button, the open dropdown's in-place row updates, and the
+    /// "Last synced" item. The store's display clock is deliberately not
+    /// published (a 1 Hz objectWillChange would re-render every observing
+    /// view each second), so this timer also keeps time-derived menu text
+    /// fresh.
+    private func tickPerSecond() {
+        updateButton()
+        if let last = store.lastChecked {
+            // A fresh `now`, like the Settings captions' local TimelineView:
+            // this timer races the store's own tick that advances
+            // `displayTime`, so the display clock could be up to a second
+            // stale here and lag the caption.
+            updateLastSyncItem(last: last, at: store.now())
+        }
+    }
+
+    private var lastButtonTitleState = ""
+    private var lastButtonTooltip = ""
+    private var lastButtonAccessibility = ""
+
     private func updateButton() {
         guard let button = statusItem.button else { return }
         let now = store.now()
         refreshOpenMenu(now: now)
         if store.isPaused {
-            button.attributedTitle = NSAttributedString(string: "")
-            button.image = NSImage(systemSymbolName: "moon.zzz.fill", accessibilityDescription: "now — reminders paused")
-            button.setAccessibilityLabel("now — reminders paused")
-            button.toolTip = "now — reminders paused"
+            if lastButtonTitleState != "paused" {
+                lastButtonTitleState = "paused"
+                button.attributedTitle = NSAttributedString(string: "")
+                button.image = NSImage(systemSymbolName: "moon.zzz.fill", accessibilityDescription: "now — reminders paused")
+                lastButtonAccessibility = "now — reminders paused"
+                button.setAccessibilityLabel(lastButtonAccessibility)
+                lastButtonTooltip = "now — reminders paused"
+                button.toolTip = lastButtonTooltip
+            }
             return
         }
         guard store.settings.showMenuBarCountdown,
               let focus = AppStore.menuBarFocus(events: store.events, elapsedStartMinutes: store.settings.elapsedStartMinutes, now: now) else {
-            button.attributedTitle = NSAttributedString(string: "")
-            button.image = NSImage(systemSymbolName: "alarm", accessibilityDescription: "now")
-            button.setAccessibilityLabel("now — no upcoming meetings")
-            button.toolTip = "now — no current or upcoming meetings"
+            if lastButtonTitleState != "idle" {
+                lastButtonTitleState = "idle"
+                button.attributedTitle = NSAttributedString(string: "")
+                button.image = NSImage(systemSymbolName: "alarm", accessibilityDescription: "now")
+                lastButtonAccessibility = "now — no upcoming meetings"
+                button.setAccessibilityLabel(lastButtonAccessibility)
+                lastButtonTooltip = "now — no current or upcoming meetings"
+                button.toolTip = lastButtonTooltip
+            }
             return
         }
-        button.image = nil
-        let textFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        let dotSize: CGFloat = 7
-        let attachment = NSTextAttachment()
-        let dots = Palette.dotClusterImage(colors: focus.events.map(\.nsColor), size: dotSize)
-        attachment.image = dots
-        attachment.bounds = CGRect(x: 0, y: textFont.capHeight / 2 - dotSize / 2, width: dots.size.width, height: dotSize)
-        let text = NSMutableAttributedString(attachment: attachment)
         let countdown: String
         switch focus.kind {
         case .start:
@@ -104,13 +122,37 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case .end:
             countdown = "ends \(Fmt.barCountdown(to: focus.date, relativeTo: now))"
         }
-        text.append(NSAttributedString(string: " \(countdown)", attributes: [
-            .font: textFont,
-            .foregroundColor: NSColor.labelColor
-        ]))
-        button.attributedTitle = text
-        button.setAccessibilityLabel(Self.accessibilityLabel(for: focus, now: now))
-        button.toolTip = Self.statusTooltip(events: store.events, now: now)
+        // Rebuild the title/dot cluster only when the rendered content actually
+        // changed; identical assignments every second were measurable waste at
+        // large event counts (see scripts/perf-validation-smoke.swift, M3).
+        let dotColors = focus.events.map(\.colorHex)
+        let titleState = "\(countdown)|\(dotColors.joined(separator: ","))"
+        if titleState != lastButtonTitleState {
+            lastButtonTitleState = titleState
+            button.image = nil
+            let textFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+            let dotSize: CGFloat = 7
+            let attachment = NSTextAttachment()
+            let dots = Palette.dotClusterImage(colors: focus.events.map(\.nsColor), size: dotSize)
+            attachment.image = dots
+            attachment.bounds = CGRect(x: 0, y: textFont.capHeight / 2 - dotSize / 2, width: dots.size.width, height: dotSize)
+            let text = NSMutableAttributedString(attachment: attachment)
+            text.append(NSAttributedString(string: " \(countdown)", attributes: [
+                .font: textFont,
+                .foregroundColor: NSColor.labelColor
+            ]))
+            button.attributedTitle = text
+        }
+        let accessibility = Self.accessibilityLabel(for: focus, now: now)
+        if accessibility != lastButtonAccessibility {
+            lastButtonAccessibility = accessibility
+            button.setAccessibilityLabel(accessibility)
+        }
+        let tooltip = Self.statusTooltip(events: store.events, now: now)
+        if tooltip != lastButtonTooltip {
+            lastButtonTooltip = tooltip
+            button.toolTip = tooltip
+        }
     }
 
     nonisolated static func accessibilityLabel(for focus: MenuBarFocus, now: Date) -> String {
@@ -203,10 +245,43 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         "\(updates.available?.version ?? "")|\(updates.stagedVersion ?? "")|\(updates.isChecking)"
     }
 
+    /// The event rows the dropdown can actually display: running meetings first,
+    /// then the next-start group, then later meetings, all within the menu's
+    /// meeting limit. Shared by menuNeedsUpdate (row construction) and
+    /// menuStructureSignature (change detection over exactly these rows) so the
+    /// signature can be capped without ever missing a displayed row.
+    nonisolated static func displayedEvents(_ visible: [MeetingEvent], now: Date, limit: Int) -> [MeetingEvent] {
+        var remaining = limit
+        var rows: [MeetingEvent] = []
+        let running = visible.filter { $0.start <= now && now < $0.end }
+        let runningShown = running.prefix(remaining)
+        rows.append(contentsOf: runningShown)
+        remaining -= runningShown.count
+        let future = visible.filter { $0.start > now }
+        var later: ArraySlice<MeetingEvent> = future[future.startIndex...]
+        if let nextStart = future.first?.start {
+            let nextCount = future.prefix { $0.start == nextStart }.count
+            let shown = future.prefix(min(nextCount, remaining))
+            rows.append(contentsOf: shown)
+            remaining -= shown.count
+            later = future.dropFirst(nextCount)
+        }
+        for event in later where remaining > 0 {
+            rows.append(event)
+            remaining -= 1
+        }
+        return rows
+    }
+
     private func menuStructureSignature(at now: Date) -> String {
         let day = Calendar.current.startOfDay(for: now).timeIntervalSinceReferenceDate
-        let eventStates = store.events.compactMap { event -> String? in
-            guard AppStore.isVisible(event, at: now) else { return nil }
+        // Cap the per-event fields to the rows the dropdown can actually show
+        // (`menuMeetingLimit`); changes beyond the limit cannot affect the open
+        // menu's content.
+        let visible = store.events.filter { AppStore.isVisible($0, at: now) }
+        let displayed = Self.displayedEvents(visible, now: now,
+                                             limit: AppSettings.normalizedMenuMeetingLimit(store.settings.menuMeetingLimit))
+        let eventStates = displayed.map { event -> String in
             let state = event.start <= now && now < event.end ? "now" : "future"
             // `representedObject` stores a value-type snapshot. Include every
             // field that affects row rendering, actions, or help text so a
@@ -259,42 +334,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if visible.isEmpty {
             menu.addItem(withTitle: store.emptyAgendaText, action: nil, keyEquivalent: "")
         } else {
-            let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
-            let measure: [NSAttributedString.Key: Any] = [.font: timeFont]
-            let timeWidth = visible.map { (Fmt.time.string(from: $0.start) as NSString).size(withAttributes: measure).width }.max() ?? 0
-            let running = visible.filter { $0.start <= now && now < $0.end }
-            let future = visible.filter { $0.start > now }
-            var remainingSlots = AppSettings.normalizedMenuMeetingLimit(store.settings.menuMeetingLimit)
-
-            func addSection(_ title: String, events: [MeetingEvent]) {
-                let shown = Array(events.prefix(remainingSlots))
-                guard !shown.isEmpty else { return }
-                menu.addItem(sectionHeaderItem(title))
-                for event in shown {
-                    menu.addItem(eventMenuItem(for: event, now: now, timeFont: timeFont, timeWidth: timeWidth))
-                }
-                remainingSlots -= shown.count
-            }
-
-            addSection("NOW", events: running)
-
-            var later: ArraySlice<MeetingEvent> = future[future.startIndex...]
-            if let nextStart = future.first?.start {
-                let nextCount = future.prefix { $0.start == nextStart }.count
-                addSection(nextHeader(for: nextStart), events: Array(future.prefix(nextCount)))
-                later = future.dropFirst(nextCount)
-            }
-
-            var currentLaterDay: Date?
-            for event in later where remainingSlots > 0 {
-                let day = Calendar.current.startOfDay(for: event.start)
-                if currentLaterDay != day {
-                    currentLaterDay = day
-                    menu.addItem(sectionHeaderItem(laterHeader(for: day)))
-                }
-                menu.addItem(eventMenuItem(for: event, now: now, timeFont: timeFont, timeWidth: timeWidth))
-                remainingSlots -= 1
-            }
+            addAgendaRows(to: menu, visible: visible, now: now)
         }
         menu.addItem(.separator())
         if !store.isPaused {
@@ -352,10 +392,55 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    /// The agenda rows: NOW section, the next-start group, and later meetings
+    /// under day headers — all within the menu's meeting limit. Row selection is
+    /// shared with the open-menu structure signature (`displayedEvents`) so both
+    /// always agree on which rows exist.
+    private func addAgendaRows(to menu: NSMenu, visible: [MeetingEvent], now: Date) {
+        let timeFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        let measure: [NSAttributedString.Key: Any] = [.font: timeFont]
+        let displayed = Self.displayedEvents(visible, now: now,
+                                             limit: AppSettings.normalizedMenuMeetingLimit(store.settings.menuMeetingLimit))
+        let timeWidth = displayed.map { (Fmt.time.string(from: $0.start) as NSString).size(withAttributes: measure).width }.max() ?? 0
+        var remainingSlots = AppSettings.normalizedMenuMeetingLimit(store.settings.menuMeetingLimit)
+
+        func addSection(_ title: String, events: [MeetingEvent]) {
+            let shown = Array(events.prefix(remainingSlots))
+            guard !shown.isEmpty else { return }
+            menu.addItem(sectionHeaderItem(title))
+            for event in shown {
+                menu.addItem(eventMenuItem(for: event, now: now, timeFont: timeFont, timeWidth: timeWidth))
+            }
+            remainingSlots -= shown.count
+        }
+
+        addSection("NOW", events: displayed.filter { $0.start <= now && now < $0.end })
+
+        let future = displayed.filter { $0.start > now }
+        var later: ArraySlice<MeetingEvent> = future[future.startIndex...]
+        if let nextStart = future.first?.start {
+            let nextCount = future.prefix { $0.start == nextStart }.count
+            addSection(nextHeader(for: nextStart), events: Array(future.prefix(nextCount)))
+            later = future.dropFirst(nextCount)
+        }
+
+        var currentLaterDay: Date?
+        for event in later where remainingSlots > 0 {
+            let day = Calendar.current.startOfDay(for: event.start)
+            if currentLaterDay != day {
+                currentLaterDay = day
+                menu.addItem(sectionHeaderItem(laterHeader(for: day)))
+            }
+            menu.addItem(eventMenuItem(for: event, now: now, timeFont: timeFont, timeWidth: timeWidth))
+            remainingSlots -= 1
+        }
+    }
+
     private func updateLastSyncItem(last: Date, at now: Date) {
+        guard let item = lastSyncItem else { return }
         let title = Fmt.syncStatus(last, relativeTo: now)
-        lastSyncItem?.title = title
-        lastSyncItem?.attributedTitle = NSAttributedString(string: title, attributes: [
+        item.title = title
+        item.attributedTitle = NSAttributedString(string: title, attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         ])
     }
@@ -411,10 +496,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         return lines.joined(separator: "\n")
     }
 
-    /// True when `text` (trimmed) is exactly the event's join link.
+    /// True when `text` (trimmed) is exactly the event's join link, including
+    /// native-scheme spellings (`zoomus://…`) that convert to it.
     private static func isJustJoinLink(_ text: String, event: MeetingEvent) -> Bool {
-        guard let link = event.link else { return false }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines) == link.absoluteString
+        LinkExtractor.isBareJoinLink(text, of: event.link)
     }
 
     nonisolated static func menuStatusText(for event: MeetingEvent, elapsedStartMinutes: Int, now: Date) -> String {
@@ -508,7 +593,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func joinAction(_ sender: NSMenuItem) {
         if let event = sender.representedObject as? MeetingEvent, let url = event.link {
             store.joinedMeeting(event)
-            NSWorkspace.shared.open(url)
+            JoinOpener.open(url, preferNative: store.settings.openJoinsInMeetingApp)
         }
     }
 
@@ -542,7 +627,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                       current.end > Date(), let url = current.link else { return }
                 self.store.joinedMeeting(current)
                 self.eventPopover?.close()
-                NSWorkspace.shared.open(url)
+                JoinOpener.open(url, preferNative: self.store.settings.openJoinsInMeetingApp)
             },
             close: { [weak self] in self?.eventPopover?.close() }
         ))
@@ -655,8 +740,10 @@ private struct EventDetailsPopover: View {
     }
 
     private var location: String? {
-        guard let value = event.location?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
-        return value
+        // Same display policy as the fullscreen reminder: a location that is
+        // nothing beyond the join link (web or native spelling) shows the
+        // friendly provider name instead of a redundant URL.
+        LinkExtractor.displayLocation(event.location, link: event.link)
     }
 
     private var notes: String? {
@@ -665,9 +752,11 @@ private struct EventDetailsPopover: View {
     }
 
     private var mapsURL: URL? {
-        guard let location, URL(string: location)?.scheme == nil else { return nil }
+        // A maps search only makes sense for a real place, not for a join
+        // link or the provider-name fallback shown in its place.
+        guard let place = LinkExtractor.searchablePlace(event.location, link: event.link) else { return nil }
         var components = URLComponents(string: "https://maps.apple.com/")
-        components?.queryItems = [URLQueryItem(name: "q", value: location)]
+        components?.queryItems = [URLQueryItem(name: "q", value: place)]
         return components?.url
     }
 
@@ -758,5 +847,6 @@ extension MenuBarController {
     func smokeBeginTracking() { menuIsTracking = true }
     func smokeEndTracking() { menuIsTracking = false }
     func smokeRefreshMenu(at date: Date) { refreshOpenMenu(now: date) }
+    func smokeMenuTick() { tickPerSecond() }
 }
 #endif

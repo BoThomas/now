@@ -435,7 +435,7 @@ struct UpcomingEventList: View {
     private func joinButton(_ link: URL, event: MeetingEvent, compact: Bool) -> some View {
         Button {
             store.joinedMeeting(event)
-            NSWorkspace.shared.open(link)
+            JoinOpener.open(link, preferNative: store.settings.openJoinsInMeetingApp)
         } label: {
             Label(hostText(link), systemImage: "video.fill")
                 .font(.system(size: 10))
@@ -1194,6 +1194,7 @@ struct SettingsView: View {
     @State private var showBrowserMeetingInfo = false
     @State private var showReminderSoundInfo = false
     @State private var showStartedCountdownInfo = false
+    @State private var showJoinInAppInfo = false
     @StateObject private var commandHints = CommandHoldTracker()
     @State private var selectedSection: SettingsSection = .calendars
     /// While a sidebar jump animates, the scroll-position tracker is paused —
@@ -1415,8 +1416,12 @@ struct SettingsView: View {
 
     @ViewBuilder private var lastSyncedText: some View {
         if let last = store.lastChecked {
-            Text(Fmt.syncStatus(last, relativeTo: store.displayTime))
-                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            // Owns its 1 Hz refresh locally; the store's display clock is not
+            // published (see AppStore.displayTime).
+            TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                Text(Fmt.syncStatus(last, relativeTo: timeline.date))
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -1700,7 +1705,11 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .frame(width: 230)
+                    // Intrinsic width, never a fixed frame below it: AppKit
+                    // re-fits an NSSegmentedControl to its content during
+                    // SwiftUI update passes, and a tighter constraint makes
+                    // the control visibly pulse between both widths.
+                    .fixedSize()
                     .accessibilityLabel("Fullscreen reminder display")
                     .help("Focused Display takes over whichever display you are working on. Main Display always uses your main display, even when you are working on another one.")
                 }
@@ -1905,6 +1914,26 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             .frame(maxWidth: 280, alignment: .leading)
+            HStack(spacing: 6) {
+                Toggle("Always open join links in the meeting app, if installed", isOn: $store.settings.openJoinsInMeetingApp)
+                Button {
+                    showJoinInAppInfo.toggle()
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("About opening join links in the meeting app")
+                .help("About opening join links in the meeting app")
+                .popover(isPresented: $showJoinInAppInfo, arrowEdge: .trailing) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Always open join links in the meeting app, if installed").font(.headline)
+                        Text("Join links that already use an app protocol such as zoomus:// always open the installed meeting app directly. With this option on, Zoom and Teams browser links also open in the app when it is installed. Without the app, links open in your browser as before.")
+                    }
+                    .font(.callout)
+                    .padding(14)
+                    .frame(width: 320, alignment: .leading)
+                }
+            }
             Toggle("Show countdown in menu bar", isOn: $store.settings.showMenuBarCountdown)
             Toggle("Launch at Login", isOn: $store.settings.launchAtLogin)
             if case .requiresApproval = store.loginItemState {
@@ -1973,9 +2002,12 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         } else if let last = updates.lastSuccessfulCheck {
-            Text("Last checked \(Fmt.ago(last))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            // Owns its 1 Hz refresh locally (see AppStore.displayTime).
+            TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                Text("Last checked \(Fmt.ago(last, relativeTo: timeline.date))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

@@ -87,6 +87,13 @@ package struct AppSettings: Codable, Equatable, Sendable {
     package var notifyDuringMeetings = false
     package var notifyOnCatchUp = false
     package var skipMeetingsOnCatchUp = false
+    /// Open join links directly in the installed meeting app (Zoom, Microsoft
+    /// Teams) instead of routing through the browser. On by default — without
+    /// the app installed links simply open in the browser — and an explicit
+    /// off persists. Links that already carry a native app protocol are always
+    /// honored natively regardless of this setting; it only upgrades ordinary
+    /// https join links.
+    package var openJoinsInMeetingApp = true
 
     package var catchUpDelivery: CatchUpDelivery {
         get { skipMeetingsOnCatchUp ? .skip : (notifyOnCatchUp ? .notification : .normal) }
@@ -137,7 +144,7 @@ package struct AppSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case reminderDelivery, reminderScreen, notifyDuringMeetings, notifyOnCatchUp, skipMeetingsOnCatchUp, hideNotificationDetails, notifySyncErrors, notifyUpdates
-        case reminderLeadSeconds, menuMeetingLimit, leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, skippedUpdateVersion
+        case reminderLeadSeconds, menuMeetingLimit, leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, openJoinsInMeetingApp, skippedUpdateVersion
     }
 
     package func encode(to encoder: Encoder) throws {
@@ -164,6 +171,7 @@ package struct AppSettings: Codable, Equatable, Sendable {
         try c.encode(automaticUpdateChecks, forKey: .automaticUpdateChecks)
         try c.encode(suppressRemindersDuringMeetings, forKey: .suppressRemindersDuringMeetings)
         try c.encode(includeBrowserMeetings, forKey: .includeBrowserMeetings)
+        try c.encode(openJoinsInMeetingApp, forKey: .openJoinsInMeetingApp)
         try c.encodeIfPresent(skippedUpdateVersion, forKey: .skippedUpdateVersion)
     }
 
@@ -212,6 +220,7 @@ package struct AppSettings: Codable, Equatable, Sendable {
         automaticUpdateChecks = c.recover(Bool.self, forKey: .automaticUpdateChecks, decoder: decoder) ?? true
         suppressRemindersDuringMeetings = c.recover(Bool.self, forKey: .suppressRemindersDuringMeetings, decoder: decoder) ?? false
         includeBrowserMeetings = c.recover(Bool.self, forKey: .includeBrowserMeetings, decoder: decoder) ?? false
+        openJoinsInMeetingApp = c.recover(Bool.self, forKey: .openJoinsInMeetingApp, decoder: decoder) ?? true
         reminderDelivery = c.recover(ReminderDelivery.self, forKey: .reminderDelivery, decoder: decoder) ?? .fullscreen
         reminderScreen = c.recover(ReminderScreen.self, forKey: .reminderScreen, decoder: decoder) ?? .focused
         notifyDuringMeetings = c.recover(Bool.self, forKey: .notifyDuringMeetings, decoder: decoder) ?? false
@@ -303,7 +312,7 @@ package struct Persisted: Codable, Sendable {
     }
 }
 
-package struct MeetingEvent: Identifiable, Sendable {
+package struct MeetingEvent: Identifiable, Equatable, Sendable {
     package let id: String
     package let uid: String
     /// Pre-v2 agenda identity, retained only for unambiguous saved-state migration.
@@ -325,6 +334,19 @@ package struct MeetingEvent: Identifiable, Sendable {
     /// set by hand outside those sites. Muted events stay visible (grayed) and
     /// never alert (`dueForAlert` skips them).
     package var isMuted: Bool = false
+
+    /// Swift string equality accepts canonically equivalent Unicode, but the
+    /// notification keys and fingerprints hash exact UTF-8 bytes. Lookup reuse
+    /// must preserve both the event snapshot and those byte-sensitive inputs.
+    package func hasSameNotificationLookup(as other: MeetingEvent) -> Bool {
+        guard self == other else { return false }
+        let inputs = [id, legacyID, notificationIdentity ?? "", title, location ?? "", link?.absoluteString ?? ""]
+        let otherInputs = [other.id, other.legacyID, other.notificationIdentity ?? "", other.title,
+                           other.location ?? "", other.link?.absoluteString ?? ""]
+        return zip(inputs, otherInputs).allSatisfy { pair in
+            pair.0.utf8.elementsEqual(pair.1.utf8)
+        }
+    }
 
     package init(uid: String, title: String, start: Date, end: Date, location: String?, notes: String?, link: URL?, calendarID: UUID, calendarName: String, colorIndex: Int, colorHex: String, isMuted: Bool = false, notificationIdentity: String? = nil) {
         self.uid = uid

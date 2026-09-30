@@ -1072,9 +1072,12 @@ package enum LinkExtractor {
     /// are authoritative. Every other field, including URL, must contain a URL
     /// with a recognized provider shape or an explicit generic join path; an
     /// arbitrary event/document/recording URL must never be labelled "Join".
+    /// Native-scheme links are kept in their native spelling on every path —
+    /// the calendar explicitly asked for the meeting app, so Join must open it
+    /// directly instead of normalizing to the web form.
     package static func link(from event: ParsedEvent, urlsInText: (String) -> [URL]) -> URL? {
-        if let conference = event.conference, let url = joinURL(conference) { return url }
-        if let urlValue = event.url, let url = joinURL(urlValue), isMeetingLink(url) { return url }
+        if let conference = event.conference, let url = joinCandidate(conference) { return url }
+        if let urlValue = event.url, let parsed = joinCandidate(urlValue), let url = joinShaped(parsed) { return url }
         var candidates: [(url: URL, field: Int)] = []
         let fields: [(String?, Int)] = [
             (event.location, 0),
@@ -1086,11 +1089,8 @@ package enum LinkExtractor {
         for (text, rank) in fields {
             guard let text, !text.isEmpty else { continue }
             for url in urlsInText(text) {
-                if let scheme = url.scheme?.lowercased(),
-                   (scheme == "http" || scheme == "https"),
-                   isMeetingLink(url) {
-                    candidates.append((url, rank))
-                }
+                guard let candidate = joinShaped(url) else { continue }
+                candidates.append((candidate, rank))
             }
         }
         return candidates
@@ -1098,8 +1098,108 @@ package enum LinkExtractor {
             .first?.url
     }
 
-    /// Accepts an http(s) URL and also converts common native-scheme meeting links
-    /// (`zoommtg://zoom.us/join?confno=…`, `msteams:/l/meetup-join/…`) into browser-usable ones.
+    /// Parsed join-link candidate for a raw property value: http(s) URLs pass
+    /// through unchanged, COMPLETE native-scheme links stay native, everything
+    /// else is nil. No provider-shape judgment happens here — an explicit
+    /// conference property is authoritative; other callers gate with
+    /// `joinShaped` afterwards.
+    package static func joinCandidate(_ raw: String) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return nil }
+        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" { return url }
+        return isNativeJoinLink(url) ? url : nil
+    }
+
+    /// Shape gate for candidates from the URL property and free text: web URLs
+    /// must carry a recognized provider/join shape (`isMeetingLink`); native
+    /// candidates already proved completeness as join links themselves.
+    package static func joinShaped(_ url: URL) -> URL? {
+        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            return isMeetingLink(url) ? url : nil
+        }
+        return isNativeJoinLink(url) ? url : nil
+    }
+
+    /// The browser-usable spelling of a join link: web URLs pass through
+    /// unchanged, native-scheme meeting links (`zoommtg://zoom.us/join?…`,
+    /// `msteams:/l/…`) convert to their web form. This is the fallback for
+    /// machines without the meeting app and the canonical form for comparing
+    /// spellings — never the extraction gate, which keeps native links native.
+    package static func webForm(of url: URL) -> URL? {
+        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" { return url }
+        return joinURL(url.absoluteString)
+    }
+
+    /// True for a complete, directly openable native-scheme meeting link:
+    /// Zoom (`zoommtg://`, `zoomus://`) on a zoom.us/zoom.com host with a
+    /// meeting number, or Microsoft Teams (`msteams:`, `teams:`) with a
+    /// `/l/` launch path. Incomplete or lookalike links are not join links.
+    package static func isNativeJoinLink(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased() else { return false }
+        if scheme == "zoommtg" || scheme == "zoomus" {
+            guard let host = url.host?.lowercased(),
+                  host == "zoom.us" || host.hasSuffix(".zoom.us") || host == "zoom.com" || host.hasSuffix(".zoom.com")
+            else { return false }
+            let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            return query.contains { $0.name == "confno" && !($0.value ?? "").isEmpty }
+        }
+        if scheme == "msteams" || scheme == "teams" {
+            return url.path.hasPrefix("/l/")
+        }
+        return false
+    }
+
+    /// The direct-app spelling of a web join link for providers whose apps
+    /// register a native scheme (Zoom `zoommtg://`, Teams `msteams:`) — the
+    /// inverse of the web-form conversion. Used only at Join time and only
+    /// while the join-in-app setting is on; nil when the provider has no
+    /// native scheme or the link is not a concrete meeting join.
+    package static func nativeForm(of url: URL) -> URL? {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = url.host?.lowercased(), !host.isEmpty else { return nil }
+        let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        if host == "zoom.us" || host.hasSuffix(".zoom.us") || host == "zoom.com" || host.hasSuffix(".zoom.com") {
+            let segments = url.path.split(separator: "/").map(String.init)
+            // Every confno-bearing web join shape: `/j/<id>`, Zoom Workplace
+            // `/w/<id>`, and webinar-client `/wc/join/<id>`. `/my/<name>`
+            // personal-room links carry no meeting number and never upgrade.
+            let confno: String
+            if segments.count == 2, segments[0] == "j" || segments[0] == "w" {
+                confno = segments[1]
+            } else if segments.count == 3, segments[0] == "wc", segments[1] == "join" {
+                confno = segments[2]
+            } else {
+                return nil
+            }
+            guard !confno.isEmpty else { return nil }
+            var comps = URLComponents()
+            comps.scheme = "zoommtg"
+            comps.host = "zoom.us"
+            comps.path = "/join"
+            var items = [URLQueryItem(name: "confno", value: confno)]
+            if let pwd = parts?.queryItems?.first(where: { $0.name == "pwd" })?.value, !pwd.isEmpty {
+                items.append(URLQueryItem(name: "pwd", value: pwd))
+            }
+            comps.queryItems = items
+            return comps.url
+        }
+        if host == "teams.microsoft.com" || host.hasSuffix(".teams.microsoft.com") ||
+           host == "teams.live.com" || host.hasSuffix(".teams.live.com") {
+            guard url.path.hasPrefix("/l/") else { return nil }
+            var comps = URLComponents()
+            comps.scheme = "msteams"
+            comps.path = url.path
+            comps.percentEncodedQuery = parts?.percentEncodedQuery
+            return comps.url
+        }
+        return nil
+    }
+
+    /// Web-form converter: accepts an http(s) URL unchanged and converts common
+    /// native-scheme meeting links (`zoommtg://zoom.us/join?confno=…`,
+    /// `msteams:/l/meetup-join/…`) into browser-usable ones. Serves the
+    /// no-app-installed fallback and canonical spelling comparison — never the
+    /// extraction gate, which keeps native links native.
     package static func joinURL(_ raw: String) -> URL? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return nil }
@@ -1127,7 +1227,9 @@ package enum LinkExtractor {
             comps.scheme = "https"
             comps.host = "teams.microsoft.com"
             comps.path = url.path
-            comps.query = parts?.query
+            // Copy the raw encoded bytes: `query` would decode+re-encode and
+            // can double-encode meeting context parameters.
+            comps.percentEncodedQuery = parts?.percentEncodedQuery
             return comps.url
         }
         return nil
@@ -1150,6 +1252,10 @@ package enum LinkExtractor {
     ]
 
     package static func providerName(for url: URL) -> String? {
+        if let scheme = url.scheme?.lowercased() {
+            if scheme == "zoomus" || scheme == "zoommtg" { return "Zoom" }
+            if scheme == "msteams" || scheme == "teams" { return "Microsoft Teams" }
+        }
         guard let host = url.host?.lowercased() else { return nil }
         for (suffix, name) in providerNames where host == suffix || host.hasSuffix("." + suffix) {
             return name
@@ -1249,10 +1355,32 @@ package enum LinkExtractor {
         guard !lines.isEmpty else { return false }
         for line in lines {
             if isDecorationLine(line) { continue }
-            if let link, line == link.absoluteString { continue }
+            if isBareJoinLink(line, of: link) { continue }
             return false
         }
         return true
+    }
+
+    /// True when `text` is nothing but the event's join link — the link itself
+    /// (native links stay native, so the exact spelling usually matches) or a
+    /// sibling spelling (web ↔ native) with the same canonical web form.
+    package static func isBareJoinLink(_ text: String, of link: URL?) -> Bool {
+        guard let link else { return false }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == link.absoluteString { return true }
+        guard let textURL = URL(string: trimmed),
+              let textForm = webForm(of: textURL)?.absoluteString,
+              let linkForm = webForm(of: link)?.absoluteString else { return false }
+        return textForm == linkForm
+    }
+
+    /// The place worth a maps lookup: a location that names a real place rather
+    /// than a URL or (only) the event's join link, whose display is covered by
+    /// the provider-name fallback instead.
+    package static func searchablePlace(_ location: String?, link: URL?) -> String? {
+        guard let trimmed = location?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        guard URL(string: trimmed)?.scheme == nil, !isBareJoinLink(trimmed, of: link) else { return nil }
+        return trimmed
     }
 
     /// Ruler lines (`---===---`, `-----`) and decorated labels (`----( Video Call )----`).

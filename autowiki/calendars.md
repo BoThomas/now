@@ -60,12 +60,18 @@ For changes here, inspect recurrence, zone, override, and compliance fixtures in
 `LinkExtractor.link` first accepts a usable explicit conference property, then a URL property
 recognized as a meeting link. It searches recognized meeting links in location, description,
 alternate description, title, and attachment order; there is no arbitrary HTTP(S) fallback in that
-search. Native mapping synthesizes a `ParsedEvent` to share this extraction logic. Provider
-recognition, precedence and display-location cleanup belong in
+search. Native-scheme links (`zoomus://…`, `zoommtg://…`, `msteams:/l/…`) stay in their native
+spelling on every path — Join opens the meeting app directly instead of normalizing to the web form;
+the web form remains the fallback for machines without the app and the canonical comparison for
+display suppression (`webForm`, `isBareJoinLink`). Native mapping synthesizes a `ParsedEvent` to
+share this extraction logic. Provider recognition, precedence and display-location cleanup belong in
 [NowCore](../Sources/NowCore/ICS.swift), not separate UI-specific matchers. Text URL discovery is
 injected into that policy; the macOS overload in [Sources/ICS.swift](../Sources/ICS.swift) retains
 `NSDataDetector`. Foundation imports alone do not make an API portable. The core-only runner tests
-selection with synthetic detected URLs, not Linux parity with Apple's text detector.
+selection with synthetic detected URLs, not Linux parity with Apple's text detector. Which URL Join
+actually opens (native direct, app-installed upgrade of https links, web fallback) is decided at
+click time by [JoinTarget](../Sources/NowCore/Reminders/JoinTarget.swift) with an injected
+app-detection probe; see [reminder delivery](reminders.md).
 
 ## Restore and failure recovery
 
