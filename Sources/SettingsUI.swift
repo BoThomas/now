@@ -1184,6 +1184,124 @@ private struct AdaptivePickerRow<Selection: Hashable, Options: View>: View {
     }
 }
 
+/// Revealed by the "Run a command when joining a meeting" toggle: the
+/// command editor plus its execution history. The command is the user's own
+/// text; now never logs it, only bounded outcomes.
+private struct JoinHookSettings: View {
+    @Binding var command: String
+    let runs: [JoinHookRun]
+    let testRunning: Bool
+    let onTest: () -> Void
+    let onClear: () -> Void
+
+    private var hasCommand: Bool {
+        !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField(#"watson start meetings "$NOW_TITLE""#, text: $command)
+                .font(.system(size: 12, design: .monospaced))
+                .textFieldStyle(.roundedBorder)
+            Text("Runs in your login shell. Meeting details arrive as environment variables: NOW_TITLE, NOW_CALENDAR, NOW_URL, NOW_START, NOW_END. Runs once per meeting, times out after 10 seconds.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button(testRunning ? "Testing…" : "Run Test", action: onTest)
+                    .disabled(testRunning || !hasCommand)
+                if !runs.isEmpty {
+                    Button("Clear History", action: onClear)
+                }
+            }
+            if !runs.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(runs) { run in
+                        JoinHookRunRow(run: run)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+            }
+        }
+        .padding(.top, 2)
+    }
+}
+
+/// One history line: outcome icon, time, meeting title, test badge, exit
+/// status. Failed runs carry their stderr excerpt as the tooltip.
+private struct JoinHookRunRow: View {
+    let run: JoinHookRun
+
+    private var symbol: String {
+        switch run.outcome {
+        case .success: return "checkmark.circle.fill"
+        case .failure: return "xmark.circle.fill"
+        case .timeout: return "clock.fill"
+        case .launchFailure: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var tint: Color {
+        switch run.outcome {
+        case .success: return .green
+        case .failure: return .red
+        case .timeout: return .orange
+        case .launchFailure: return .orange
+        }
+    }
+
+    private var statusText: String {
+        switch run.outcome {
+        case .success: return "exit 0"
+        case .failure(let exitCode): return "exit \(exitCode)"
+        case .timeout: return "timed out"
+        case .launchFailure: return "didn't start"
+        }
+    }
+
+    private var tooltip: String {
+        var text = "\(run.isTest ? "Test run" : "Run") for “\(run.title.isEmpty ? "Untitled" : run.title)” — \(statusText)."
+        if case .launchFailure(let reason) = run.outcome {
+            text += "\n\(reason)"
+        }
+        if let excerpt = run.errorExcerpt {
+            text += "\n\n" + excerpt
+        }
+        return text
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 12)
+            Text(Fmt.time.string(from: run.date))
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(.secondary)
+            Text(run.title.isEmpty ? "Untitled" : run.title)
+                .font(.system(size: 10))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if run.isTest {
+                Text("Test")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.primary.opacity(0.08)))
+            }
+            Spacer(minLength: 4)
+            Text(statusText)
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .help(tooltip)
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject private var persistence = PersistenceStatus.shared
     @EnvironmentObject var store: AppStore
@@ -1195,6 +1313,7 @@ struct SettingsView: View {
     @State private var showReminderSoundInfo = false
     @State private var showStartedCountdownInfo = false
     @State private var showJoinInAppInfo = false
+    @State private var showJoinHookInfo = false
     @StateObject private var commandHints = CommandHoldTracker()
     @State private var selectedSection: SettingsSection = .calendars
     /// While a sidebar jump animates, the scroll-position tracker is paused —
@@ -1933,6 +2052,36 @@ struct SettingsView: View {
                     .padding(14)
                     .frame(width: 320, alignment: .leading)
                 }
+            }
+            HStack(spacing: 6) {
+                Toggle("Run a command when joining a meeting", isOn: $store.settings.joinHookEnabled)
+                Button {
+                    showJoinHookInfo.toggle()
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("About the join command")
+                .help("About the join command")
+                .popover(isPresented: $showJoinHookInfo, arrowEdge: .trailing) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Run a command when joining a meeting").font(.headline)
+                        Text("The command runs once per meeting when you click Join anywhere in now, including from notifications — but never from preview buttons. It runs in your login shell exactly as you type it. Meeting details arrive as environment variables, never inside the command, so titles or links cannot inject shell syntax. Runs longer than 10 seconds are stopped. The command is stored with your settings but never logged.")
+                    }
+                    .font(.callout)
+                    .padding(14)
+                    .frame(width: 340, alignment: .leading)
+                }
+            }
+            if store.settings.joinHookEnabled {
+                JoinHookSettings(
+                    command: $store.settings.joinHookCommand,
+                    runs: store.joinHookRuns,
+                    testRunning: store.joinHookTestRunning,
+                    onTest: { store.runJoinHookTest() },
+                    onClear: { store.clearJoinHookRuns() }
+                )
+                .padding(.leading, 18)
             }
             Toggle("Show countdown in menu bar", isOn: $store.settings.showMenuBarCountdown)
             Toggle("Launch at Login", isOn: $store.settings.launchAtLogin)

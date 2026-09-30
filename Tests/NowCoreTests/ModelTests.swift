@@ -96,6 +96,9 @@ extension CoreTests {
         // Settings introduced after this legacy snapshot decode back to their
         // defaults and are written on the next save.
         expectedSettings["openJoinsInMeetingApp"] = true
+        expectedSettings["joinHookEnabled"] = false
+        expectedSettings["joinHookCommand"] = ""
+        expectedFields["joinHookRuns"] = []
         expectedFields["settings"] = expectedSettings
         let expected = expectedFields as NSDictionary
         let actual = try JSONSerialization.jsonObject(with: encoded) as! NSDictionary

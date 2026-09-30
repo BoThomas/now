@@ -63,6 +63,31 @@ its browser page.
 ordinary Zoom and Microsoft Teams links in the installed app. It is on by default; turn it off to
 always use the browser. Without the app installed, links open in your browser either way.
 
+### Run a command when joining
+
+**Run a command when joining a meeting** in **Settings → General** runs a shell command in the
+background when you join a meeting — for example, to start time tracking. It is off by default.
+
+The command runs once per meeting, no matter how often you click Join, and works from every Join
+button, including notifications (but never from previews). It runs in your login shell exactly as
+you type it. Details about the meeting arrive as environment variables and are never inserted into
+the command itself, so meeting titles and links cannot inject shell syntax:
+
+| Variable       | Content                                    |
+| -------------- | ------------------------------------------ |
+| `NOW_TITLE`    | Meeting title                              |
+| `NOW_CALENDAR` | Calendar name                              |
+| `NOW_URL`      | Join link, empty when the meeting has none |
+| `NOW_START`    | Scheduled start (ISO 8601)                 |
+| `NOW_END`      | Scheduled end (ISO 8601)                   |
+
+For example, time tracking with [watson](https://github.com/TailorDev/watson):
+`watson start meetings "$NOW_TITLE"`.
+
+**Run Test** executes the command against a sample meeting; the list below shows the last runs with
+their outcome, including a short error excerpt for failed ones. Commands that take longer than 10
+seconds are stopped. now stores the command with your settings but never logs it.
+
 ## Everyday controls
 
 | To…                      | Use…                                                          |
