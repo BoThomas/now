@@ -1261,9 +1261,11 @@ private struct JoinHookSettings: View {
 }
 
 /// One history line: outcome icon, time, meeting title, test badge, exit
-/// status. Failed runs carry their stderr excerpt as the tooltip.
+/// status. Failed runs show a one-line excerpt inline; the eye button opens
+/// the full error output in a popover.
 private struct JoinHookRunRow: View {
     let run: JoinHookRun
+    @State private var showingError = false
 
     private var symbol: String {
         switch run.outcome {
@@ -1292,15 +1294,11 @@ private struct JoinHookRunRow: View {
         }
     }
 
-    private var tooltip: String {
-        var text = "\(run.isTest ? "Test run" : "Run") for “\(run.title.isEmpty ? "Untitled" : run.title)”: \(statusText)."
-        if case .launchFailure(let reason) = run.outcome {
-            text += "\n\(reason)"
-        }
-        if let excerpt = run.errorExcerpt {
-            text += "\n\n" + excerpt
-        }
-        return text
+    /// The popover text: the stderr excerpt, or the launch failure reason.
+    private var errorDetail: String? {
+        if let excerpt = run.errorExcerpt { return excerpt }
+        if case .launchFailure(let reason) = run.outcome { return reason }
+        return nil
     }
 
     var body: some View {
@@ -1329,8 +1327,31 @@ private struct JoinHookRunRow: View {
                 Text(statusText)
                     .font(.system(size: 10).monospacedDigit())
                     .foregroundStyle(.secondary)
+                if errorDetail != nil {
+                    Button {
+                        showingError.toggle()
+                    } label: {
+                        Image(systemName: showingError ? "eye.fill" : "eye")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .cursor(.pointingHand)
+                    .help("Show error output")
+                    .accessibilityLabel("Show error output for \(run.title.isEmpty ? "Untitled" : run.title)")
+                    .popover(isPresented: $showingError, arrowEdge: .bottom) {
+                        ScrollView {
+                            Text(errorDetail ?? "")
+                                .font(.system(size: 11, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                        }
+                        .frame(width: 380, height: 160)
+                    }
+                }
             }
-            // Failed runs show their error inline, not only in the tooltip.
+            // Failed runs show their error inline, not only in the popover.
             if let excerpt = run.errorExcerpt {
                 Text(excerpt.replacingOccurrences(of: "\n", with: " · "))
                     .font(.system(size: 9, design: .monospaced))
@@ -1340,7 +1361,6 @@ private struct JoinHookRunRow: View {
                     .padding(.leading, 18)
             }
         }
-        .help(tooltip)
     }
 }
 
