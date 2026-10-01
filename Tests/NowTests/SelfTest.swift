@@ -1954,9 +1954,9 @@ enum SelfTest {
         let hookBack = hookData.flatMap { try? JSONDecoder().decode(AppSettings.self, from: $0) }
         c.expect(hookBack?.joinHookEnabled == true && hookBack?.joinHookCommand == "watson start meetings \"$NOW_TITLE\"",
                  "join hook settings round trip")
-        c.expect(!AppStore.shouldRunJoinHook(settings: AppSettings(), hasJoined: false), "join hook stays off by default")
-        c.expect(AppStore.shouldRunJoinHook(settings: hookSettings, hasJoined: false)
-                 && !AppStore.shouldRunJoinHook(settings: hookSettings, hasJoined: true),
+        c.expect(!AppStore.shouldRunJoinHook(settings: AppSettings(), hasRun: false), "join hook stays off by default")
+        c.expect(AppStore.shouldRunJoinHook(settings: hookSettings, hasRun: false)
+                 && !AppStore.shouldRunJoinHook(settings: hookSettings, hasRun: true),
                  "join hook fires on the first join of an occurrence only")
         let hookRun = JoinHookRun(date: Date(), title: "Team Sync", isTest: true, outcome: .failure(exitCode: 3), errorExcerpt: "boom")
         let hookStateData = try? JSONEncoder().encode(Persisted(joinHookRuns: [hookRun]))

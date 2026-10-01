@@ -21,9 +21,8 @@ enum JoinHookRunner {
         private var finished = false
         private var killed = false
         private var collected = Data()
-        /// Past this the excerpt has more than it can show; stop reading and
-        /// close the pipe so a spamming child dies on SIGPIPE instead of
-        /// buffering unbounded output.
+        /// Keep draining after this cap, discarding further bytes so the
+        /// child cannot block on a full pipe or grow the captured output.
         private let stderrLimit = 8 * 1024
 
         func install(_ process: Process) {
@@ -35,11 +34,6 @@ enum JoinHookRunner {
             lock.lock(); defer { lock.unlock() }
             guard collected.count < stderrLimit else { return }
             collected.append(data.prefix(stderrLimit - collected.count))
-        }
-
-        var stderrOverflowing: Bool {
-            lock.lock(); defer { lock.unlock() }
-            return collected.count >= stderrLimit
         }
 
         var stderr: String? {
@@ -86,12 +80,17 @@ enum JoinHookRunner {
     /// failures; a hung child is killed at the timeout.
     static func run(command: String, environment: [String: String],
                     completion: @escaping @MainActor @Sendable (JoinHookRun.Outcome, String?) -> Void) {
-        let execution = Execution()
-        let process = Process()
         // The user's login shell resolves their PATH (GUI apps see none of
         // Homebrew etc.) and honors their dotfiles; zsh is the fallback.
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
             ?? URL(fileURLWithPath: "/bin/zsh")
+        run(command: command, environment: environment, shell: shell, completion: completion)
+    }
+
+    private static func run(command: String, environment: [String: String], shell: URL,
+                            completion: @escaping @MainActor @Sendable (JoinHookRun.Outcome, String?) -> Void) {
+        let execution = Execution()
+        let process = Process()
         process.executableURL = shell
         process.arguments = ["-lc", command]
         process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, added in added }
@@ -106,7 +105,6 @@ enum JoinHookRunner {
                 return
             }
             execution.appendStderr(chunk)
-            if execution.stderrOverflowing { handle.readabilityHandler = nil }
         }
         process.terminationHandler = { terminated in
             // Stop reading WITHOUT waiting for EOF: a detached grandchild
@@ -149,10 +147,18 @@ enum JoinHookRunner {
     }
 
     private static func outcome(for process: Process, execution: Execution) -> JoinHookRun.Outcome {
-        // The watchdog's SIGTERM (or SIGKILL) is the timeout; a signal we did
-        // not send is an ordinary failure with the negative signal number.
-        if execution.wasKilled, process.terminationReason == .uncaughtSignal { return .timeout }
+        // A timeout remains a timeout even when the command handles SIGTERM
+        // and exits normally. Other signals are ordinary failures.
+        if execution.wasKilled { return .timeout }
         if process.terminationReason == .uncaughtSignal { return .failure(exitCode: -Int(process.terminationStatus)) }
         return process.terminationStatus == 0 ? .success : .failure(exitCode: Int(process.terminationStatus))
     }
+
+    #if NOW_TESTING
+    static func smokeRun(command: String, environment: [String: String] = [:],
+                         shell: URL = URL(fileURLWithPath: "/bin/zsh"),
+                         completion: @escaping @MainActor @Sendable (JoinHookRun.Outcome, String?) -> Void) {
+        run(command: command, environment: environment, shell: shell, completion: completion)
+    }
+    #endif
 }

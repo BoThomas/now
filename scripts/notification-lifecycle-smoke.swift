@@ -52,6 +52,61 @@ private final class LifecycleFixture {
 }
 
 extension NotificationSmoke {
+    @MainActor static func joinHookStoreTests(root: URL) async {
+        func require(_ value: @autoclosure () -> Bool, _ message: String) {
+            guard value() else { print("FAIL join hook store: " + message); exit(1) }
+        }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            f.store.settings.joinHookEnabled = true
+            f.store.settings.joinHookCommand = "synthetic-hook"
+            f.store.settings.snoozeSeconds = 60
+            var executions = 0
+            f.store.executeJoinHook = { _, _, completion in executions += 1; completion(.success, nil) }
+            let event = f.event("hook-once", link: URL(string: "https://example.invalid/join"))
+            f.commit([event])
+            f.store.joinedMeeting(event); f.store.joinedMeeting(event)
+            require(executions == 1, "repeated Join executes once")
+            require(f.store.snoozeMeeting(event), "Snooze remains available after Join")
+            f.store.joinedMeeting(event)
+            require(executions == 1, "Snooze does not repeat hook execution")
+            let restarted = AppStore(eventCache: CalendarEventCache(directory: root.appendingPathComponent(UUID().uuidString)))
+            restarted.now = { f.clock }
+            restarted.executeJoinHook = { _, _, completion in executions += 1; completion(.success, nil) }
+            await restarted.restoreCachedEvents()
+            restarted.smokeCommitEvents([event], observedCalendarIDs: [f.source.id])
+            restarted.joinedMeeting(event)
+            require(executions == 1, "restart retains hook deduplication")
+            let moved = f.event("hook-once", start: 600, end: 2400, link: event.link)
+            f.commit([moved]); f.store.joinedMeeting(moved); f.store.joinedMeeting(moved)
+            require(executions == 2, "reschedule permits exactly one new hook execution")
+        }
+        do {
+            let f = LifecycleFixture(root: root); defer { f.cleanup() }
+            await f.prepare()
+            f.store.settings.joinHookEnabled = true
+            f.store.settings.joinHookCommand = "synthetic-hook"
+            var completions: [@MainActor @Sendable (JoinHookRun.Outcome, String?) -> Void] = []
+            f.store.executeJoinHook = { _, _, completion in completions.append(completion) }
+            let event = f.event("hook-overlap")
+            f.commit([event])
+            f.store.runJoinHookTest(); f.store.joinedMeeting(event)
+            require(completions.count == 2 && f.store.joinHookTestRunning, "test and real hooks can overlap")
+            completions[1](.success, nil)
+            require(f.store.joinHookTestRunning, "real completion does not clear testing state")
+            f.store.runJoinHookTest()
+            require(completions.count == 2, "a second test stays blocked until the first finishes")
+            completions[0](.success, nil)
+            require(!f.store.joinHookTestRunning && f.store.joinHookRuns.count == 2, "test completion clears its state and records both runs")
+            f.store.runJoinHookTest()
+            require(completions.count == 3 && f.store.joinHookTestRunning, "next test starts after completion")
+            completions[2](.failure(exitCode: 3), "synthetic failure")
+            require(!f.store.joinHookTestRunning, "failed test also clears its state")
+        }
+        print("JOIN HOOK STORE OK — repeated Join, Snooze/restart, reschedule and overlapping test/real completions")
+    }
+
     @MainActor static func lifecycleTests(root: URL) async {
         await multipleReminderLifecycle(root: root)
         func require(_ value: @autoclosure () -> Bool, _ message: String) {

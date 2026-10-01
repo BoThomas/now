@@ -10,8 +10,7 @@ package enum JoinHook {
     package static let timeoutSeconds: TimeInterval = 10
     /// Stored executions shown in Settings; oldest entries drop off the end.
     package static let maxRuns = 10
-    /// Defensive cap for the stored command — editing happens in a one-line
-    /// field, so anything longer is a damaged or foreign value.
+    /// Defensive cap for the stored command; longer scripts belong in a file.
     package static let maxCommandLength = 2_000
 
     /// The command a shell should execute verbatim, or nil when the setting
@@ -23,10 +22,10 @@ package enum JoinHook {
     }
 
     /// Whether joining `event` should run the hook: enabled, a usable command,
-    /// and an occurrence that has not been joined yet (the ledger resets that
-    /// on reschedule, re-arming the hook for the moved occurrence).
-    package static func shouldRun(enabled: Bool, command: String, hasJoined: Bool) -> Bool {
-        enabled && normalizedCommand(command) != nil && !hasJoined
+    /// and an occurrence whose hook has not run yet. Rescheduling re-arms it;
+    /// Snooze changes reminder suppression without re-running the hook.
+    package static func shouldRun(enabled: Bool, command: String, hasRun: Bool) -> Bool {
+        enabled && normalizedCommand(command) != nil && !hasRun
     }
 
     /// Meeting data for the hook, passed as environment variables. It never
@@ -91,10 +90,9 @@ package struct JoinHookRun: Codable, Equatable, Identifiable, Sendable {
 }
 
 extension ReminderLedger {
-    /// Whether this occurrence was already joined. The join hook fires once
-    /// per occurrence lifecycle: a repeated Join click must not re-run it,
-    /// while a reschedule (which resets the ledger's join state) re-arms it.
-    package func hasJoined(_ event: MeetingEvent) -> Bool {
-        entries[ReminderIdentity.eventKey(event)]?.joined == true
+    /// Whether this occurrence's hook was already requested. Unlike reminder
+    /// suppression, this survives Snooze; rescheduling re-arms it.
+    package func hasRunJoinHook(_ event: MeetingEvent) -> Bool {
+        entries[ReminderIdentity.eventKey(event)]?.joinHookRan == true
     }
 }

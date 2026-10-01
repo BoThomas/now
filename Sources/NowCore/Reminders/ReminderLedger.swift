@@ -13,6 +13,9 @@ package struct ReminderLedger: Codable, Equatable, Sendable {
         /// nil identifies pre-multiple-reminder history.
         package var handledLeads: Set<Int>?
         package var joined: Bool?
+        /// Independent of Join suppression, which Snooze can clear.
+        /// Optional so ledgers from before join hooks still decode.
+        package var joinHookRan: Bool?
         package var snoozeToken: String?
         package var actionToken: String?
 

@@ -735,6 +735,8 @@ struct NotificationSmoke {
         require(probe.calls == unsupportedCalls && probeStore.settings.inMeetingDelivery == .suppress && probeStore.meetingDetectionAvailable == false,
                 "unsupported capability preserves preference without endless retries")
         probeStore.setInMeetingDelivery(.normal)
+        await joinHookStoreTests(root: root)
+        await joinHookRunnerTests()
         await lifecycleTests(root: root)
         await guideSubmissionTests(root: root)
         brewUpdateTests(root: root)

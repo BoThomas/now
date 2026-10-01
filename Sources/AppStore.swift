@@ -1333,8 +1333,8 @@ final class AppStore: ObservableObject {
 
     func joinedMeeting(_ event: MeetingEvent) {
         guard let current = events.first(where: { $0.id == event.id }), current.end > now() else { return }
-        let fireJoinHook = Self.shouldRunJoinHook(settings: settings, hasJoined: reminderLedger.hasJoined(current))
-        reminderLedger.join(current)
+        let fireJoinHook = Self.shouldRunJoinHook(settings: settings, hasRun: reminderLedger.hasRunJoinHook(current))
+        reminderLedger.join(current, recordingJoinHook: fireJoinHook)
         persistReminderLedger()
         notifications?.removeMeetings(containing: [NotificationLogic.eventKey(current), NotificationLogic.key(current.id), NotificationLogic.key(current.legacyID)])
         if fireJoinHook { runJoinHook(on: current, test: false) }
@@ -1342,9 +1342,9 @@ final class AppStore: ObservableObject {
 
     /// The join hook fires on the first join of an occurrence lifecycle: it
     /// must be enabled with a usable command, and the occurrence must not be
-    /// joined yet (the ledger resets that on reschedule, re-arming the hook).
-    nonisolated static func shouldRunJoinHook(settings: AppSettings, hasJoined: Bool) -> Bool {
-        JoinHook.shouldRun(enabled: settings.joinHookEnabled, command: settings.joinHookCommand, hasJoined: hasJoined)
+    /// run yet (rescheduling re-arms the hook; Snooze does not).
+    nonisolated static func shouldRunJoinHook(settings: AppSettings, hasRun: Bool) -> Bool {
+        JoinHook.shouldRun(enabled: settings.joinHookEnabled, command: settings.joinHookCommand, hasRun: hasRun)
     }
 
     /// Spawns the configured command with the meeting in its environment and
@@ -1355,7 +1355,7 @@ final class AppStore: ObservableObject {
         if test { joinHookTestRunning = true }
         executeJoinHook(command, JoinHook.environment(for: event)) { [weak self] outcome, excerpt in
             guard let self else { return }
-            self.joinHookTestRunning = false
+            if test { self.joinHookTestRunning = false }
             self.recordJoinHookRun(JoinHookRun(date: self.now(), title: event.title, isTest: test,
                                                outcome: outcome, errorExcerpt: excerpt))
         }

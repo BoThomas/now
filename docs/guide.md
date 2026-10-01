@@ -68,10 +68,11 @@ always use the browser. Without the app installed, links open in your browser ei
 **Run a command when joining a meeting** in **Settings → General** runs a shell command in the
 background when you join a meeting — for example, to start time tracking. It is off by default.
 
-The command runs once per meeting, no matter how often you click Join, and works from every Join
-button, including notifications (but never from previews). It runs in your login shell exactly as
-you type it. Details about the meeting arrive as environment variables and are never inserted into
-the command itself, so meeting titles and links cannot inject shell syntax:
+The command runs once per meeting, even after Snooze or a restart; moving its scheduled start lets
+it run again. It works from every Join button, including notifications (but never from previews). It
+runs in your login shell exactly as you type it. Details about the meeting arrive as environment
+variables and are never inserted into the command itself, so meeting titles and links cannot inject
+shell syntax:
 
 | Variable       | Content                                    |
 | -------------- | ------------------------------------------ |
@@ -94,7 +95,7 @@ the logic in a file once and just call it:
 mkdir -p ~/bin && cat > ~/bin/on-join <<'EOF'
 #!/bin/zsh
 watson start meetings "$NOW_TITLE"
-osascript -e "display notification \"Started: $NOW_TITLE\""
+osascript -e 'display notification ("Started: " & (system attribute "NOW_TITLE"))'
 EOF
 chmod +x ~/bin/on-join
 ```
