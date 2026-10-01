@@ -48,14 +48,15 @@ later decision), meeting detection, updater/update trust, X11 support, packaging
 
 ## Milestones
 
-### M0 — Environment (done 2026-10-01)
+### M0 — Environment (setup committed; Codespace run pending)
 
 Devcontainer with the pinned Swift toolchain, D-Bus tooling, and `desktop-lite`; post-create runs
 the portable gates and reports to `/tmp/now-post-create-report.txt`.
 
 Gate: post-create green in a fresh Codespace — core (debug), headless (debug), module boundary
-parse, compiler smoke; desktop session reachable on port 6080. Verified 2026-10-01; see "Validation
-record" below.
+parse, compiler smoke; desktop session reachable on port 6080. Current state: the devcontainer is
+committed and partially verified (see "Validation record"); the Codespace run needs the repository
+owner, because the agent's fine-grained GitHub token has no Codespaces permission.
 
 ### M1 — Session integration harness
 
@@ -108,6 +109,13 @@ the tray menu, alert, agenda, and settings against macOS now, and iterates with 
 
 ## Validation record
 
-- 2026-10-01 — M0 verified in a fresh Codespace on `feat/headless-linux-probe`: post-create report
-  green (Swift toolchain, core debug, headless debug, module-boundary parse, compiler smoke),
-  desktop session reachable. Details in the conversation that set this up.
+- 2026-10-01 — devcontainer committed on `feat/headless-linux-probe` (commit `dcc3706`, then the
+  Swift pin fix). Verified from the Linux devbox: script syntax, devcontainer JSON, Swift tarball
+  URL resolution for both x86_64 and aarch64 (`ubuntu2404[-aarch64]` path, Swift 6.4.0 first
+  candidate), and the post-create gate sequence itself passing on this host: core debug (290
+  checks), headless debug (51 checks), module boundary parse, compiler smoke. The devbox (Debian 12,
+  glibc 2.36) had no Swift toolchain; it now runs the `ubuntu2204` Swift 6.4.0 build from
+  `/opt/swift` — the container's Ubuntu 24.04 build needs glibc 2.39 and stays Codespace-only.
+- Pending — the same gates green inside a fresh Codespace. Blocked on Codespaces creation, which the
+  agent's fine-grained GitHub token cannot perform (no Codespaces permission). The repository owner
+  creates it from the branch; the devcontainer is picked up automatically.

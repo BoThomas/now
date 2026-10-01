@@ -23,14 +23,15 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
 
 log "install pinned Swift toolchain to /opt/swift"
 arch_flag=""
+plat_dir="ubuntu2404"
 case "$(uname -m)" in
   x86_64) arch_flag="" ;;
-  aarch64) arch_flag="-aarch64" ;;
+  aarch64) arch_flag="-aarch64"; plat_dir="ubuntu2404-aarch64" ;;
   *) printf 'unsupported arch %s\n' "$(uname -m)" >>"$report"; exit 2 ;;
 esac
 swift_dir=""
-for version in 6.4.2 6.4.1 6.4 6.3.2 6.3.1 6.3 6.2.4 6.2.3 6.2; do
-  url="https://download.swift.org/swift-${version}-release/ubuntu2404/swift-${version}-RELEASE/swift-${version}-RELEASE-ubuntu24.04${arch_flag}.tar.gz"
+for version in 6.4.0 6.3.3 6.3.2 6.3.1 6.3 6.2.4 6.2.3 6.2; do
+  url="https://download.swift.org/swift-${version}-release/${plat_dir}/swift-${version}-RELEASE/swift-${version}-RELEASE-ubuntu24.04${arch_flag}.tar.gz"
   if curl -fsSL --head "$url" >/dev/null 2>&1; then
     log "downloading Swift ${version}"
     curl -fsSL "$url" -o /tmp/swift.tar.gz >>"$report" 2>&1
