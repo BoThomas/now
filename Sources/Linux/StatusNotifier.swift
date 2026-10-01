@@ -92,7 +92,7 @@ enum StatusNotifier {
             if watchForRestart {
                 connection.addSignalHandler(interface: "org.freedesktop.DBus", member: "NameOwnerChanged") { [weak self] reader in
                     guard let self else { return }
-                    var arguments = reader
+                    let arguments = reader
                     guard let name = arguments.readString(), name == StatusNotifier.watcherService,
                           let oldOwner = arguments.readString(), let newOwner = arguments.readString() else { return }
                     if oldOwner.isEmpty, !newOwner.isEmpty {
@@ -163,7 +163,7 @@ enum StatusNotifier {
             destination: notificationsService, path: notificationsPath, interface: notificationsInterface,
             member: "GetCapabilities"
         )
-        var arguments = reader
+        let arguments = reader
         return NotificationCapabilities(capabilities: arguments.readStringArray() ?? [])
     }
 }
@@ -182,7 +182,7 @@ enum StatusNotifierFixtures {
             let watcher = self
             connection.addObject(path: StatusNotifier.watcherPath) { member, _, _, arguments in
                 guard member == "RegisterStatusNotifierItem" else { return nil }
-                var reader = arguments
+                let reader = arguments
                 guard let service = reader.readString() else { return nil }
                 watcher.record(service)
                 return []

@@ -44,6 +44,7 @@ enum SelfTest {
             try await watcherRegistration(&check)
             try await watcherRestart(&check)
             try notificationCapabilities(&check)
+            try menuSurface(&check)
         } catch {
             check.expect(false, "scenario failed: \(error)")
         }
@@ -51,7 +52,7 @@ enum SelfTest {
             for failure in check.failures { print("FAIL: \(failure)") }
             exit(1)
         }
-        print("LINUX SHELL OK — \(check.count) checks; bus connect, name ownership, watcher registration, property export, restart re-registration, notification capabilities")
+        print("LINUX SHELL OK — \(check.count) checks; bus connect, name ownership, watcher registration, property export, restart re-registration, notification capabilities, dbusmenu export/events/revisions")
     }
 
     private static func poll(deadline seconds: TimeInterval = 10, _ condition: @Sendable () -> Bool) async -> Bool {
@@ -84,7 +85,7 @@ enum SelfTest {
             interface: "org.freedesktop.DBus.Properties", member: "GetAll",
             arguments: [.string(StatusNotifier.itemInterface)]
         )
-        var reader = reply
+        let reader = reply
         let properties = reader.readPropertyDict() ?? [:]
         check.expect(properties["Category"] == "SystemServices", "Category property")
         check.expect(properties["Id"] == "now", "Id property")
@@ -151,5 +152,93 @@ enum SelfTest {
         check.expect(daemon.queries() == 1, "capability probe queried the daemon once")
         let minimal = StatusNotifier.NotificationCapabilities(capabilities: ["body"])
         check.expect(minimal == .init(capabilities: ["body"]) && !minimal.actions, "default-action-only policy for minimal daemons")
+    }
+
+    final class ActionRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded: [String] = []
+        func record(_ action: String) {
+            lock.lock(); recorded.append(action); lock.unlock()
+        }
+        var actions: [String] {
+            lock.lock(); defer { lock.unlock() }
+            return recorded
+        }
+    }
+
+    /// Exports the dbusmenu surface the tray item's Menu property names and
+    /// drives it from a second client like a real panel: layout, click
+    /// events, revision bumps, and the LayoutUpdated announcement.
+    private static func menuSurface(_ check: inout Check) throws {
+        let app = try DBusConnection.session()
+        app.startPump()
+        defer { app.shutdown() }
+        let desktop = try DBusConnection.session()
+        desktop.startPump()
+        defer { desktop.shutdown() }
+
+        let updates = ActionRecorder()
+        desktop.addSignalHandler(interface: DBusMenu.interface, member: "LayoutUpdated") { reader in
+            guard let revision = reader.readUint32() else { return }
+            updates.record(String(revision))
+        }
+
+        let publisher = DBusMenu.Publisher(connection: app, path: "/MenuBar")
+        let recorder = ActionRecorder()
+        publisher.onAction { recorder.record($0) }
+
+        let standup = DBusMenu.Node.item(1, "Join standup", action: "join")
+        var root = DBusMenu.Node(id: 0)
+        root.children = [standup, .separator(2), .item(3, "Pause reminders", action: "pause")]
+        publisher.update(root)
+
+        let shown = try desktop.call(
+            destination: app.uniqueName, path: "/MenuBar",
+            interface: DBusMenu.interface, member: "AboutToShow", arguments: [.int32(0)]
+        )
+        check.expect(shown.readBoolean() == true, "AboutToShow answers ready")
+
+        let reply = try desktop.call(
+            destination: app.uniqueName, path: "/MenuBar",
+            interface: DBusMenu.interface, member: "GetLayout",
+            arguments: [.int32(0), .int32(-1), .stringArray([])]
+        )
+        guard let view = DBusMenu.LayoutView.parse(reply) else {
+            check.expect(false, "GetLayout reply parses")
+            return
+        }
+        check.expect(view.revision == 1, "layout revision starts at 1")
+        check.expect(view.properties["children-display"] == "submenu", "root carries children-display")
+        check.expect(view.childLabels.count == 3, "agenda menu rows exported")
+        check.expect(view.childLabels.first == "Join standup", "agenda labels carry meeting titles")
+
+        _ = try desktop.call(
+            destination: app.uniqueName, path: "/MenuBar",
+            interface: DBusMenu.interface, member: "Event",
+            arguments: [.int32(1), .string("clicked"), .variant(.string("")), .int64(0)]
+        )
+        var delivered = false
+        let start = Date()
+        while Date().timeIntervalSince(start) < 5 {
+            if recorder.actions == ["join"] { delivered = true; break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        check.expect(delivered, "clicked event delivers the join action")
+
+        root.children.append(.item(4, "Snooze 10 min", action: "snooze"))
+        publisher.update(root)
+
+        let updated = try desktop.call(
+            destination: app.uniqueName, path: "/MenuBar",
+            interface: DBusMenu.interface, member: "GetLayout",
+            arguments: [.int32(0), .int32(-1), .stringArray([])]
+        )
+        guard let second = DBusMenu.LayoutView.parse(updated) else {
+            check.expect(false, "updated GetLayout reply parses")
+            return
+        }
+        check.expect(second.revision == 2, "publishing a tree bumps the revision")
+        check.expect(second.childLabels.count == 4, "updated menu carries the snooze row")
+        check.expect(updates.actions.contains("2"), "LayoutUpdated announced the new revision")
     }
 }

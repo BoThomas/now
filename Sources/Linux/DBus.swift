@@ -12,9 +12,12 @@ indirect enum DBusValue: Sendable {
     case boolean(Bool)
     case int32(Int32)
     case uint32(UInt32)
+    case int64(Int64)
     case stringArray([String])
     case variant(DBusValue)
     case dictEntries([(String, DBusValue)])
+    case structure([DBusValue])
+    case array(signature: String, values: [DBusValue])
 }
 
 /// Transport failures of the libdbus layer; the shell reports them, never
@@ -134,8 +137,7 @@ final class DBusConnection: @unchecked Sendable {
         guard let reply = dbus_connection_send_with_reply_and_block(connection, message, timeoutMs, &error) else {
             throw DBusFailure("call \(interface).\(member): \(cString(error.message))")
         }
-        defer { dbus_message_unref(reply) }
-        return DBusMessageReader(reply)
+        return DBusMessageReader(retaining: reply)
     }
 
     func emitSignal(path: String, interface: String, member: String, arguments: [DBusValue]) throws {
@@ -312,11 +314,27 @@ enum DBusMessageWriter {
         case .uint32(let number):
             var number = number
             dbus_message_iter_append_basic(iterator, CDBusTypeUint32, &number)
+        case .int64(let number):
+            var number = number
+            dbus_message_iter_append_basic(iterator, CDBusTypeInt64, &number)
         case .stringArray(let strings):
             var array = DBusMessageIter()
             dbus_message_iter_open_container(iterator, CDBusTypeArray, "s", &array)
             for string in strings { appendString(string, into: &array) }
             dbus_message_iter_close_container(iterator, &array)
+        case .array(let signature, let values):
+            var array = DBusMessageIter()
+            var signatureBuffer = Array(signature.utf8CString)
+            signatureBuffer.withUnsafeMutableBufferPointer { buffer in
+                _ = dbus_message_iter_open_container(iterator, CDBusTypeArray, buffer.baseAddress, &array)
+            }
+            for value in values { try append(value, into: &array) }
+            dbus_message_iter_close_container(iterator, &array)
+        case .structure(let values):
+            var structure = DBusMessageIter()
+            dbus_message_iter_open_container(iterator, CDBusTypeStruct, nil, &structure)
+            for value in values { try append(value, into: &structure) }
+            dbus_message_iter_close_container(iterator, &structure)
         case .variant(let inner):
             var variant = DBusMessageIter()
             var signature = Array(Self.signature(of: inner).utf8CString)
@@ -345,27 +363,70 @@ enum DBusMessageWriter {
         case .boolean: return "b"
         case .int32: return "i"
         case .uint32: return "u"
+        case .int64: return "x"
         case .stringArray: return "as"
         case .variant(let inner): return signature(of: inner)
         case .dictEntries: return "a{sv}"
+        case .structure(let values):
+            return "(" + values.map { signature(of: $0) }.joined() + ")"
+        case .array(let signature, _): return "a" + signature
         }
     }
 }
 
 /// Reader for incoming arguments and replies; single pass, position-based.
-struct DBusMessageReader {
+/// Reply readers own their message (ref-counted); readers created for
+/// incoming dispatch messages borrow them for the handler's lifetime.
+final class DBusMessageReader {
     private let message: OpaquePointer
+    private let ownsMessage: Bool
     private var iterator = DBusMessageIter()
     private var exhausted = false
 
     init(_ message: OpaquePointer) {
         self.message = message
+        self.ownsMessage = false
         exhausted = dbus_message_iter_init(message, &iterator) == 0
+    }
+
+    init(retaining message: OpaquePointer) {
+        self.message = dbus_message_ref(message)
+        self.ownsMessage = true
+        exhausted = dbus_message_iter_init(message, &iterator) == 0
+    }
+
+    private init(borrowing message: OpaquePointer, iterator: DBusMessageIter) {
+        self.message = message
+        self.ownsMessage = false
+        self.iterator = iterator
+    }
+
+    deinit {
+        if ownsMessage { dbus_message_unref(message) }
     }
 
     var member: String { cString(dbus_message_get_member(message)) }
 
-    mutating func readString() -> String? {
+    /// The argument type at the current position (a CDBusType* constant).
+    var currentType: Int32 {
+        exhausted ? CDBusTypeInvalid : dbus_message_iter_get_arg_type(&iterator)
+    }
+
+    /// Steps the current container to its next element.
+    func step() {
+        exhausted = dbus_message_iter_next(&iterator) == 0
+    }
+
+    /// A reader positioned inside the current container argument (array,
+    /// variant, struct, or dict entry); the receiver stays at its position.
+    func recurseInto() -> DBusMessageReader? {
+        guard !exhausted else { return nil }
+        var sub = DBusMessageIter()
+        dbus_message_iter_recurse(&iterator, &sub)
+        return DBusMessageReader(borrowing: message, iterator: sub)
+    }
+
+    func readString() -> String? {
         guard !exhausted, dbus_message_iter_get_arg_type(&iterator) == CDBusTypeString else { return nil }
         var base: UnsafeMutableRawPointer?
         dbus_message_iter_get_basic(&iterator, &base)
@@ -374,7 +435,7 @@ struct DBusMessageReader {
         return String(cString: base.assumingMemoryBound(to: CChar.self))
     }
 
-    mutating func readBoolean() -> Bool? {
+    func readBoolean() -> Bool? {
         guard !exhausted, dbus_message_iter_get_arg_type(&iterator) == CDBusTypeBoolean else { return nil }
         var value = dbus_bool_t(0)
         dbus_message_iter_get_basic(&iterator, &value)
@@ -382,7 +443,7 @@ struct DBusMessageReader {
         return value != 0
     }
 
-    mutating func readInt32() -> Int32? {
+    func readInt32() -> Int32? {
         guard !exhausted, dbus_message_iter_get_arg_type(&iterator) == CDBusTypeInt32 else { return nil }
         var value: Int32 = 0
         dbus_message_iter_get_basic(&iterator, &value)
@@ -390,7 +451,23 @@ struct DBusMessageReader {
         return value
     }
 
-    mutating func readStringArray() -> [String]? {
+    func readUint32() -> UInt32? {
+        guard !exhausted, dbus_message_iter_get_arg_type(&iterator) == CDBusTypeUint32 else { return nil }
+        var value: UInt32 = 0
+        dbus_message_iter_get_basic(&iterator, &value)
+        advance()
+        return value
+    }
+
+    func readInt64() -> Int64? {
+        guard !exhausted, dbus_message_iter_get_arg_type(&iterator) == CDBusTypeInt64 else { return nil }
+        var value: Int64 = 0
+        dbus_message_iter_get_basic(&iterator, &value)
+        advance()
+        return value
+    }
+
+    func readStringArray() -> [String]? {
         guard !exhausted, dbus_message_iter_get_arg_type(&iterator) == CDBusTypeArray else { return nil }
         var array = DBusMessageIter()
         dbus_message_iter_recurse(&iterator, &array)
@@ -407,7 +484,7 @@ struct DBusMessageReader {
 
     /// Reads `a{sv}` into labeled scalar strings; variant values keep the
     /// subset the tray surface needs (string/bool/int).
-    mutating func readPropertyDict() -> [String: String]? {
+    func readPropertyDict() -> [String: String]? {
         guard !exhausted, dbus_message_iter_get_arg_type(&iterator) == CDBusTypeArray else { return nil }
         var array = DBusMessageIter()
         dbus_message_iter_recurse(&iterator, &array)
@@ -454,7 +531,7 @@ struct DBusMessageReader {
         }
     }
 
-    private mutating func advance() {
+    private func advance() {
         exhausted = dbus_message_iter_next(&iterator) == 0
     }
 }

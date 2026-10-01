@@ -16,6 +16,9 @@ static const int32_t CDBusTypeUint32 = DBUS_TYPE_UINT32;
 static const int32_t CDBusTypeArray = DBUS_TYPE_ARRAY;
 static const int32_t CDBusTypeVariant = DBUS_TYPE_VARIANT;
 static const int32_t CDBusTypeDictEntry = DBUS_TYPE_DICT_ENTRY;
+static const int32_t CDBusTypeStruct = DBUS_TYPE_STRUCT;
+static const int32_t CDBusTypeInt64 = DBUS_TYPE_INT64;
+static const int32_t CDBusTypeInvalid = DBUS_TYPE_INVALID;
 static const int32_t CDBusMessageTypeSignal = DBUS_MESSAGE_TYPE_SIGNAL;
 static const int32_t CDBusMessageTypeMethodCall = DBUS_MESSAGE_TYPE_METHOD_CALL;
 
