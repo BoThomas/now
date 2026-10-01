@@ -40,10 +40,13 @@ actor LinuxStore {
     private let registrar: StatusNotifier.Registrar
     private let menu: DBusMenu.Publisher
     private var publishedTitle = ""
+    /// XDG autostart directory; injected so tests never touch a real home.
+    private let autostartDirectory: URL
 
     init(root: URL, connection: DBusConnection, clock: @escaping @Sendable () -> Date = Date.init,
          logging: @escaping @Sendable (String) -> Void = { _ in },
-         openJoin: @escaping @Sendable (URL) -> Void = { _ in }) {
+         openJoin: @escaping @Sendable (URL) -> Void = { _ in },
+         autostartDirectory: URL? = nil) {
         self.root = root
         self.clock = clock
         self.logging = logging
@@ -52,6 +55,8 @@ actor LinuxStore {
         self.connection = connection
         self.registrar = StatusNotifier.Registrar(connection: connection, logging: logging)
         self.menu = DBusMenu.Publisher(connection: connection, path: StatusNotifier.ItemConfiguration().menuPath)
+        self.autostartDirectory = autostartDirectory
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/autostart")
         menu.onAction { [weak self] action in
             guard let self else { return }
             Task { await self.handle(action: action) }
@@ -61,6 +66,26 @@ actor LinuxStore {
     /// The tray item's bus name, for clients and diagnostics.
     var trayServiceName: String { registrar.serviceName }
 
+    /// Syncs the XDG autostart entry with the launch-at-login preference.
+    /// Per the Omarchy probe, entries apply at next login; the toggle's copy
+    /// must keep saying so.
+    private func syncAutostart() {
+        let entry = autostartDirectory.appendingPathComponent("now-linux.desktop")
+        if prefs.settings.launchAtLogin {
+            let text = """
+            [Desktop Entry]
+            Type=Application
+            Name=now
+            Exec=now-linux run --root \(root.path)
+            X-GNOME-Autostart-enabled=true
+
+            """
+            LinuxFile.write(Data(text.utf8), to: entry)
+        } else {
+            try? FileManager.default.removeItem(at: entry)
+        }
+    }
+
     private func log(_ line: String) { logging(line) }
 
     // MARK: Startup
@@ -69,6 +94,7 @@ actor LinuxStore {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try registrar.registerObject()
         await loadState()
+        syncAutostart()
         beginCatchUp()
         await refresh()
         try await registrar.connect(initialTimeout: 5)

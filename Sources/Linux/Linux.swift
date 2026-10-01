@@ -415,9 +415,14 @@ enum SelfTest {
         try JSONEncoder().encode(prefs).write(to: root.appendingPathComponent("preferences.json"))
 
         let joins = ActionRecorder()
+        let autostart = root.appendingPathComponent("autostart")
+        var launchPrefs = prefs
+        launchPrefs.settings.launchAtLogin = true
+        try JSONEncoder().encode(launchPrefs).write(to: root.appendingPathComponent("preferences.json"))
         let store = LinuxStore(
             root: root, connection: app,
-            logging: { _ in }, openJoin: { joins.record($0.absoluteString) }
+            logging: { _ in }, openJoin: { joins.record($0.absoluteString) },
+            autostartDirectory: autostart
         )
         try await store.startup()
 
@@ -466,6 +471,10 @@ enum SelfTest {
         } else {
             check.expect(false, "agenda row exposes a clickable id")
         }
+        let entry = autostart.appendingPathComponent("now-linux.desktop")
+        let entryText = (try? String(contentsOf: entry, encoding: .utf8)) ?? ""
+        check.expect(entryText.contains("Type=Application") && entryText.contains("Exec=now-linux run"),
+                     "launch-at-login writes an XDG autostart entry (next-login semantics)")
         try? FileManager.default.removeItem(at: root)
     }
 }
