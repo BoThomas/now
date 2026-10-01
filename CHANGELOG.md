@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.3.0] - 2026-10-01
+
+### Added
+
+- Run a command or call a script when joining a meeting, for example, to start time tracking. Enable
+  it in Settings → General; commands run once per meeting across repeated Join clicks, Snooze, and
+  restarts.
+
 ## [2.2.1] - 2026-09-29
 
 ### Improved
@@ -304,3 +312,4 @@
 [2.1.1]: https://github.com/BoThomas/now/compare/v2.1.0...v2.1.1
 [2.2.0]: https://github.com/BoThomas/now/compare/v2.1.1...v2.2.0
 [2.2.1]: https://github.com/BoThomas/now/compare/v2.2.0...v2.2.1
+[2.3.0]: https://github.com/BoThomas/now/compare/v2.2.1...v2.3.0
