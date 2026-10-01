@@ -58,15 +58,18 @@ parse, compiler smoke; desktop session reachable on port 6080. Current state: th
 committed and partially verified (see "Validation record"); the Codespace run needs the repository
 owner, because the agent's fine-grained GitHub token has no Codespaces permission.
 
-### M1 — Session integration harness
+### M1 — Session integration harness (done 2026-10-01)
 
-A committed, deterministic test harness that runs the app under `dbus-run-session` with a synthetic
-`org.kde.StatusNotifierWatcher` fixture: registration, property updates, idempotent re-registration
-after a watcher restart (~1.5 s per the Hyprland probe), and notification-channel capability probes.
-No real desktop required.
+The `now-linux` executable target (`Sources/Linux`, gated by `NOW_TEST_SUITE=linux` and
+`scripts/test-linux.sh`, which wraps the selftest in `dbus-run-session`) plus a minimal libdbus
+layer (`Sources/CDBus`): connection with a pump thread, name ownership, object export, signal
+filter, blocking calls. The selftest runs two client connections (the app and "the rest of the
+desktop") against synthetic watcher/notification fixtures and asserts registration, property export,
+one-shot re-registration across a watcher restart with no registration storm, and capability
+probing.
 
-Gate: harness passes in the Codespace and on the Linux devbox as part of selftest; failures are
-diagnosable from the report alone.
+Gate: `./scripts/test-linux.sh` in both configurations — 17 checks, green on the Linux devbox
+2026-10-01 (debug and release); core/headless/module-boundary/compiler gates unaffected.
 
 ### M2 — Tray prototype
 

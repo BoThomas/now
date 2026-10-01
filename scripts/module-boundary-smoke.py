@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-SUITES = [None, "core", "headless", "selftest", "notification", "reminder", "cache", "fetch", "workload", "parser", "updater", "perf"]
+SUITES = [None, "core", "headless", "linux", "selftest", "notification", "reminder", "cache", "fetch", "workload", "parser", "updater", "perf"]
 
 
 def main():
@@ -24,10 +24,11 @@ def main():
         # Dependency fetch progress is allowed; manifest warnings are not.
         assert "warning:" not in result.stderr, result.stderr
         targets = {target["name"]: target for target in json.loads(result.stdout)["targets"]}
-        name = "NowApp" if suite is None else "NowCoreTests" if suite == "core" else "NowHeadless" if suite == "headless" else "NowHarness"
-        assert set(targets) == {"NowCore", name}, targets.keys()
+        name = "NowApp" if suite is None else "NowCoreTests" if suite == "core" else "NowHeadless" if suite == "headless" else "NowLinux" if suite == "linux" else "NowHarness"
+        expected = {"NowCore", "NowLinux", "CDBus"} if suite == "linux" else {"NowCore", name}
+        assert set(targets) == expected, targets.keys()
         core, consumer = targets["NowCore"], targets[name]
-        assert consumer["target_dependencies"] == ["NowCore"], consumer
+        assert consumer["target_dependencies"] == (["NowCore", "CDBus"] if suite == "linux" else ["NowCore"]), consumer
         core_sources = {(ROOT / core["path"] / source).resolve() for source in core["sources"]}
         sources = [(ROOT / consumer["path"] / source).resolve() for source in consumer["sources"]]
         assert core_sources and sources and core_sources.isdisjoint(sources), "Core recompiled inside a consumer"
@@ -36,11 +37,14 @@ def main():
             assert all(source.is_relative_to(ROOT / "Tests/NowCoreTests") for source in sources)
         elif suite == "headless":
             assert all(source.is_relative_to(ROOT / "Sources/Headless") for source in sources), sources
+        elif suite == "linux":
+            assert all(source.is_relative_to(ROOT / "Sources/Linux") for source in sources), sources
         else:
             assert not any(source.is_relative_to(ROOT / "Tests/NowCoreTests") for source in sources)
             assert not any(source.is_relative_to(ROOT / "Sources/Headless") for source in sources)
+            assert not any(source.is_relative_to(ROOT / "Sources/Linux") for source in sources)
         if args.parse:
-            flags = [] if suite in (None, "core", "headless") else ["-D", "NOW_TESTING", "-D", "NOW_" + suite.upper() + "_TESTS"]
+            flags = [] if suite in (None, "core", "headless", "linux") else ["-D", "NOW_TESTING", "-D", "NOW_" + suite.upper() + "_TESTS"]
             subprocess.run(["swiftc", "-frontend", "-parse", "-swift-version", "5", "-package-name", "now",
                             "-module-name", name] + flags + list(map(str, sources)), cwd=ROOT, check=True)
         print("PASS: module ownership" + (" / syntax only" if args.parse else "") + ": " + (suite or "shipping"))

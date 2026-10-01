@@ -21,6 +21,10 @@ let suite = ProcessInfo.processInfo.environment["NOW_TEST_SUITE"]
 let core = Target.target(name: "NowCore", dependencies: [
     .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux, .windows]))
 ], path: "Sources/NowCore")
+// The Linux v1 shell links libdbus for StatusNotifierItem/notifications; the
+// system library exists only in the linux suite so other runners' target sets
+// stay unchanged.
+let cdbus = Target.systemLibrary(name: "CDBus", path: "Sources/CDBus", pkgConfig: "dbus-1")
 let target: Target
 let product: Product
 if suite == "core" {
@@ -30,6 +34,10 @@ if suite == "core" {
     // The Linux shell probe: a real NowCore consumer with no macOS shell sources.
     target = .executableTarget(name: "NowHeadless", dependencies: ["NowCore"], path: "Sources/Headless")
     product = .executable(name: "now-headless", targets: ["NowHeadless"])
+} else if suite == "linux" {
+    // The Linux v1 shell: NowCore policy plus the D-Bus tray/notification layer.
+    target = .executableTarget(name: "NowLinux", dependencies: ["NowCore", "CDBus"], path: "Sources/Linux")
+    product = .executable(name: "now-linux", targets: ["NowLinux"])
 } else if let suite {
     guard let fixtures = suites[suite] else { fatalError("Unknown NOW_TEST_SUITE: \(suite)") }
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -38,14 +46,14 @@ if suite == "core" {
     } + (try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("scripts").path))
         .map { "scripts/" + $0 }.filter { !fixtures.contains($0) }
         + (suite == "selftest" ? ["Tests/Updater", "Tests/NowCoreTests"] : suite == "updater" ? ["Tests/NowTests", "Tests/NowCoreTests"] : ["Tests"])
-        + ["Sources/NowCore", "Sources/Headless"]
+        + ["Sources/NowCore", "Sources/Headless", "Sources/Linux", "Sources/CDBus"]
     target = .executableTarget(
         name: "NowHarness", dependencies: ["NowCore"], path: ".", exclude: excluded, sources: ["Sources"] + fixtures,
         swiftSettings: [.define("NOW_TESTING"), .define("NOW_" + suite.uppercased() + "_TESTS")]
     )
     product = .executable(name: "now-harness", targets: ["NowHarness"])
 } else {
-    target = .executableTarget(name: "NowApp", dependencies: ["NowCore"], path: "Sources", exclude: ["NowCore", "Headless"])
+    target = .executableTarget(name: "NowApp", dependencies: ["NowCore"], path: "Sources", exclude: ["NowCore", "Headless", "Linux", "CDBus"])
     product = .executable(name: "now", targets: ["NowApp"])
 }
 let package = Package(
@@ -53,6 +61,6 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [product],
     dependencies: [.package(url: "https://github.com/apple/swift-crypto.git", exact: "4.5.2")],
-    targets: [core, target],
+    targets: suite == "linux" ? [core, cdbus, target] : [core, target],
     swiftLanguageVersions: [.v5]
 )
