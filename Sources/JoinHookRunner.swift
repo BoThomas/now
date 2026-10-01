@@ -109,9 +109,13 @@ enum JoinHookRunner {
             if execution.stderrOverflowing { handle.readabilityHandler = nil }
         }
         process.terminationHandler = { terminated in
+            // Stop reading WITHOUT waiting for EOF: a detached grandchild
+            // (the script ran `mything &`) can inherit stderr and keep the
+            // write end open forever — a blocking read here would wedge the
+            // completion (no history entry, Run Test stuck forever).
+            // Undelivered tail bytes are dropped; the excerpt is a bounded
+            // diagnostic, not a transcript.
             stderrPipe.fileHandleForReading.readabilityHandler = nil
-            // Buffered stderr is still readable after child exit.
-            if let rest = try? stderrPipe.fileHandleForReading.readToEnd() { execution.appendStderr(rest) }
             try? stderrPipe.fileHandleForReading.close()
             guard execution.finish() else { return }
             let outcome = Self.outcome(for: terminated, execution: execution)
