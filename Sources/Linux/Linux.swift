@@ -1,4 +1,5 @@
 import Foundation
+import NowCore
 
 #if os(Linux)
 import Glibc
@@ -33,6 +34,10 @@ enum SelfTest {
         }
     }
 
+    static func instant(_ value: String) -> Date {
+        ISO8601DateFormatter().date(from: value) ?? Date()
+    }
+
     static func run() async {
         guard ProcessInfo.processInfo.environment["DBUS_SESSION_BUS_ADDRESS"] != nil else {
             print("FAIL: no session bus; run via scripts/test-linux.sh (dbus-run-session)")
@@ -45,6 +50,7 @@ enum SelfTest {
             try await watcherRestart(&check)
             try notificationCapabilities(&check)
             try menuSurface(&check)
+            agendaContent(&check)
         } catch {
             check.expect(false, "scenario failed: \(error)")
         }
@@ -52,7 +58,7 @@ enum SelfTest {
             for failure in check.failures { print("FAIL: \(failure)") }
             exit(1)
         }
-        print("LINUX SHELL OK — \(check.count) checks; bus connect, name ownership, watcher registration, property export, restart re-registration, notification capabilities, dbusmenu export/events/revisions")
+        print("LINUX SHELL OK — \(check.count) checks; bus connect, name ownership, watcher registration, property export, restart re-registration, notification capabilities, dbusmenu export/events/revisions, agenda shaping")
     }
 
     private static func poll(deadline seconds: TimeInterval = 10, _ condition: @Sendable () -> Bool) async -> Bool {
@@ -240,5 +246,60 @@ enum SelfTest {
         check.expect(second.revision == 2, "publishing a tree bumps the revision")
         check.expect(second.childLabels.count == 4, "updated menu carries the snooze row")
         check.expect(updates.actions.contains("2"), "LayoutUpdated announced the new revision")
+    }
+
+    /// Pure agenda shaping from NowCore snapshots: bar countdown focus,
+    /// NOW/NEXT/LATER sections, day headers, muted rows, join actions.
+    private static func agendaContent(_ check: inout Check) {
+        let now = SelfTest.instant("2026-10-01T09:00:00Z")
+        let running = MeetingEvent(
+            uid: "running", title: "Daily sync", start: SelfTest.instant("2026-10-01T08:55:00Z"),
+            end: SelfTest.instant("2026-10-01T09:30:00Z"), location: nil, notes: nil,
+            link: URL(string: "https://meet.example.com/daily"), calendarID: UUID(),
+            calendarName: "Work", colorIndex: 0, colorHex: "#1f6feb"
+        )
+        let next = MeetingEvent(
+            uid: "next", title: "Design review", start: SelfTest.instant("2026-10-01T10:00:00Z"),
+            end: SelfTest.instant("2026-10-01T11:00:00Z"), location: nil, notes: nil,
+            link: URL(string: "https://meet.example.com/design"), calendarID: UUID(),
+            calendarName: "Work", colorIndex: 1, colorHex: "#8250df"
+        )
+        var muted = MeetingEvent(
+            uid: "muted", title: "Focus block", start: SelfTest.instant("2026-10-01T13:00:00Z"),
+            end: SelfTest.instant("2026-10-01T14:00:00Z"), location: nil, notes: nil,
+            link: nil, calendarID: UUID(), calendarName: "Work", colorIndex: 2, colorHex: "#2da44e"
+        )
+        muted.isMuted = true
+        let tomorrow = MeetingEvent(
+            uid: "tomorrow", title: "Planning", start: SelfTest.instant("2026-10-02T09:00:00Z"),
+            end: SelfTest.instant("2026-10-02T09:30:00Z"), location: nil, notes: nil,
+            link: nil, calendarID: UUID(), calendarName: "Work", colorIndex: 3, colorHex: "#bf3989"
+        )
+        let events = [running, next, muted, tomorrow]
+
+        check.expect(AgendaMenu.barTitle(events: events, now: now) == "ends 30m", "bar title counts down a running meeting")
+        check.expect(AgendaMenu.barTitle(events: [next], now: now) == "1h", "bar title counts down to the next start")
+        check.expect(AgendaMenu.barTitle(events: [], now: now) == "now", "empty agenda bar title")
+
+        let sections = AgendaMenu.sections(events: events, now: now)
+        check.expect(sections.map(\.header) == ["NOW", "NEXT", "LATER TODAY", "TOMORROW"], "agenda sections and day headers")
+        let nowRows = sections.first?.rows ?? []
+        check.expect(nowRows.count == 1 && nowRows[0].label.contains("Daily sync"), "running meeting leads the NOW section")
+        check.expect(nowRows[0].action == "join:https://meet.example.com/daily", "running meeting carries its join action")
+        let nextRows = sections.first { $0.header == "NEXT" }?.rows ?? []
+        check.expect(nextRows.count == 1 && nextRows[0].label.contains("10:00"), "next row carries the start time")
+        let laterRows = sections.first { $0.header == "LATER TODAY" }?.rows ?? []
+        check.expect(laterRows.first?.label.contains("Focus block") == true, "muted event stays visible in later rows")
+        check.expect(laterRows.first?.isEnabled == false, "muted row is disabled")
+
+        let tree = AgendaMenu.nodes(sections: sections)
+        check.expect(tree.children.first?.isEnabled == false, "section headers are disabled rows")
+        let joinRow = tree.children.first { !$0.action.isEmpty && $0.action.hasPrefix("join:") }
+        check.expect(joinRow?.action == "join:https://meet.example.com/daily", "menu tree preserves join actions")
+        let flat = tree.children.map(\.label).joined(separator: "|")
+        check.expect(flat.contains("TOMORROW") && flat.contains("Planning"), "menu tree carries tomorrow rows")
+
+        let empty = AgendaMenu.sections(events: [], now: now)
+        check.expect(empty.first?.rows.first?.label == "No upcoming meetings", "empty agenda placeholder row")
     }
 }
