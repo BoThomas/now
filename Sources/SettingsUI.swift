@@ -1230,6 +1230,12 @@ private struct JoinHookSettings: View {
                 TextEditor(text: $command)
                     .font(.system(size: 12, design: .monospaced))
                     .scrollContentBackground(.hidden)
+                    // Inset the editor inside the drawn box so typed text sits
+                    // where the placeholder does instead of flush at the top
+                    // edge, and wrapped lines clear the bottom border. Horizontal
+                    // stays the editor's own inset, which already matches the
+                    // placeholder's leading padding.
+                    .padding(.vertical, 7)
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .controlBackgroundColor)))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.18)))
                     .frame(minHeight: 76, maxHeight: 140)
