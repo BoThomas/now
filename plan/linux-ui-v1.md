@@ -78,12 +78,18 @@ working `com.canonical.dbusmenu` agenda from a NowCore snapshot, render the icon
 panel, and survive watcher restarts. The GNOME and KDE probe rows are recorded in
 `plan/cross-platform.md` in this milestone, before any UI-framework lock.
 
-Progress — 2026-10-01, slice 1 (protocol layer) done: `Sources/Linux/DBusMenu.swift` publishes
+Progress — 2026-10-01, slices 1–3 done: (1) `Sources/Linux/DBusMenu.swift` publishes
 `com.canonical.dbusmenu` at the tray item's Menu path (GetLayout tree `ia{sv}av`, AboutToShow,
-clicked events mapped to semantic actions, revision bumps with LayoutUpdated). The selftest drives
-it from a second client like a real panel — 26 checks green in both configurations. Remaining in M2:
-agenda content from a real NowCore snapshot, a rendered-menu screenshot (nested wlroots panel or
-probe VM), and the GNOME/KDE probe rows.
+clicked events mapped to semantic actions, revision bumps with LayoutUpdated); (2)
+`Sources/Linux/AgendaMenu.swift` maps NowCore snapshots to the bar title (running "ends Xm" focus,
+next-start countdown) and NOW/NEXT/LATER/TOMORROW sections with join actions, muted rows disabled,
+the core menu limit, and an empty placeholder; (3) `Sources/Linux/LinuxStore.swift` runs the whole
+v1 loop — file/http ICS feeds through fetch → merge → commit → tick, cache restore, ledger
+reconcile, due reminders as freedesktop toasts (default-action only), live tray publication
+(NewTitle + menu revisions), pause/resume footer, and xdg-open joins in run mode. The selftest
+covers the loop end to end against fixtures on a private session bus: 44 checks in both
+configurations. Remaining in M2: a rendered-menu screenshot (nested wlroots panel or codespace
+panel), and the GNOME/KDE probe rows.
 
 Gate: D-Bus assertions plus a screenshot of the rendered menu (nested wlroots session with a
 SNI-capable panel, or the probe VM); re-registration verified by killing the watcher mid-run.
