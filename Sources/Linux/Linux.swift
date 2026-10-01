@@ -5,17 +5,72 @@ import NowCore
 import Glibc
 #endif
 
+extension Array {
+    /// Bounds-checked access for CLI parsing.
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
+
 @main enum LinuxMain {
     static func main() async {
         let arguments = Array(CommandLine.arguments.dropFirst())
         guard let mode = arguments.first else {
-            print("usage: now-linux selftest")
+            print("usage: now-linux selftest | run --root DIR [--refresh N] [--tick N] [--duration N]")
             return
         }
         switch mode {
         case "selftest": await SelfTest.run()
+        case "run": await runCLI(Array(arguments.dropFirst()))
         default: print("unknown mode: \(mode)"); exit(2)
         }
+    }
+
+    static func runCLI(_ arguments: [String]) async {
+        var root: URL?
+        var refresh: TimeInterval = 300
+        var tick: TimeInterval = 30
+        var duration: TimeInterval = 0
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--root": index += 1; root = arguments[safe: index].map { URL(fileURLWithPath: $0) }
+            case "--refresh": index += 1; refresh = TimeInterval(arguments[safe: index] ?? "") ?? refresh
+            case "--tick": index += 1; tick = TimeInterval(arguments[safe: index] ?? "") ?? tick
+            case "--duration": index += 1; duration = TimeInterval(arguments[safe: index] ?? "") ?? duration
+            default: break
+            }
+            index += 1
+        }
+        guard let root else { print("missing --root"); exit(2) }
+        guard let connection = try? DBusConnection.session() else {
+            print("no session bus; a desktop session or dbus-run-session is required")
+            exit(2)
+        }
+        connection.startPump()
+        let store = LinuxStore(
+            root: root, connection: connection,
+            logging: { print("now-linux: \($0)") },
+            openJoin: { url in openJoin(url) }
+        )
+        do {
+            try await store.startup()
+            try await store.run(refreshSeconds: refresh, tickSeconds: tick, duration: duration)
+            connection.shutdown()
+        } catch {
+            print("now-linux: \(error)")
+            connection.shutdown()
+            exit(1)
+        }
+    }
+
+    /// The real join opener: xdg-open. Only reachable in run mode; selftest
+    /// injects its own sink.
+    private static func openJoin(_ url: URL) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xdg-open")
+        process.arguments = [url.absoluteString]
+        try? process.run()
     }
 }
 
@@ -51,6 +106,7 @@ enum SelfTest {
             try notificationCapabilities(&check)
             try menuSurface(&check)
             agendaContent(&check)
+            try await storeLoop(&check)
         } catch {
             check.expect(false, "scenario failed: \(error)")
         }
@@ -215,8 +271,8 @@ enum SelfTest {
         }
         check.expect(view.revision == 1, "layout revision starts at 1")
         check.expect(view.properties["children-display"] == "submenu", "root carries children-display")
-        check.expect(view.childLabels.count == 3, "agenda menu rows exported")
-        check.expect(view.childLabels.first == "Join standup", "agenda labels carry meeting titles")
+        check.expect(view.childRows.count == 3, "agenda menu rows exported")
+        check.expect(view.childRows.first?.label == "Join standup", "agenda labels carry meeting titles")
 
         _ = try desktop.call(
             destination: app.uniqueName, path: "/MenuBar",
@@ -244,7 +300,7 @@ enum SelfTest {
             return
         }
         check.expect(second.revision == 2, "publishing a tree bumps the revision")
-        check.expect(second.childLabels.count == 4, "updated menu carries the snooze row")
+        check.expect(second.childRows.count == 4, "updated menu carries the snooze row")
         check.expect(updates.actions.contains("2"), "LayoutUpdated announced the new revision")
     }
 
@@ -301,5 +357,115 @@ enum SelfTest {
 
         let empty = AgendaMenu.sections(events: [], now: now)
         check.expect(empty.first?.rows.first?.label == "No upcoming meetings", "empty agenda placeholder row")
+    }
+
+    // MARK: Fixtures
+
+    static func calendar(_ body: String) -> String {
+        "BEGIN:VCALENDAR\nVERSION:2.0\n" + body + "\nEND:VCALENDAR\n"
+    }
+
+    static func event(_ uid: String, _ properties: String) -> String {
+        "BEGIN:VEVENT\nUID:\(uid)\n" + properties + "\nEND:VEVENT"
+    }
+
+    static func icsStamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter.string(from: date)
+    }
+
+    static func writeFeed(_ text: String, to root: URL) throws -> URL {
+        let url = root.appendingPathComponent("feed.ics")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try text.data(using: .utf8)?.write(to: url)
+        return url
+    }
+
+    /// The full v1 loop against fixtures: file feed fetch through core paths,
+    /// tray agenda publication, bar title, join click, toast delivery.
+    static func storeLoop(_ check: inout Check) async throws {
+        let app = try DBusConnection.session()
+        app.startPump()
+        defer { app.shutdown() }
+        let desktop = try DBusConnection.session()
+        desktop.startPump()
+        defer { desktop.shutdown() }
+        _ = try StatusNotifierFixtures.Watcher(connection: desktop)
+        let daemon = try StatusNotifierFixtures.Notifications(connection: desktop)
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("now-linux-selftest-store-" + UUID().uuidString)
+        let now = Date()
+        let start = now.addingTimeInterval(120)
+        let properties = "DTSTART:" + icsStamp(start)
+            + "\nDTEND:" + icsStamp(start.addingTimeInterval(1_800))
+            + "\nSUMMARY:Retro"
+            + "\nDESCRIPTION:Join at https://meet.example.com/j/retro"
+        let feed = calendar(event("store-1", properties))
+        let feedURL = try writeFeed(feed, to: root)
+        var prefs = Persisted()
+        prefs.settings.reminderLeadSeconds = [300]
+        prefs.subscriptions = [CalendarSubscription(
+            name: "Test", url: feedURL.absoluteString, colorIndex: 0, colorHex: ""
+        )]
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try JSONEncoder().encode(prefs).write(to: root.appendingPathComponent("preferences.json"))
+
+        let joins = ActionRecorder()
+        let store = LinuxStore(
+            root: root, connection: app,
+            logging: { _ in }, openJoin: { joins.record($0.absoluteString) }
+        )
+        try await store.startup()
+
+        @Sendable func currentLayout() -> DBusMenu.LayoutView? {
+            let reply = try? desktop.call(
+                destination: app.uniqueName, path: "/MenuBar",
+                interface: DBusMenu.interface, member: "GetLayout",
+                arguments: [.int32(0), .int32(-1), .stringArray([])]
+            )
+            return reply.flatMap { DBusMenu.LayoutView.parse($0) }
+        }
+
+        final class ViewBox: @unchecked Sendable {
+            var view: DBusMenu.LayoutView?
+        }
+        let box = ViewBox()
+        let appeared = await poll {
+            box.view = currentLayout()
+            return box.view?.childRows.contains { $0.label.contains("Retro") } == true
+        }
+        check.expect(appeared, "fetched agenda row appears in the tray menu")
+        check.expect(box.view?.childRows.contains { $0.label.contains("REMINDERS") } == true,
+                     "menu carries the reminders footer")
+
+        let titleReply = try desktop.call(
+            destination: await store.trayServiceName, path: "/StatusNotifierItem",
+            interface: "org.freedesktop.DBus.Properties", member: "GetAll",
+            arguments: [.string(StatusNotifier.itemInterface)]
+        )
+        let title = titleReply.readPropertyDict()?["Title"] ?? ""
+        check.expect(title == "2m" || title.contains("m"), "bar title counts down (got: \(title))")
+
+        // The event is 2 minutes out with a 300 s lead: due immediately.
+        await store.tick()
+        let toasted = await poll { daemon.notifiedSummaries.contains("Retro") }
+        check.expect(toasted, "due reminder delivered as a toast with the event title")
+
+        if let row = box.view?.childRows.first(where: { $0.label.contains("Retro") }) {
+            _ = try desktop.call(
+                destination: app.uniqueName, path: "/MenuBar",
+                interface: DBusMenu.interface, member: "Event",
+                arguments: [.int32(row.identifier), .string("clicked"), .variant(.string("")), .int64(0)]
+            )
+            let joined = await poll { joins.actions.contains("https://meet.example.com/j/retro") }
+            check.expect(joined, "tray join click opens the meeting link")
+        } else {
+            check.expect(false, "agenda row exposes a clickable id")
+        }
+        try? FileManager.default.removeItem(at: root)
     }
 }

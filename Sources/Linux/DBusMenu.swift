@@ -171,7 +171,7 @@ enum DBusMenu {
         var revision: UInt32
         var identifier: Int32
         var properties: [String: String]
-        var childLabels: [String]
+        var childRows: [(identifier: Int32, label: String)]
 
         static func parse(_ reader: DBusMessageReader) -> LayoutView? {
             guard let revision = reader.readUint32(),
@@ -179,17 +179,17 @@ enum DBusMenu {
                   let identifier = layoutStructure.readInt32(),
                   let properties = layoutStructure.readPropertyDict(),
                   let children = layoutStructure.recurseInto() else { return nil }
-            var labels: [String] = []
+            var rows: [(Int32, String)] = []
             while children.currentType == CDBusTypeVariant {
                 if let variant = children.recurseInto(),
                    let node = variant.recurseInto(),
-                   let identifier = node.readInt32(),
+                   let nodeIdentifier = node.readInt32(),
                    let nodeProperties = node.readPropertyDict() {
-                    labels.append(nodeProperties["label"] ?? "separator:\(identifier)")
+                    rows.append((nodeIdentifier, nodeProperties["label"] ?? "separator:\\(nodeIdentifier)"))
                 }
                 children.step()
             }
-            return LayoutView(revision: revision, identifier: identifier, properties: properties, childLabels: labels)
+            return LayoutView(revision: revision, identifier: identifier, properties: properties, childRows: rows)
         }
     }
 }

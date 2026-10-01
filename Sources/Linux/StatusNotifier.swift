@@ -59,21 +59,25 @@ enum StatusNotifier {
         }
 
         /// Answers the org.freedesktop.DBus.Properties surface; ItemIsMenu=true
-        /// keeps the item menu-only per the recorded probe behavior.
+        /// keeps the item menu-only per the recorded probe behavior. Title is
+        /// boxed so the bar countdown can update in place and announce
+        /// NewTitle.
         func registerObject() throws {
-            let properties: [String: DBusValue] = [
+            let properties = PropertyBox()
+            properties.set([
                 "Category": .string(configuration.category),
                 "Id": .string(configuration.identifier),
                 "Title": .string(configuration.title),
                 "IconName": .string(configuration.iconName),
                 "ItemIsMenu": .boolean(true),
                 "Menu": .string(configuration.menuPath),
-            ]
+            ])
+            self.properties = properties
             let surface = StatusNotifier.itemInterface
             connection.addObject(path: "/StatusNotifierItem") { member, interface, _, _ in
                 guard interface == "org.freedesktop.DBus.Properties" || interface == surface else { return nil }
                 if member == "GetAll" {
-                    return [.dictEntries(properties.map { ($0.key, $0.value) })]
+                    return [.dictEntries(properties.current().map { ($0.key, $0.value) })]
                 }
                 if member == "Get" { return [.variant(.string(""))] }
                 // Activate/SecondaryActivate/Scroll stay menu-only no-ops.
@@ -84,6 +88,33 @@ enum StatusNotifier {
                 throw DBusFailure("cannot own \(serviceName)")
             }
         }
+
+        /// Publishes a new bar title and announces it with NewTitle.
+        func updateTitle(_ title: String) {
+            guard let properties else { return }
+            var next = properties.current()
+            next["Title"] = .string(title)
+            properties.set(next)
+            try? connection.emitSignal(
+                path: "/StatusNotifierItem", interface: StatusNotifier.itemInterface, member: "NewTitle",
+                arguments: [.string(title)]
+            )
+        }
+
+        /// Lock-guarded property table read by the pump thread's handler.
+        private final class PropertyBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var values: [String: DBusValue] = [:]
+            func set(_ values: [String: DBusValue]) {
+                lock.lock(); self.values = values; lock.unlock()
+            }
+            func current() -> [String: DBusValue] {
+                lock.lock(); defer { lock.unlock() }
+                return values
+            }
+        }
+
+        private var properties: PropertyBox?
 
         /// Subscribes to watcher ownership changes and registers once now;
         /// re-registration is one-shot per new owner (the watcher dedupes
@@ -222,14 +253,18 @@ enum StatusNotifierFixtures {
     final class Notifications: @unchecked Sendable {
         private let lock = NSLock()
         private var capabilityQueries = 0
+        private var notified: [String] = []
 
         init(connection: DBusConnection, capabilities: [String] = ["actions", "body"]) throws {
             let daemon = self
-            connection.addObject(path: StatusNotifier.notificationsPath) { member, _, _, _ in
+            connection.addObject(path: StatusNotifier.notificationsPath) { member, _, _, arguments in
                 switch member {
                 case "GetCapabilities":
                     daemon.noteQuery()
                     return [.stringArray(capabilities)]
+                case "Notify":
+                    daemon.noteNotify(summary: daemon.summary(from: arguments))
+                    return [.uint32(1)]
                 default:
                     return []
                 }
@@ -244,9 +279,26 @@ enum StatusNotifierFixtures {
             lock.lock(); capabilityQueries += 1; lock.unlock()
         }
 
+        private func noteNotify(summary: String?) {
+            lock.lock(); capabilityQueries += 1; notified.append(summary ?? "?"); lock.unlock()
+        }
+
+        private func summary(from reader: DBusMessageReader) -> String? {
+            let arguments = reader
+            _ = arguments.readString()  // app_name
+            _ = arguments.readUint32()  // replaces_id
+            _ = arguments.readString()  // app_icon
+            return arguments.readString()  // summary
+        }
+
         func queries() -> Int {
             lock.lock(); defer { lock.unlock() }
             return capabilityQueries
+        }
+
+        var notifiedSummaries: [String] {
+            lock.lock(); defer { lock.unlock() }
+            return notified
         }
     }
 }
