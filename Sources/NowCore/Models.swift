@@ -94,6 +94,11 @@ package struct AppSettings: Codable, Equatable, Sendable {
     /// honored natively regardless of this setting; it only upgrades ordinary
     /// https join links.
     package var openJoinsInMeetingApp = true
+    /// Run a shell command when the user joins a meeting (once per
+    /// occurrence). Off by default; the command itself is stored with these
+    /// settings but never logged (it may embed tokens).
+    package var joinHookEnabled = false
+    package var joinHookCommand = ""
 
     package var catchUpDelivery: CatchUpDelivery {
         get { skipMeetingsOnCatchUp ? .skip : (notifyOnCatchUp ? .notification : .normal) }
@@ -145,6 +150,7 @@ package struct AppSettings: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case reminderDelivery, reminderScreen, notifyDuringMeetings, notifyOnCatchUp, skipMeetingsOnCatchUp, hideNotificationDetails, notifySyncErrors, notifyUpdates
         case reminderLeadSeconds, menuMeetingLimit, leadSeconds, refreshMinutes, soundEnabled, soundName, showMenuBarCountdown, launchAtLogin, elapsedStartMinutes, skipDeclined, snoozeSeconds, automaticUpdateChecks, suppressRemindersDuringMeetings, includeBrowserMeetings, openJoinsInMeetingApp, skippedUpdateVersion
+        case joinHookEnabled, joinHookCommand
     }
 
     package func encode(to encoder: Encoder) throws {
@@ -172,6 +178,8 @@ package struct AppSettings: Codable, Equatable, Sendable {
         try c.encode(suppressRemindersDuringMeetings, forKey: .suppressRemindersDuringMeetings)
         try c.encode(includeBrowserMeetings, forKey: .includeBrowserMeetings)
         try c.encode(openJoinsInMeetingApp, forKey: .openJoinsInMeetingApp)
+        try c.encode(joinHookEnabled, forKey: .joinHookEnabled)
+        try c.encode(joinHookCommand, forKey: .joinHookCommand)
         try c.encodeIfPresent(skippedUpdateVersion, forKey: .skippedUpdateVersion)
     }
 
@@ -221,6 +229,12 @@ package struct AppSettings: Codable, Equatable, Sendable {
         suppressRemindersDuringMeetings = c.recover(Bool.self, forKey: .suppressRemindersDuringMeetings, decoder: decoder) ?? false
         includeBrowserMeetings = c.recover(Bool.self, forKey: .includeBrowserMeetings, decoder: decoder) ?? false
         openJoinsInMeetingApp = c.recover(Bool.self, forKey: .openJoinsInMeetingApp, decoder: decoder) ?? true
+        joinHookEnabled = c.recover(Bool.self, forKey: .joinHookEnabled, decoder: decoder) ?? false
+        // Absent/oversized commands decode back to empty (nothing runs);
+        // stored text is trimmed so a hand-edited value stays inert.
+        joinHookCommand = JoinHook.normalizedCommand(
+            c.recover(String.self, forKey: .joinHookCommand, decoder: decoder, allowNull: true) ?? ""
+        ) ?? ""
         reminderDelivery = c.recover(ReminderDelivery.self, forKey: .reminderDelivery, decoder: decoder) ?? .fullscreen
         reminderScreen = c.recover(ReminderScreen.self, forKey: .reminderScreen, decoder: decoder) ?? .focused
         notifyDuringMeetings = c.recover(Bool.self, forKey: .notifyDuringMeetings, decoder: decoder) ?? false
@@ -290,12 +304,15 @@ package struct Persisted: Codable, Sendable {
     /// Pause survives relaunch (incl. indefinite). Reminder acknowledgements
     /// and snoozes persist separately in ReminderLedger.
     package var pausedUntil: Date?
+    /// Join-hook execution history (newest first), capped by `JoinHook.capped`.
+    package var joinHookRuns: [JoinHookRun] = []
 
-    package init(subscriptions: [CalendarSubscription] = [], settings: AppSettings = AppSettings(), nativeCalendars: [NativeCalendar] = [], pausedUntil: Date? = nil) {
+    package init(subscriptions: [CalendarSubscription] = [], settings: AppSettings = AppSettings(), nativeCalendars: [NativeCalendar] = [], pausedUntil: Date? = nil, joinHookRuns: [JoinHookRun] = []) {
         self.subscriptions = subscriptions
         self.settings = settings
         self.nativeCalendars = nativeCalendars
         self.pausedUntil = pausedUntil
+        self.joinHookRuns = joinHookRuns
     }
 
     package init(from decoder: Decoder) throws {
@@ -304,6 +321,8 @@ package struct Persisted: Codable, Sendable {
         settings = c.recover(AppSettings.self, forKey: .settings, decoder: decoder) ?? AppSettings()
         nativeCalendars = c.recover([FailableDecoded<NativeCalendar>].self, forKey: .nativeCalendars, decoder: decoder)?.compactMap(\.value) ?? []
         pausedUntil = c.recover(Date.self, forKey: .pausedUntil, decoder: decoder, allowNull: true)
+        // Per-entry failable: one damaged run must not discard the history.
+        joinHookRuns = JoinHook.capped(c.recover([FailableDecoded<JoinHookRun>].self, forKey: .joinHookRuns, decoder: decoder)?.compactMap(\.value) ?? [])
         let originalCount = subscriptions.count + nativeCalendars.count
         var ids = Set<UUID>()
         subscriptions = subscriptions.filter { ids.insert($0.id).inserted }

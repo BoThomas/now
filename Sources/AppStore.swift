@@ -123,6 +123,15 @@ final class AppStore: ObservableObject {
 
     var onAlert: (([MeetingEvent]) -> Void)?
     weak var alertController: AlertController?
+    /// Injectable seam for the join-hook process spawn (see JoinHookRunner).
+    /// Fixtures can observe the fire decision without running a shell.
+    var executeJoinHook: (String, [String: String], @escaping @MainActor @Sendable (JoinHookRun.Outcome, String?) -> Void) -> Void = JoinHookRunner.run
+    /// Join-hook execution history, newest first — shown in Settings.
+    @Published private(set) var joinHookRuns: [JoinHookRun] = [] {
+        didSet { persist() }
+    }
+    /// True while a Settings "Run Test" execution is in flight.
+    @Published private(set) var joinHookTestRunning = false
     /// Injectable clock — reminder scheduling reads time only through this, so
     /// late-delivery semantics (wake, delayed launch, delayed refresh) are
     /// testable without waiting.
@@ -193,6 +202,7 @@ final class AppStore: ObservableObject {
         settings = state.settings
         nativeCalendars = state.nativeCalendars
         pausedUntil = state.pausedUntil
+        joinHookRuns = state.joinHookRuns
         if initialState == nil {
             reminderLedger = StoredPreferences.load(ReminderLedger.self, key: ledgerKey, label: "Reminder history", maxBytes: 8_000_000) ?? ReminderLedger()
             syncNotificationTracker = StoredPreferences.load(SyncNotificationTracker.self, key: Self.syncLedgerKey, label: "Sync notification history", maxBytes: 1_000_000) ?? SyncNotificationTracker()
@@ -1323,9 +1333,53 @@ final class AppStore: ObservableObject {
 
     func joinedMeeting(_ event: MeetingEvent) {
         guard let current = events.first(where: { $0.id == event.id }), current.end > now() else { return }
-        reminderLedger.join(current)
+        let fireJoinHook = Self.shouldRunJoinHook(settings: settings, hasRun: reminderLedger.hasRunJoinHook(current))
+        reminderLedger.join(current, recordingJoinHook: fireJoinHook)
         persistReminderLedger()
         notifications?.removeMeetings(containing: [NotificationLogic.eventKey(current), NotificationLogic.key(current.id), NotificationLogic.key(current.legacyID)])
+        if fireJoinHook { runJoinHook(on: current, test: false) }
+    }
+
+    /// The join hook fires on the first join of an occurrence lifecycle: it
+    /// must be enabled with a usable command, and the occurrence must not be
+    /// run yet (rescheduling re-arms the hook; Snooze does not).
+    nonisolated static func shouldRunJoinHook(settings: AppSettings, hasRun: Bool) -> Bool {
+        JoinHook.shouldRun(enabled: settings.joinHookEnabled, command: settings.joinHookCommand, hasRun: hasRun)
+    }
+
+    /// Spawns the configured command with the meeting in its environment and
+    /// records the bounded outcome. Runs from every Join surface through
+    /// `joinedMeeting`, never from previews (they do not join).
+    private func runJoinHook(on event: MeetingEvent, test: Bool) {
+        guard let command = JoinHook.normalizedCommand(settings.joinHookCommand) else { return }
+        if test { joinHookTestRunning = true }
+        executeJoinHook(command, JoinHook.environment(for: event)) { [weak self] outcome, excerpt in
+            guard let self else { return }
+            if test { self.joinHookTestRunning = false }
+            self.recordJoinHookRun(JoinHookRun(date: self.now(), title: event.title, isTest: test,
+                                               outcome: outcome, errorExcerpt: excerpt))
+        }
+    }
+
+    /// Settings' test execution against a synthetic meeting; never touches
+    /// real events or the ledger.
+    func runJoinHookTest() {
+        guard !joinHookTestRunning else { return }
+        let start = now()
+        let sample = MeetingEvent(uid: "join-hook-test", title: "Test Meeting", start: start,
+                                  end: start.addingTimeInterval(1800), location: nil, notes: nil,
+                                  link: URL(string: "https://example.invalid/join?test=1"),
+                                  calendarID: UUID(), calendarName: "Test Calendar", colorIndex: 0,
+                                  colorHex: "#5856d6", notificationIdentity: nil)
+        runJoinHook(on: sample, test: true)
+    }
+
+    func recordJoinHookRun(_ run: JoinHookRun) {
+        joinHookRuns = JoinHook.capped([run] + joinHookRuns)
+    }
+
+    func clearJoinHookRuns() {
+        joinHookRuns = []
     }
 
     func snoozeMeeting(_ event: MeetingEvent) -> Bool {
@@ -1587,7 +1641,7 @@ final class AppStore: ObservableObject {
     }
 
     private func persist() {
-        StoredPreferences.save(Persisted(subscriptions: subscriptions, settings: settings, nativeCalendars: nativeCalendars, pausedUntil: pausedUntil),
+        StoredPreferences.save(Persisted(subscriptions: subscriptions, settings: settings, nativeCalendars: nativeCalendars, pausedUntil: pausedUntil, joinHookRuns: joinHookRuns),
                                key: Self.storageKey, label: "Calendars and settings")
     }
 

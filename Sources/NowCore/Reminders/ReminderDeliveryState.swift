@@ -56,10 +56,11 @@ extension ReminderLedger {
         entries[key] = entry
     }
 
-    package mutating func join(_ event: MeetingEvent) {
+    package mutating func join(_ event: MeetingEvent, recordingJoinHook: Bool = false) {
         let key = ReminderIdentity.eventKey(event)
         var entry = entries[key] ?? freshEntry(event)
         entry.joined = true; entry.actionToken = UUID().uuidString
+        if recordingJoinHook { entry.joinHookRan = true }
         entries[key] = entry
     }
 
@@ -99,6 +100,7 @@ extension ReminderLedger {
         if entry.snooze != nil && entry.snoozeToken == nil { entry.snoozeToken = UUID().uuidString }
         if let start = entry.start, start != event.start {
             entry.joined = false; entry.actionToken = UUID().uuidString
+            entry.joinHookRan = nil
             if let snooze = entry.snooze {
                 let shifted = snooze.addingTimeInterval(event.start.timeIntervalSince(start))
                 entry.snooze = shifted < event.end ? shifted : nil

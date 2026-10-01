@@ -1944,6 +1944,27 @@ enum SelfTest {
 
         c.expect(!AppStore.refreshIntervalChanged(from: 15, to: 15), "unrelated settings edits keep refresh cadence")
         c.expect(AppStore.refreshIntervalChanged(from: 15, to: 30), "refresh interval edit reschedules cadence")
+
+        // Join hook: off by default, round-trips with its history, and fires
+        // once per occurrence lifecycle (see the core join-hook checks).
+        var hookSettings = AppSettings()
+        hookSettings.joinHookEnabled = true
+        hookSettings.joinHookCommand = "watson start meetings \"$NOW_TITLE\""
+        let hookData = try? JSONEncoder().encode(hookSettings)
+        let hookBack = hookData.flatMap { try? JSONDecoder().decode(AppSettings.self, from: $0) }
+        c.expect(hookBack?.joinHookEnabled == true && hookBack?.joinHookCommand == "watson start meetings \"$NOW_TITLE\"",
+                 "join hook settings round trip")
+        c.expect(!AppStore.shouldRunJoinHook(settings: AppSettings(), hasRun: false), "join hook stays off by default")
+        c.expect(AppStore.shouldRunJoinHook(settings: hookSettings, hasRun: false)
+                 && !AppStore.shouldRunJoinHook(settings: hookSettings, hasRun: true),
+                 "join hook fires on the first join of an occurrence only")
+        let hookRun = JoinHookRun(date: Date(), title: "Team Sync", isTest: true, outcome: .failure(exitCode: 3), errorExcerpt: "boom")
+        let hookStateData = try? JSONEncoder().encode(Persisted(joinHookRuns: [hookRun]))
+        let hookStateBack = hookStateData.flatMap { try? AppModelCoding.decoder().decode(Persisted.self, from: $0) }
+        c.expect(hookStateBack?.joinHookRuns == [hookRun], "join hook history persists with the state")
+        let legacyHook = try? AppModelCoding.decoder().decode(Persisted.self, from: Data("{}".utf8))
+        c.expect(legacyHook?.joinHookRuns.isEmpty == true, "legacy state decodes without join hook history")
+
         c.expect(AppSettings().elapsedStartMinutes == 10, "new settings default to a 10-minute elapsed-start window")
         let missingElapsedStart = try? JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         c.expect(missingElapsedStart?.elapsedStartMinutes == 10, "settings without elapsedStartMinutes adopt the 10-minute default")

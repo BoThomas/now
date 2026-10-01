@@ -9,6 +9,7 @@ let suites: [String: [String]] = [
     "selftest": ["Tests/NowTests"],
     "notification": ["scripts/notification-smoke.swift", "scripts/notification-preview.swift",
                      "scripts/notification-lifecycle-smoke.swift", "scripts/notification-guide-smoke.swift",
+                     "scripts/join-hook-smoke.swift",
                      "scripts/preference-recovery-smoke.swift"],
     "reminder": ["scripts/reminder-state-smoke.swift"],
     "cache": ["scripts/calendar-cache-smoke.swift"],

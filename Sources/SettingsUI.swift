@@ -6,6 +6,7 @@ enum Links {
     static let repo = URL(string: "https://github.com/BoThomas/now")!
     static let releases = URL(string: "https://github.com/BoThomas/now/releases/latest")!
     static let website = URL(string: "https://thomasboch.com")!
+    static let joinHookGuide = URL(string: "https://github.com/BoThomas/now/blob/HEAD/docs/guide.md#run-a-command-when-joining")!
 }
 
 /// The settings sections, in display order — shared by the section headers and
@@ -1184,6 +1185,213 @@ private struct AdaptivePickerRow<Selection: Hashable, Options: View>: View {
     }
 }
 
+/// Revealed by the "Run a command when joining a meeting" toggle: the
+/// command editor plus its execution history. The command is the user's own
+/// text; now never logs it, only bounded outcomes.
+private struct JoinHookSettings: View {
+    @Binding var command: String
+    let runs: [JoinHookRun]
+    let testRunning: Bool
+    let onTest: () -> Void
+    let onClear: () -> Void
+
+    /// The command a run would actually execute; nil when it is blank or
+    /// oversized. Oversized is shown as an explicit error and keeps Run Test
+    /// disabled — validation must be visible, never a silent no-op.
+    private var runnableCommand: String? {
+        JoinHook.normalizedCommand(command)
+    }
+
+    private var lengthError: String? {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > JoinHook.maxCommandLength else { return nil }
+        return "Command is too long (\(trimmed.count) of \(JoinHook.maxCommandLength) characters)"
+    }
+
+    /// Click-to-insert variables, already quoted — the one shell mistake the
+    /// UI can prevent is a forgotten "$NOW_TITLE" around spaces.
+    private static let variables: [(name: String, help: String)] = [
+        ("NOW_TITLE", "Append \"$NOW_TITLE\" (meeting title)"),
+        ("NOW_CALENDAR", "Append \"$NOW_CALENDAR\" (calendar name)"),
+        ("NOW_URL", "Append \"$NOW_URL\" (join link)"),
+        ("NOW_START", "Append \"$NOW_START\" (start time, ISO 8601)"),
+        ("NOW_END", "Append \"$NOW_END\" (end time, ISO 8601)"),
+    ]
+
+    private func insertVariable(_ name: String) {
+        let quoted = "\"$\(name)\""
+        let needsSpace = !command.isEmpty && !command.hasSuffix(" ") && !command.hasSuffix("\n")
+        command += (needsSpace ? " " : "") + quoted
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $command)
+                    .font(.system(size: 12, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .controlBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.18)))
+                    .frame(minHeight: 76, maxHeight: 140)
+                    .accessibilityLabel("Join command")
+                if command.isEmpty {
+                    Text("watson start meetings \"$NOW_TITLE\"\n# or run a script: ~/bin/on-join")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 7)
+                        .padding(.leading, 5)
+                        .allowsHitTesting(false)
+                }
+            }
+            if let lengthError {
+                Text(lengthError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            HStack(spacing: 4) {
+                ForEach(Self.variables, id: \.name) { variable in
+                    Button {
+                        insertVariable(variable.name)
+                    } label: {
+                        Text(variable.name)
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
+                            .contentShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                    .cursor(.pointingHand)
+                    .help(variable.help)
+                    .accessibilityLabel(variable.help)
+                }
+            }
+            HStack {
+                Button(testRunning ? "Testing…" : "Run Test", action: onTest)
+                    .disabled(testRunning || runnableCommand == nil)
+                if !runs.isEmpty {
+                    Button("Clear History", action: onClear)
+                }
+            }
+            if !runs.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(runs) { run in
+                        JoinHookRunRow(run: run)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+            }
+        }
+        .padding(.top, 2)
+    }
+}
+
+/// One history line: outcome icon, time, meeting title, test badge, status.
+/// The eye button opens the run's output in a popover; runs without output
+/// just describe their outcome.
+private struct JoinHookRunRow: View {
+    let run: JoinHookRun
+    @State private var showingError = false
+
+    private var symbol: String {
+        switch run.outcome {
+        case .success: return "checkmark.circle.fill"
+        case .failure: return "xmark.circle.fill"
+        case .timeout: return "clock.fill"
+        case .launchFailure: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var tint: Color {
+        switch run.outcome {
+        case .success: return .green
+        case .failure: return .red
+        case .timeout: return .orange
+        case .launchFailure: return .orange
+        }
+    }
+
+    private var statusText: String {
+        switch run.outcome {
+        case .success: return "success"
+        case .failure(let exitCode): return "exit \(exitCode)"
+        case .timeout: return "timed out"
+        case .launchFailure: return "didn't start"
+        }
+    }
+
+    /// The popover text: captured output when there is any, otherwise a
+    /// plain description of the outcome.
+    private var popoverText: String {
+        if let detail = errorDetail { return detail }
+        switch run.outcome {
+        case .success: return "Success (no error output)"
+        case .failure(let exitCode): return "Exit \(exitCode) (no error output)"
+        case .timeout: return "Timed out (no error output)"
+        case .launchFailure: return "Failed to start"
+        }
+    }
+
+    /// The popover text: the stderr excerpt, or the launch failure reason.
+    private var errorDetail: String? {
+        if let excerpt = run.errorExcerpt { return excerpt }
+        if case .launchFailure(let reason) = run.outcome { return reason }
+        return nil
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 12)
+            Text(Fmt.time.string(from: run.date))
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(.secondary)
+            Text(run.title.isEmpty ? "Untitled" : run.title)
+                .font(.system(size: 10))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if run.isTest {
+                Text("Test")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.primary.opacity(0.08)))
+            }
+            Spacer(minLength: 4)
+            Text(statusText)
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(.secondary)
+            Button {
+                showingError.toggle()
+            } label: {
+                Image(systemName: showingError ? "eye.fill" : "eye")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .cursor(.pointingHand)
+            .help("Show run output")
+            .accessibilityLabel("Show run output for \(run.title.isEmpty ? "Untitled" : run.title)")
+            .popover(isPresented: $showingError, arrowEdge: .bottom) {
+                ScrollView {
+                    Text(popoverText)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+                .frame(width: 380, height: 160)
+            }
+        }
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject private var persistence = PersistenceStatus.shared
     @EnvironmentObject var store: AppStore
@@ -1195,6 +1403,7 @@ struct SettingsView: View {
     @State private var showReminderSoundInfo = false
     @State private var showStartedCountdownInfo = false
     @State private var showJoinInAppInfo = false
+    @State private var showJoinHookInfo = false
     @StateObject private var commandHints = CommandHoldTracker()
     @State private var selectedSection: SettingsSection = .calendars
     /// While a sidebar jump animates, the scroll-position tracker is paused —
@@ -1933,6 +2142,44 @@ struct SettingsView: View {
                     .padding(14)
                     .frame(width: 320, alignment: .leading)
                 }
+            }
+            HStack(spacing: 6) {
+                Toggle("Run a command when joining a meeting", isOn: $store.settings.joinHookEnabled)
+                Button {
+                    showJoinHookInfo.toggle()
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("About the join command")
+                .help("About the join command")
+                .popover(isPresented: $showJoinHookInfo, arrowEdge: .trailing) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Run a command when joining a meeting").font(.headline)
+                        Text("Runs once per meeting when you join. It runs in your login shell; meeting details arrive as environment variables, never inside the command. Commands longer than 10 seconds are stopped. The command is stored with your settings but never logged.")
+                        HStack {
+                            Spacer()
+                            BadgeLink(url: Links.joinHookGuide) {
+                                Text("Examples in the guide")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .font(.callout)
+                    .padding(14)
+                    .frame(width: 340, alignment: .leading)
+                }
+            }
+            if store.settings.joinHookEnabled {
+                JoinHookSettings(
+                    command: $store.settings.joinHookCommand,
+                    runs: store.joinHookRuns,
+                    testRunning: store.joinHookTestRunning,
+                    onTest: { store.runJoinHookTest() },
+                    onClear: { store.clearJoinHookRuns() }
+                )
+                .padding(.leading, 18)
             }
             Toggle("Show countdown in menu bar", isOn: $store.settings.showMenuBarCountdown)
             Toggle("Launch at Login", isOn: $store.settings.launchAtLogin)

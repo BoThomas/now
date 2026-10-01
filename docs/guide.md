@@ -63,6 +63,67 @@ its browser page.
 ordinary Zoom and Microsoft Teams links in the installed app. It is on by default; turn it off to
 always use the browser. Without the app installed, links open in your browser either way.
 
+### Run a command when joining
+
+**Run a command when joining a meeting** in **Settings → General** runs a shell command in the
+background when you join a meeting — for example, to start time tracking. It is off by default.
+
+The command runs once per meeting, even after Snooze or a restart; moving its scheduled start lets
+it run again. It works from every Join button, including notifications (but never from previews). It
+runs in your login shell exactly as you type it. Details about the meeting arrive as environment
+variables and are never inserted into the command itself, so meeting titles and links cannot inject
+shell syntax:
+
+| Variable       | Content                                    |
+| -------------- | ------------------------------------------ |
+| `NOW_TITLE`    | Meeting title                              |
+| `NOW_CALENDAR` | Calendar name                              |
+| `NOW_URL`      | Join link, empty when the meeting has none |
+| `NOW_START`    | Scheduled start (ISO 8601)                 |
+| `NOW_END`      | Scheduled end (ISO 8601)                   |
+
+For example, time tracking with [watson](https://github.com/TailorDev/watson):
+`watson start meetings "$NOW_TITLE"`. In Settings, click a variable to append it to the command,
+already quoted.
+
+#### Calling a script
+
+The command can span several lines; the shell runs it as a small script. For anything longer, put
+the logic in a file once and just call it:
+
+```sh
+mkdir -p ~/bin && cat > ~/bin/on-join <<'EOF'
+#!/bin/zsh
+watson start meetings "$NOW_TITLE"
+osascript -e 'display notification ("Started: " & (system attribute "NOW_TITLE"))'
+EOF
+chmod +x ~/bin/on-join
+```
+
+The whole command in Settings is then just `~/bin/on-join`. The script inherits the `NOW_*`
+environment variables like any child process.
+
+#### Long-running work
+
+Foreground commands are stopped after 10 seconds. To start something that keeps running while you
+are in the meeting, detach it and send its output somewhere else:
+
+```sh
+nohup mything >/dev/null 2>&1 &
+```
+
+now supervises only its own shell, so detached processes are not stopped.
+
+#### Aliases and functions
+
+The command runs in a non-interactive login shell. Functions defined in `~/.zprofile` or `~/.zshenv`
+are available; aliases from `~/.zshrc` are not, because that file is only read by interactive
+shells. Prefer a function or a script in `~/bin`.
+
+**Run Test** executes the command against a sample meeting; the list below shows the last runs with
+their outcome, including a short error excerpt for failed ones. Commands that take longer than 10
+seconds are stopped. now stores the command with your settings but never logs it.
+
 ## Everyday controls
 
 | To…                      | Use…                                                          |

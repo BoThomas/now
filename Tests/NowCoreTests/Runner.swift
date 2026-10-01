@@ -31,6 +31,7 @@ import NowCore
             try modelEncoding(&check)
             titleFilters(&check)
             meetingIdentity(&check)
+            joinHook(&check)
             try cachePolicy(&check)
             #if os(macOS) || os(Linux)
             try await cacheStorage(&check)
