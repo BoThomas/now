@@ -1,0 +1,15 @@
+{
+  "name": "now Linux v1",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "features": {
+    "ghcr.io/devcontainers/features/desktop-lite:1": {
+      "password": "nowdev",
+      "webPassword": "nowdev"
+    }
+  },
+  "forwardPorts": [6080],
+  "portsAttributes": {
+    "6080": { "label": "Desktop (noVNC)", "onAutoForward": "ignore" }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
+}

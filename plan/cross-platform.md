@@ -76,6 +76,10 @@ release), `./scripts/test-headless.sh` (debug and release),
      documented gap. Passing Linux proves nothing for Windows; Windows gets its own gates.
 4. Only then: shell/UI framework, packaging, and update trust per platform.
 
+The Linux v1 port is sequenced from environment setup to the first UI pass in
+[linux-ui-v1.md](linux-ui-v1.md), started 2026-10-01 on `feat/headless-linux-probe`; this file
+remains the record for probes and the product decisions the port follows.
+
 ### Constraints that carry over
 
 From `AGENTS.md`, unchanged by the groundwork merge: never compile core sources into a second
