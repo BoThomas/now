@@ -6,6 +6,7 @@ enum Links {
     static let repo = URL(string: "https://github.com/BoThomas/now")!
     static let releases = URL(string: "https://github.com/BoThomas/now/releases/latest")!
     static let website = URL(string: "https://thomasboch.com")!
+    static let joinHookGuide = URL(string: "https://github.com/BoThomas/now/blob/HEAD/docs/guide.md#run-a-command-when-joining")!
 }
 
 /// The settings sections, in display order — shared by the section headers and
@@ -1225,9 +1226,23 @@ private struct JoinHookSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField(#"watson start meetings "$NOW_TITLE""#, text: $command)
-                .font(.system(size: 12, design: .monospaced))
-                .textFieldStyle(.roundedBorder)
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $command)
+                    .font(.system(size: 12, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .controlBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.18)))
+                    .frame(minHeight: 76, maxHeight: 140)
+                    .accessibilityLabel("Join command")
+                if command.isEmpty {
+                    Text("watson start meetings \"$NOW_TITLE\"\n# or run a script: ~/bin/on-join")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 7)
+                        .padding(.leading, 5)
+                        .allowsHitTesting(false)
+                }
+            }
             if let lengthError {
                 Text(lengthError)
                     .font(.caption)
@@ -2142,6 +2157,14 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Run a command when joining a meeting").font(.headline)
                         Text("Runs once per meeting when you join. It runs in your login shell; meeting details arrive as environment variables, never inside the command. Commands longer than 10 seconds are stopped. The command is stored with your settings but never logged.")
+                        HStack {
+                            Spacer()
+                            BadgeLink(url: Links.joinHookGuide) {
+                                Text("Examples in the guide")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                     .font(.callout)
                     .padding(14)
