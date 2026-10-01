@@ -19,7 +19,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   binutils gnupg2 libc6-dev libcurl4-openssl-dev libedit2 libgcc-13-dev \
   libpython3-dev libstdc++-13-dev libxml2-dev libz3-dev pkg-config tzdata \
   unzip zip zlib1g-dev libncurses-dev \
-  dbus dbus-x11 >>"$report" 2>&1
+  dbus dbus-x11 libdbus-1-dev >>"$report" 2>&1
 
 log "install pinned Swift toolchain to /opt/swift"
 arch_flag=""
@@ -53,11 +53,13 @@ log "portable gates (debug; set NOW_SETUP_FULL=1 to also run release core)"
 cd "${CODESPACE_VSCODE_FOLDER:-$(pwd)}"
 run "core debug" ./scripts/test-core.sh
 run "headless debug" ./scripts/test-headless.sh
+run "linux debug" ./scripts/test-linux.sh
 run "module boundary parse" python3 scripts/module-boundary-smoke.py --parse
 run "compiler smoke" python3 scripts/analysis-smoke.py --compiler-only
 if [ "${NOW_SETUP_FULL:-0}" = "1" ]; then
   run "core release" env NOW_TEST_CONFIGURATION=release ./scripts/test-core.sh
   run "headless release" env NOW_TEST_CONFIGURATION=release ./scripts/test-headless.sh
+  run "linux release" env NOW_TEST_CONFIGURATION=release ./scripts/test-linux.sh
 fi
 
 printf 'post-create complete %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$report"
