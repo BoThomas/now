@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from harness import build
+from harness import build, run_smoke, unregister_bundle
 """Real process restarts with production cache, transport, AppStore and native menu.
 Only synthetic feeds, a temporary cache and a disposable preferences domain are used.
 """
@@ -8,7 +8,6 @@ import http.server
 import json
 import pathlib
 import plistlib
-import subprocess
 import tempfile
 import threading
 import uuid
@@ -53,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix="now-cache-smoke-") as folder:
         for phase in ["seed", "gui", "offline", "mixed", "recovery", "empty", "offline-empty", "seed", "edit", "seed", "corrupt", "storage"]:
             if phase == "corrupt":
                 (directory / "cache" / "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA.json").write_text("broken JSON")
-            subprocess.run([str(executable), phase, f"http://127.0.0.1:{server.server_port}", str(directory / "cache")], check=True, timeout=30)
+            run_smoke([str(executable), phase, f"http://127.0.0.1:{server.server_port}", str(directory / "cache")], 30)
             if phase == "gui":
                 saved = json.loads((directory / "cache" / "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA.json").read_text())
                 assert saved["meetings"][0]["title"] == "Quit snapshot", "normal quit did not finish the accepted write"
@@ -61,3 +60,4 @@ with tempfile.TemporaryDirectory(prefix="now-cache-smoke-") as folder:
     finally:
         server.shutdown()
         server.server_close()
+        unregister_bundle(bundle.parent)

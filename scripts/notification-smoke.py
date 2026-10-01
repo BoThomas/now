@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from harness import build
+from harness import build, run_smoke, unregister_bundle
 """Production notification routing and async transport with synthetic calendars.
 No Calendar queries or live preferences. --gui uses real Notification Center;
 --update-screens opens the manual update-window preview and --setup-screens the
@@ -46,8 +46,12 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
             if activation:
                 args.append("--activation-smoke")
             # Interactive previews run until the user quits them; only the
-            # scripted smokes get a hang guard.
-            subprocess.run(args, check=True, timeout=None if (gui or manual) else 60)
+            # scripted smokes get a hang guard (SIGTERM first so the child can
+            # unregister its menu-bar status item before dying).
+            if gui or manual:
+                subprocess.run(args, check=True)
+            else:
+                run_smoke(args, 60)
         if "--all-smokes" in sys.argv:
             run("--recovery-smoke")
             run()
@@ -70,7 +74,6 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
                 run("--recovery-smoke")
             run("--gui" if gui else None)
     finally:
-        if gui or manual or "--activation-smoke" in sys.argv or "--all-smokes" in sys.argv:
-            subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", "-u", str(contents.parent)], capture_output=True)
+        unregister_bundle(contents.parent)
         subprocess.run(["defaults", "delete", identifier], capture_output=True)
         subprocess.run(["defaults", "delete", identifier + ".legacy"], capture_output=True)

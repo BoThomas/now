@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from harness import build
+from harness import build, run_smoke, unregister_bundle
 """Exercise reminder retention and the native paused menu with synthetic data only."""
 import os
 import datetime
@@ -7,7 +7,6 @@ import http.server
 import json
 import pathlib
 import plistlib
-import subprocess
 import tempfile
 import threading
 import uuid
@@ -74,8 +73,10 @@ with tempfile.TemporaryDirectory(prefix="now-reminder-smoke-") as directory:
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        subprocess.run([str(executable), f"http://127.0.0.1:{server.server_port}"], check=True, timeout=30, env=dict(os.environ, NOW_TEST_CACHE_ROOT=str(directory / "cache")))
-        subprocess.run([str(executable), "--quit"], check=True, timeout=30, env=dict(os.environ, NOW_TEST_CACHE_ROOT=str(directory / "cache")))
+        environment = dict(os.environ, NOW_TEST_CACHE_ROOT=str(directory / "cache"))
+        run_smoke([str(executable), f"http://127.0.0.1:{server.server_port}"], 30, env=environment)
+        run_smoke([str(executable), "--quit"], 30, env=environment)
     finally:
         server.shutdown()
         server.server_close()
+        unregister_bundle(bundle.parent)

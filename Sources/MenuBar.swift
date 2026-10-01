@@ -58,6 +58,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             MainActor.assumeIsolated { self?.tickPerSecond() }
         }
         updateButton()
+        #if NOW_TESTING
+        // Smoke harnesses bypass NSApplication teardown; see SmokeExitCleanup below.
+        SmokeExitCleanup.register(statusItem)
+        #endif
     }
 
     deinit {
@@ -838,6 +842,68 @@ private struct EventDetailsPopover: View {
 }
 
 #if NOW_TESTING
+/// `atexit` requires a context-free C function pointer, so the isolated
+/// cleanup routes through this nonisolated trampoline.
+private func smokeCleanupAtExit() {
+    // Every smoke exit site runs on the main thread. A future non-main exit
+    // must leak visuals rather than touch AppKit off the main actor.
+    guard Thread.isMainThread else { return }
+    MainActor.assumeIsolated { SmokeExitCleanup.prepareExit() }
+}
+
+/// Smoke harnesses create real status items and raise the activation policy
+/// to `.regular` whenever production code opens windows, but they end via
+/// `exit(...)` or a kill signal, never through NSApplication termination.
+/// SystemUIServer and the Dock do not reliably drop visuals for a process
+/// that dies while still owning them — repeated smoke runs litter the
+/// developer's menu bar with ghost icons and their Dock with dead app tiles
+/// that vanish only when clicked. Registering every smoke item here — the
+/// single place items are created — lets one exit hook cover all suites and
+/// exit paths: remove the item, return to `.accessory`, and let the run
+/// loop run briefly so SystemUIServer and the Dock process both removals
+/// before the process dies.
+@MainActor
+private enum SmokeExitCleanup {
+    private static var items: [NSStatusItem] = []
+    private static var signalSources: [DispatchSourceSignal] = []
+    private static var exitHookInstalled = false
+    private static var prepared = false
+
+    static func register(_ item: NSStatusItem) {
+        items.append(item)
+        installExitHooks()
+    }
+
+    static func prepareExit() {
+        guard !prepared else { return }
+        prepared = true
+        for item in items { NSStatusBar.system.removeStatusItem(item) }
+        items = []
+        NSApp.setActivationPolicy(.accessory)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+    }
+
+    private static func installExitHooks() {
+        guard !exitHookInstalled else { return }
+        exitHookInstalled = true
+        atexit(smokeCleanupAtExit)
+        // Harness hang guards escalate SIGTERM -> SIGKILL; only the
+        // uncatchable SIGKILL path can still leave visuals behind.
+        for number in [SIGTERM, SIGINT] {
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            source.setEventHandler {
+                MainActor.assumeIsolated {
+                    prepareExit()
+                    exit(128 + number)
+                }
+            }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+}
+
 extension MenuBarController {
     static func smokeDetailsView(_ event: MeetingEvent, snoozeSeconds: Int) -> some View {
         EventDetailsPopover(event: event, copyText: eventDetailsText(for: event), join: {},
@@ -848,5 +914,6 @@ extension MenuBarController {
     func smokeEndTracking() { menuIsTracking = false }
     func smokeRefreshMenu(at date: Date) { refreshOpenMenu(now: date) }
     func smokeMenuTick() { tickPerSecond() }
+    func smokePrepareExit() { SmokeExitCleanup.prepareExit() }
 }
 #endif

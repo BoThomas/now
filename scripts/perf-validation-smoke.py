@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-from harness import build
+from harness import build, run_smoke, unregister_bundle
 """Measure per-second CPU hot paths with synthetic data in a disposable bundle."""
 import os
 import pathlib
 import plistlib
-import subprocess
 import tempfile
 import time
 import uuid
@@ -31,8 +30,8 @@ with tempfile.TemporaryDirectory(prefix="now-perf-smoke-") as directory:
             leftover.unlink(missing_ok=True)
 
     try:
-        subprocess.run([str(executable)], check=True, timeout=900,
-                       env=dict(os.environ, NOW_TEST_CACHE_ROOT=str(directory / "cache")))
+        run_smoke([str(executable)], 900,
+                  env=dict(os.environ, NOW_TEST_CACHE_ROOT=str(directory / "cache")))
     finally:
         sweep()
         for _ in range(10):
@@ -40,3 +39,4 @@ with tempfile.TemporaryDirectory(prefix="now-perf-smoke-") as directory:
                 break
             time.sleep(0.5)
             sweep()
+        unregister_bundle(bundle.parent)
