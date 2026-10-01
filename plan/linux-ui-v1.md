@@ -78,6 +78,13 @@ working `com.canonical.dbusmenu` agenda from a NowCore snapshot, render the icon
 panel, and survive watcher restarts. The GNOME and KDE probe rows are recorded in
 `plan/cross-platform.md` in this milestone, before any UI-framework lock.
 
+Progress — 2026-10-01, slice 1 (protocol layer) done: `Sources/Linux/DBusMenu.swift` publishes
+`com.canonical.dbusmenu` at the tray item's Menu path (GetLayout tree `ia{sv}av`, AboutToShow,
+clicked events mapped to semantic actions, revision bumps with LayoutUpdated). The selftest drives
+it from a second client like a real panel — 26 checks green in both configurations. Remaining in M2:
+agenda content from a real NowCore snapshot, a rendered-menu screenshot (nested wlroots panel or
+probe VM), and the GNOME/KDE probe rows.
+
 Gate: D-Bus assertions plus a screenshot of the rendered menu (nested wlroots session with a
 SNI-capable panel, or the probe VM); re-registration verified by killing the watcher mid-run.
 
