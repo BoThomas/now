@@ -78,12 +78,19 @@ enum StatusNotifier {
             ])
             self.properties = properties
             let surface = StatusNotifier.itemInterface
-            connection.addObject(path: "/StatusNotifierItem") { member, interface, _, _ in
+            connection.addObject(path: "/StatusNotifierItem") { member, interface, _, arguments in
                 guard interface == "org.freedesktop.DBus.Properties" || interface == surface else { return nil }
                 if member == "GetAll" {
                     return [.dictEntries(properties.current().map { ($0.key, $0.value) })]
                 }
-                if member == "Get" { return [.variant(.string(""))] }
+                if member == "Get" {
+                    let reader2 = arguments
+                    let requested = reader2.readString() ?? reader2.readString()
+                    if let requested, let value = properties.current()[requested] {
+                        return [.variant(value)]
+                    }
+                    return nil
+                }
                 // Activate/SecondaryActivate/Scroll stay menu-only no-ops.
                 return []
             }

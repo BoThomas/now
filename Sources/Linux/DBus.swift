@@ -492,6 +492,21 @@ final class DBusMessageReader {
         return strings
     }
 
+    func readInt32Array() -> [Int32]? {
+        guard !exhausted, dbus_message_iter_get_arg_type(&iterator) == CDBusTypeArray else { return nil }
+        var array = DBusMessageIter()
+        dbus_message_iter_recurse(&iterator, &array)
+        var values: [Int32] = []
+        while dbus_message_iter_get_arg_type(&array) == CDBusTypeInt32 {
+            var value: Int32 = 0
+            dbus_message_iter_get_basic(&array, &value)
+            values.append(value)
+            dbus_message_iter_next(&array)
+        }
+        advance()
+        return values
+    }
+
     /// Reads `a{sv}` into labeled scalar strings; variant values keep the
     /// subset the tray surface needs (string/bool/int).
     func readPropertyDict() -> [String: String]? {

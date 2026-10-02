@@ -42,6 +42,7 @@ enum DBusMenu {
         private var root = Node(id: 0)
         private var revision: UInt32 = 0
         private var actions: [Int32: String] = [:]
+        private var nodesByID: [Int32: Node] = [:]
         private var actionHandler: (@Sendable (String) -> Void)?
 
         init(connection: DBusConnection, path: String) {
@@ -84,6 +85,9 @@ enum DBusMenu {
         }
 
         private func reindexLocked() {
+            var flat: [Int32: Node] = [:]
+            flatten(root, into: &flat)
+            nodesByID = flat
             var index: [Int32: String] = [:]
             func walk(_ node: Node) {
                 if !node.action.isEmpty { index[node.id] = node.action }
@@ -91,6 +95,11 @@ enum DBusMenu {
             }
             walk(root)
             actions = index
+        }
+
+        private func flatten(_ node: Node, into map: inout [Int32: Node]) {
+            map[node.id] = node
+            for child in node.children { flatten(child, into: &map) }
         }
 
         private func export() {
@@ -107,8 +116,8 @@ enum DBusMenu {
                     ])]
                 case "GetLayout":
                     return publisher.layoutReply(arguments)
-                case "AboutToShow":
-                    return [.boolean(true)]
+                case "GetGroupProperties":
+                    return publisher.groupProperties(arguments)
                 case "Event":
                     publisher.handleEvent(arguments)
                     return []
@@ -132,7 +141,22 @@ enum DBusMenu {
             return [.uint32(current), .structure(layout(of: tree))]
         }
 
-        private func layout(of node: Node) -> [DBusValue] {
+        func groupProperties(_ arguments: DBusMessageReader) -> [DBusValue] {
+            let ids = arguments.readInt32Array() ?? []
+            var entries: [DBusValue] = []
+            for id in ids {
+                guard let node = node(id) else { continue }
+                entries.append(.structure([.int32(id), .dictEntries(propertyList(of: node))]))
+            }
+            return [.array(signature: "(ia{sv})", values: entries)]
+        }
+
+        private func node(_ id: Int32) -> Node? {
+            lock.lock(); defer { lock.unlock() }
+            return nodesByID[id]
+        }
+
+        func propertyList(of node: Node) -> [(String, DBusValue)] {
             var properties: [(String, DBusValue)] = []
             if node.isSeparator {
                 properties.append(("type", .string("separator")))
@@ -144,6 +168,11 @@ enum DBusMenu {
             if !node.children.isEmpty {
                 properties.append(("children-display", .string("submenu")))
             }
+            return properties
+        }
+
+        private func layout(of node: Node) -> [DBusValue] {
+            let properties = propertyList(of: node)
             let children = node.children.map { DBusValue.variant(.structure(layout(of: $0))) }
             return [
                 .int32(node.id),
