@@ -107,6 +107,7 @@ enum DBusMenu {
             connection.addObject(path: path) { member, interface, _, arguments in
                 guard interface == DBusMenu.interface ||
                     (interface == "org.freedesktop.DBus.Properties" && member == "GetAll") else { return nil }
+                let groupPropertiesAnswer = publisher.groupProperties(arguments)
                 switch member {
                 case "GetAll":
                     return [.dictEntries([
@@ -117,7 +118,9 @@ enum DBusMenu {
                 case "GetLayout":
                     return publisher.layoutReply(arguments)
                 case "GetGroupProperties":
-                    return publisher.groupProperties(arguments)
+                    return groupPropertiesAnswer
+                case "AboutToShow":
+                    return [.boolean(true)]
                 case "Event":
                     publisher.handleEvent(arguments)
                     return []
