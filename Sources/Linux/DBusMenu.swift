@@ -115,7 +115,7 @@ enum DBusMenu {
                 default:
                     // GetGroupProperties/GetProperty/EventGroup stay minimal:
                     // empty answers a menu host can live with.
-                    return [.array(signature: "a(ia{sv})", values: [])]
+                    return [.array(signature: "(ia{sv})", values: [])]
                 }
             }
         }
