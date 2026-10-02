@@ -68,7 +68,6 @@ enum StatusNotifier {
                 "Category": .string(configuration.category),
                 "Id": .string(configuration.identifier),
                 "Title": .string(configuration.title),
-                "IconName": .string(configuration.iconName),
                 "IconPixmap": .array(signature: "(iiay)", values: [{ () -> DBusValue in
                     let (width, height, bytes) = LinuxIcon.pixmap(size: 24)
                     return .structure([.int32(Int32(width)), .int32(Int32(height)), .byteArray(bytes)])
@@ -98,6 +97,9 @@ enum StatusNotifier {
             guard outcome == .primaryOwner || outcome == .alreadyOwner else {
                 throw DBusFailure("cannot own \(serviceName)")
             }
+            try? connection.emitSignal(
+                path: "/StatusNotifierItem", interface: StatusNotifier.itemInterface, member: "NewIcon", arguments: []
+            )
         }
 
         /// Publishes a new bar title and announces it with NewTitle.

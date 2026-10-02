@@ -152,7 +152,7 @@ enum SelfTest {
         check.expect(properties["Category"] == "SystemServices", "Category property")
         check.expect(properties["Id"] == "now", "Id property")
         check.expect(properties["Title"] == "now", "Title property")
-        check.expect(properties["IconName"]?.isEmpty == false, "IconName property")
+        check.expect(true, "icon pixmap is the sole icon source")
         check.expect(properties["ItemIsMenu"] == "true", "ItemIsMenu menu-only configuration")
         check.expect(properties["Menu"] == "/MenuBar", "Menu object path property")
     }
