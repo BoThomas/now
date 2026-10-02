@@ -19,8 +19,10 @@ enum StatusNotifier {
         var identifier = "now"
         var title = "now"
         var category = "SystemServices"
-        var iconName = "appointment-soon-symbolic"
+        var iconName = "now"
         var menuPath = "/MenuBar"
+        /// Directory holding <iconName>.png for name-based hosts.
+        var iconThemePath = ""
     }
 
     /// Owns the item bus name and keeps registration current. All D-Bus work
@@ -68,6 +70,8 @@ enum StatusNotifier {
                 "Category": .string(configuration.category),
                 "Id": .string(configuration.identifier),
                 "Title": .string(configuration.title),
+                "IconName": .string(configuration.iconName),
+                "IconThemePath": .string(configuration.iconThemePath),
                 "IconPixmap": .array(signature: "(iiay)", values: [{ () -> DBusValue in
                     let (width, height, bytes) = LinuxIcon.pixmap(size: 24)
                     return .structure([.int32(Int32(width)), .int32(Int32(height)), .byteArray(bytes)])

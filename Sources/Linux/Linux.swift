@@ -154,6 +154,10 @@ enum SelfTest {
         check.expect(properties["Title"] == "now", "Title property")
         check.expect(true, "icon pixmap is the sole icon source")
         check.expect(properties["ItemIsMenu"] == "true", "ItemIsMenu menu-only configuration")
+        check.expect(properties["IconName"] == "now", "file-based icon name advertised (got: \(properties["IconName"] ?? "nil"), theme \(properties["IconThemePath"] ?? "nil"))")
+        let png = LinuxIcon.pngData(size: LinuxIcon.iconSize)
+        check.expect(Array(png.prefix(8)) == [137, 80, 78, 71, 13, 10, 26, 10], "icon PNG signature")
+        check.expect(png.count > 100 && png.count < 4_096, "icon PNG size sane")
         check.expect(properties["Menu"] == "/MenuBar", "Menu object path property")
     }
 

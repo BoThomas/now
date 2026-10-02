@@ -57,7 +57,9 @@ actor LinuxStore {
         self.openJoin = openJoin
         self.cache = CalendarEventCache(directory: root.appendingPathComponent("cache"))
         self.connection = connection
-        self.registrar = StatusNotifier.Registrar(connection: connection, logging: logging)
+        var trayConfiguration = StatusNotifier.ItemConfiguration()
+        trayConfiguration.iconThemePath = root.appendingPathComponent("icons").path
+        self.registrar = StatusNotifier.Registrar(connection: connection, configuration: trayConfiguration, logging: logging)
         self.menu = DBusMenu.Publisher(connection: connection, path: StatusNotifier.ItemConfiguration().menuPath)
         self.autostartDirectory = autostartDirectory
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/autostart")
@@ -96,6 +98,9 @@ actor LinuxStore {
 
     func startup() async throws {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let icons = root.appendingPathComponent("icons")
+        try FileManager.default.createDirectory(at: icons, withIntermediateDirectories: true)
+        LinuxFile.write(LinuxIcon.pngData(size: LinuxIcon.iconSize), to: icons.appendingPathComponent("now.png"))
         try registrar.registerObject()
         await loadState()
         syncAutostart()
