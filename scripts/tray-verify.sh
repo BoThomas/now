@@ -61,7 +61,7 @@ mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
 eval "$(dbus-launch --sh-syntax)"
 pkill -f xfce4-panel 2>/dev/null || true
 xfce4-panel &
-sleep 3
+sleep 6
 
 .build/tests/linux/debug/now-linux run --root "$root" --duration 25 --tick 5 &
 sleep 8

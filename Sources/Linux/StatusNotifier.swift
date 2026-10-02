@@ -136,7 +136,18 @@ enum StatusNotifier {
                     }
                 }
             }
-            try await registerOnce(timeoutMs: Int32(seconds * 1_000))
+            // The panel may start after the app (autostart order); retry
+            // instead of dying, and let NameOwnerChanged finish the job if
+            // the watcher appears even later.
+            for attempt in 1...15 {
+                do {
+                    try await registerOnce(timeoutMs: 1_000)
+                    return
+                } catch {
+                    if attempt == 15 { logging("watcher not available yet; waiting for it to appear") }
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
         }
 
         func registerOnce(timeoutMs: Int32) async throws {
