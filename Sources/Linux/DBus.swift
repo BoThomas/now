@@ -14,6 +14,7 @@ indirect enum DBusValue: Sendable {
     case uint32(UInt32)
     case int64(Int64)
     case stringArray([String])
+    case byteArray([UInt8])
     case variant(DBusValue)
     case dictEntries([(String, DBusValue)])
     case structure([DBusValue])
@@ -322,6 +323,14 @@ enum DBusMessageWriter {
             dbus_message_iter_open_container(iterator, CDBusTypeArray, "s", &array)
             for string in strings { appendString(string, into: &array) }
             dbus_message_iter_close_container(iterator, &array)
+        case .byteArray(let bytes):
+            var array = DBusMessageIter()
+            dbus_message_iter_open_container(iterator, CDBusTypeArray, "y", &array)
+            for byte in bytes {
+                var value = byte
+                dbus_message_iter_append_basic(&array, CDBusTypeByte, &value)
+            }
+            dbus_message_iter_close_container(iterator, &array)
         case .array(let signature, let values):
             var array = DBusMessageIter()
             var signatureBuffer = Array(signature.utf8CString)
@@ -365,6 +374,7 @@ enum DBusMessageWriter {
         case .uint32: return "u"
         case .int64: return "x"
         case .stringArray: return "as"
+        case .byteArray: return "ay"
         case .variant(let inner): return signature(of: inner)
         case .dictEntries: return "a{sv}"
         case .structure(let values):

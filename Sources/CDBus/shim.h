@@ -23,3 +23,4 @@ static const int32_t CDBusMessageTypeSignal = DBUS_MESSAGE_TYPE_SIGNAL;
 static const int32_t CDBusMessageTypeMethodCall = DBUS_MESSAGE_TYPE_METHOD_CALL;
 
 static const char *const CDBusErrorFailed = DBUS_ERROR_FAILED;
+static const int32_t CDBusTypeByte = DBUS_TYPE_BYTE;

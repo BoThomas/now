@@ -69,6 +69,10 @@ enum StatusNotifier {
                 "Id": .string(configuration.identifier),
                 "Title": .string(configuration.title),
                 "IconName": .string(configuration.iconName),
+                "IconPixmap": .structure({ () -> [DBusValue] in
+                    let (width, height, bytes) = LinuxIcon.pixmap(size: 24)
+                    return [.int32(Int32(width)), .int32(Int32(height)), .byteArray(bytes)]
+                }()),
                 "ItemIsMenu": .boolean(true),
                 "Menu": .string(configuration.menuPath),
             ])

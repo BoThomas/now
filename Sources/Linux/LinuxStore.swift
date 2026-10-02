@@ -47,7 +47,7 @@ actor LinuxStore {
     /// XDG autostart directory; injected so tests never touch a real home.
     private let autostartDirectory: URL
 
-    init(root: URL, connection: DBusConnection, clock: @escaping @Sendable () -> Date = Date.init,
+    init(root: URL, connection: DBusConnection, clock: @escaping @Sendable () -> Date = { Date() },
          logging: @escaping @Sendable (String) -> Void = { _ in },
          openJoin: @escaping @Sendable (URL) -> Void = { _ in },
          autostartDirectory: URL? = nil) {
