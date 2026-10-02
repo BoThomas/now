@@ -73,11 +73,11 @@ gdbus call --session -d org.kde.StatusNotifierWatcher -o /StatusNotifierWatcher 
   || echo "watcher not on this bus"
 for item in $(gdbus call --session -d org.kde.StatusNotifierWatcher -o /StatusNotifierWatcher \
   -m org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems 2>/dev/null \
-  | tr -d '()<>[],"' | tr ' ' '\n' | grep StatusNotifierItem | sed 's|/StatusNotifierItem||' || true); do
+  | tr -d "()<>[],'\"" | tr ' ' '\n' | grep StatusNotifierItem | sed 's|/StatusNotifierItem||' || true); do
   echo "item: $item"
-  gdbus call --session -d "$item" -o /StatusNotifierItem \
-    -m org.freedesktop.DBus.Properties.GetAll org.kde.StatusNotifierItem 2>/dev/null | head -c 400
-  echo
+  props=$(gdbus call --session -d "$item" -o /StatusNotifierItem \
+    -m org.freedesktop.DBus.Properties.GetAll org.kde.StatusNotifierItem 2>/dev/null || true)
+  echo "${props:0:500}"
 done
 
 import -window root "$report" 2>/dev/null || import -window root "png:$report"
