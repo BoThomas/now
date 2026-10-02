@@ -89,9 +89,9 @@ command -v xdotool >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-ge
 # show the now agenda menu (NOW/NEXT rows, join/pause footer).
 width=$(xdotool getdisplaygeometry | cut -d" " -f1)
 height=$(xdotool getdisplaygeometry | cut -d" " -f2)
-x=$((width / 2 - 150))
-while [ $x -le $((width / 2 + 150)) ]; do
-  xdotool mousemove "$x" $((height - 15)) click 1
+x=$((width - 320))
+while [ $x -le $((width - 40)) ]; do
+  xdotool mousemove "$x" 12 click 1
   sleep 1
   import -window root "png:/tmp/now-tray-menu-$x.png" 2>/dev/null || true
   xdotool key Escape || true
