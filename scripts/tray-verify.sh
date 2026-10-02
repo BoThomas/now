@@ -13,7 +13,7 @@ trap 'rm -rf "$root"; pkill -f "now-linux run" 2>/dev/null || true' EXIT
 
 if ! command -v xfce4-panel >/dev/null 2>&1 || ! command -v import >/dev/null 2>&1; then
   sudo apt-get update -qq
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xfce4-panel imagemagick >/dev/null
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xfce4-panel imagemagick xdotool >/dev/null
 fi
 
 export NOW_TEST_SUITE=linux
@@ -68,4 +68,18 @@ sleep 8
 
 import -window root "$report" 2>/dev/null || import -window root "png:$report"
 echo "tray verification screenshot: $report"
+
+# Sweep-click the tray icon group and capture each result; one frame will
+# show the now agenda menu (NOW/NEXT rows, join/pause footer).
+width=$(xdotool getdisplaygeometry | cut -d" " -f1)
+height=$(xdotool getdisplaygeometry | cut -d" " -f2)
+x=$((width / 2 - 150))
+while [ $x -le $((width / 2 + 150)) ]; do
+  xdotool mousemove "$x" $((height - 15)) click 1
+  sleep 1
+  import -window root "png:/tmp/now-tray-menu-$x.png" 2>/dev/null || true
+  xdotool key Escape || true
+  x=$((x + 34))
+done
+echo "menu sweep screenshots: /tmp/now-tray-menu-*.png"
 wait

@@ -125,6 +125,13 @@ the tray menu, alert, agenda, and settings against macOS now, and iterates with 
 
 ## Validation record
 
+- 2026-10-02 — M0 closed: post-create gates green inside the Codespace after the `sshd` feature was
+  added and registration code pulled; the rendered-tray loop on the codespace panel closed M2's
+  render evidence: the item registers after the panel starts (15 s retry + NameOwnerChanged
+  fallback), exports `IconPixmap` as the sole icon source (a(iiay), announced with NewIcon), and the
+  drawn blue clock renders on a real panel. Protocol fixes found by the loop: Get answers real
+  values, GetGroupProperties returns live rows (a(ia{sv})), properties on the menu object. A
+  glm-5.3-flash vision subagent reads the screenshots (this model cannot ingest images).
 - 2026-10-01 — devcontainer committed on `feat/headless-linux-probe` (commit `dcc3706`, then the
   Swift pin fix). Verified from the Linux devbox: script syntax, devcontainer JSON, Swift tarball
   URL resolution for both x86_64 and aarch64 (`ubuntu2404[-aarch64]` path, Swift 6.4.0 first
