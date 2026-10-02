@@ -460,6 +460,23 @@ enum SelfTest {
         let toasted = await poll { daemon.notifiedSummaries.contains("Retro") }
         check.expect(toasted, "due reminder delivered as a toast with the event title")
 
+        // Snooze the delivered reminder, then verify a further tick stays quiet.
+        let snoozeRow = currentLayout()?.childRows.first { $0.label.hasPrefix("Snooze 10 min") }
+        check.expect(snoozeRow != nil, "delivered reminder exposes snooze rows")
+        if let snoozeRow {
+            _ = try desktop.call(
+                destination: app.uniqueName, path: "/MenuBar",
+                interface: DBusMenu.interface, member: "Event",
+                arguments: [.int32(snoozeRow.identifier), .string("clicked"), .variant(.string("")), .int64(0)]
+            )
+            let snoozed = await poll { !currentLayout()!.childRows.contains { $0.label.hasPrefix("Snooze 10 min") } }
+            check.expect(snoozed, "snooze click clears the snooze rows")
+            await store.tick()
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            check.expect(daemon.notifiedSummaries.filter { $0 == "Retro" }.count == 1,
+                         "snoozed reminder does not re-deliver on the next tick")
+        }
+
         if let row = box.view?.childRows.first(where: { $0.label.contains("Retro") }) {
             _ = try desktop.call(
                 destination: app.uniqueName, path: "/MenuBar",

@@ -117,8 +117,9 @@ enum AgendaMenu {
 
     private static func dayHeader(for date: Date, now: Date) -> String {
         let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return "LATER TODAY" }
-        if calendar.isDateInTomorrow(date) { return "TOMORROW" }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
+        if days <= 0 { return "LATER TODAY" }
+        if days == 1 { return "TOMORROW" }
         let formatter = DateFormatter()
         formatter.dateFormat = "EEEE"
         return formatter.string(from: date).uppercased()

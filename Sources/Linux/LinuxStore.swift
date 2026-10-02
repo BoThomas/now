@@ -34,6 +34,10 @@ actor LinuxStore {
     private(set) var events: [MeetingEvent] = []
     private(set) var errors: [UUID: String] = [:]
     private(set) var warnings: [UUID: String] = [:]
+    private var lastDue: [MeetingEvent] = []
+    /// True while a delivered reminder is already snoozed; cleared when new
+    /// reminders arrive so the snooze offer reappears.
+    private var snoozePending = false
 
     // Tray surfaces (nonisolated D-Bus objects; calls hop out of the actor).
     private let connection: DBusConnection
@@ -247,10 +251,31 @@ actor LinuxStore {
         if let until = prefs.pausedUntil, now >= until { prefs.pausedUntil = nil }
         if prefs.pausedUntil != nil { return }
         let due = events.filter { !ledger.due($0, leads: prefs.settings.reminderLeadSeconds, now: now).isEmpty }
+        lastDue = due
+        if !due.isEmpty { snoozePending = false }
         for event in due {
             deliver(event, now: now)
             acknowledge(event, now: now)
         }
+        publishAgenda()
+    }
+
+    /// Snoozes the delivered reminders; mirrors HeadlessStore.snoozeDelivered
+    /// through SnoozePolicy and the ledger schedule.
+    func snooze(seconds: Int) {
+        let now = clock()
+        let targets = lastDue.filter { !$0.isMuted && $0.end > now }
+        guard !targets.isEmpty else { return }
+        let options = SnoozePolicy.options(events: targets, now: now, customSeconds: seconds)
+        guard let plan = SnoozePolicy.selection(current: nil, options: options, defaultSeconds: seconds),
+              let schedule = SnoozePolicy.schedule(plan: plan, events: targets, now: now) else { return }
+        for (id, fireAt) in schedule {
+            guard let event = events.first(where: { $0.id == id }), !event.isMuted, fireAt < event.end else { continue }
+            ledger.schedule(event, until: fireAt, leads: prefs.settings.reminderLeadSeconds)
+        }
+        persistLedger()
+        snoozePending = true
+        publishAgenda()
     }
 
     private func deliver(_ event: MeetingEvent, now: Date) {
@@ -296,6 +321,10 @@ actor LinuxStore {
             publishAgenda()
             return
         }
+        if action.hasPrefix("snooze:"), let seconds = Int(action.dropFirst("snooze:".count)) {
+            snooze(seconds: seconds)
+            return
+        }
         if action.hasPrefix("join:"), let url = URL(string: String(action.dropFirst("join:".count))) {
             openJoin(url)
         }
@@ -319,7 +348,13 @@ actor LinuxStore {
             let row = AgendaMenu.Row(label: "Resume reminders", action: "resume")
             return AgendaMenu.Section(header: "PAUSED · \(AgendaMenu.countdown(to: until, now: now))", rows: [row])
         }
-        return AgendaMenu.Section(header: "REMINDERS", rows: [AgendaMenu.Row(label: "Pause for 1 hour", action: "pause:3600")])
+        var rows: [AgendaMenu.Row] = []
+        if !snoozePending, lastDue.contains(where: { !$0.isMuted && $0.end > now }) {
+            rows.append(AgendaMenu.Row(label: "Snooze 10 min", action: "snooze:600"))
+            rows.append(AgendaMenu.Row(label: "Snooze 1 hour", action: "snooze:3600"))
+        }
+        rows.append(AgendaMenu.Row(label: "Pause for 1 hour", action: "pause:3600"))
+        return AgendaMenu.Section(header: "REMINDERS", rows: rows)
     }
 }
 
