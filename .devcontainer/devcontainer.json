@@ -2,6 +2,7 @@
   "name": "now Linux v1",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
   "features": {
+    "ghcr.io/devcontainers/features/sshd:1": {},
     "ghcr.io/devcontainers/features/desktop-lite:1": {
       "password": "nowdev",
       "webPassword": "nowdev"
