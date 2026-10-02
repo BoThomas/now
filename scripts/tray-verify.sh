@@ -66,6 +66,20 @@ sleep 6
 .build/tests/linux/debug/now-linux run --root "$root" --duration 25 --tick 5 &
 sleep 8
 
+# In-session diagnostics: what did the panel's watcher register, and which
+# icon properties does our item expose as the host sees them?
+gdbus call --session -d org.kde.StatusNotifierWatcher -o /StatusNotifierWatcher \
+  -m org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems 2>/dev/null \
+  || echo "watcher not on this bus"
+for item in $(gdbus call --session -d org.kde.StatusNotifierWatcher -o /StatusNotifierWatcher \
+  -m org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierWatcher RegisteredStatusNotifierItems 2>/dev/null \
+  | tr -d '\",[]' | tr ' ' '\n' | grep StatusNotifierItem || true); do
+  echo "item: $item"
+  gdbus call --session -d "$item" -o /StatusNotifierItem \
+    -m org.freedesktop.DBus.Properties.GetAll org.kde.StatusNotifierItem 2>/dev/null | head -c 400
+  echo
+done
+
 import -window root "$report" 2>/dev/null || import -window root "png:$report"
 echo "tray verification screenshot: $report"
 
