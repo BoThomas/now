@@ -69,6 +69,8 @@ sleep 8
 import -window root "$report" 2>/dev/null || import -window root "png:$report"
 echo "tray verification screenshot: $report"
 
+command -v xdotool >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xdotool >/dev/null
+
 # Sweep-click the tray icon group and capture each result; one frame will
 # show the now agenda menu (NOW/NEXT rows, join/pause footer).
 width=$(xdotool getdisplaygeometry | cut -d" " -f1)
