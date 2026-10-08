@@ -14,3 +14,8 @@ docs/local/
 !.env.example
 
 .tools/
+
+# Support diagnostics collected by scripts/collect-support-diagnostics.sh
+# (may contain meeting titles — never commit)
+/now-debug/
+/now-debug.zip
