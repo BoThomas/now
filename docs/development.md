@@ -38,7 +38,13 @@ These checks are headless and never launch now:
 python3 scripts/build-tooling-smoke.py
 python3 scripts/build_metadata.py outputs/now.app/Contents/MacOS/now
 python3 scripts/artifact-smoke.py --static-only outputs/now.app
+python3 scripts/notification-smoke.py --publication-smoke
 ```
+
+The publication smoke exercises production meeting callbacks with disposable preferences/cache and
+fake audio/login adapters. Repeated equal activity/error values must not publish; real transitions,
+unknown-state error retention and recovery must still publish. It does not start AppDelegate or any
+windows. Full notification/activation/updater GUI checks remain separate and require desktop access.
 
 ## Development tools
 

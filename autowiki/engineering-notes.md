@@ -99,6 +99,13 @@ only when one flipped (interval-based, so a late post-sleep tick catches up in o
 render-time inputs derived from the clock must join that predicate or arrive as real events — never
 as a periodic whole-store publish.
 
+Meeting probe callbacks likewise publish only actual activity/error changes. A known observation
+still clears an existing error even if activity is unchanged; `.unknown` retains that error.
+Provider changes remain observable. Do not use repeated equal `@Published` assignments as a probe
+heartbeat: retained Settings/control graphs pay for those invalidations too. The headless
+`python3 scripts/notification-smoke.py --publication-smoke` checks the real callbacks with repeated
+observations, failures and recovery without starting any windows.
+
 ### Reminder timing
 
 Multiple reminders use per-lead handled membership inside each occurrence's ledger entry. Snooze and

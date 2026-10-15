@@ -52,7 +52,10 @@ with tempfile.TemporaryDirectory(prefix="now-notification-smoke-") as name:
                 subprocess.run(args, check=True)
             else:
                 run_smoke(args, 60)
-        if "--all-smokes" in sys.argv:
+        if "--publication-smoke" in sys.argv:
+            run("--publication-smoke")
+        elif "--all-smokes" in sys.argv:
+            run("--publication-smoke")
             run("--recovery-smoke")
             run()
             for mode in ["--startup-new", "--startup-existing", "--startup-legacy"]:
