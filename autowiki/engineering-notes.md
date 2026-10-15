@@ -470,6 +470,14 @@ titles are cut via `Fmt.ellipsized` (48 chars); hover shows a rich multi-line to
 join-link row, and location/notes lines that are nothing but the join link are suppressed —
 `isJustJoinLink`). Refresh has ⌘R (`keyEquivalent: "r"` — works while the menu is open).
 
+SDK 27 changes AppKit's default: even non-symbol `NSMenuItem.image` values are hidden on macOS 27.
+Agenda calendar dots carry source identity, so their items explicitly request visible images when
+created. The public `preferredImageVisibility` property is accessed through KVC, guarded by macOS 27
+availability, so building with older supported SDKs still works (`.visible` has raw value 1). Do not
+replace this with a global menu preference or template-image trick. The reminder-state smoke checks
+visibility, color and muted opacity on initial rows, tracking ticks and rebuilds; an assigned image
+alone is not evidence that AppKit will display it.
+
 ### Reminder location row
 
 shows a meaningful `LOCATION`, but treats a location consisting only of the join URL as redundant

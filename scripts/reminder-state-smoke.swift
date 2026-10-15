@@ -60,6 +60,41 @@ struct ReminderStateSmoke {
         try require(condition(), label)
     }
 
+    @MainActor static func calendarDotTests(store: AppStore, controller: MenuBarController, events: [MeetingEvent], at date: Date) throws {
+        var mixed = events
+        mixed[1].isMuted = true
+        store.smokeCommitEvents(mixed)
+        defer { store.smokeCommitEvents(events) }
+        let menu = controller.smokeMenu
+        controller.menuNeedsUpdate(menu)
+        let rows = menu.items.filter { $0.representedObject is MeetingEvent }
+        try require(rows.count >= 2 && (rows[1].representedObject as? MeetingEvent)?.isMuted == true,
+                    "calendar-dot fixture includes ordinary and muted agenda rows")
+
+        func requireDots(_ items: [NSMenuItem], _ phase: String) throws {
+            for item in items {
+                guard let event = item.representedObject as? MeetingEvent else { throw Failure(message: "Missing calendar-dot event") }
+                let color = event.isMuted ? event.nsColor.withAlphaComponent(0.35) : event.nsColor
+                try require(item.image === Palette.dotImage(color: color) && item.image?.isTemplate == false,
+                            "\(phase): calendar dot preserves color and muted opacity")
+                if #available(macOS 27, *) {
+                    // Public Objective-C property, also testable when building with a pre-27 SDK.
+                    try require((item.value(forKey: "preferredImageVisibility") as? NSNumber)?.intValue == 1,
+                                "\(phase): calendar dot explicitly opts into visible menu images on macOS 27")
+                }
+            }
+        }
+        try requireDots(Array(rows.prefix(2)), "new rows")
+        controller.smokeBeginTracking()
+        controller.smokeRefreshMenu(at: date.addingTimeInterval(1))
+        controller.smokeEndTracking()
+        let updatedRows = menu.items.filter { $0.representedObject is MeetingEvent }
+        try require(zip(rows, updatedRows).allSatisfy { $0 === $1 }, "calendar-dot tracking tick keeps existing rows")
+        try requireDots(Array(updatedRows.prefix(2)), "tracking tick")
+        controller.menuNeedsUpdate(menu)
+        try requireDots(Array(menu.items.filter { $0.representedObject is MeetingEvent }.prefix(2)), "rebuilt rows")
+    }
+
     @MainActor static func run(base: String) async throws {
         guard let domain = Bundle.main.bundleIdentifier, domain.hasPrefix("com.thomasboch.now.review-smoke.") else {
             throw Failure(message: "This test must run in its disposable test bundle")
@@ -254,6 +289,7 @@ struct ReminderStateSmoke {
             try require(shown.map(\.id) == Array(many.prefix(limit)).map(\.id), "native menu shows exactly \(limit) ordered meetings")
             try require(store.upcoming.count == 20, "menu limit leaves the full Settings agenda available")
         }
+        try calendarDotTests(store: store, controller: controller, events: many, at: clock)
         controller.menuNeedsUpdate(trackedMenu)
         controller.smokeBeginTracking()
         store.settings.menuMeetingLimit = 3
