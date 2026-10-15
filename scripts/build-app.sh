@@ -1,14 +1,12 @@
 #!/bin/zsh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/macos-toolchain.sh
 
 APP_NAME="now"
 EXECUTABLE="now"
 APP="outputs/${APP_NAME}.app"
 ICONSET=".build/AppIcon.iconset"
-# Resolve the SDK dynamically (CommandLineTools or full Xcode) instead of
-# pinning one version; override with SDK_PATH=… if ever needed.
-SDK_PATH="${SDK_PATH:-$(xcrun --show-sdk-path)}"
 MODULE_CACHE="$(pwd)/.build/ModuleCache"
 REQUIRE_IDENTITY=false
 CONFIGURATION=release
@@ -34,7 +32,7 @@ for arg in "$@"; do
 done
 
 if [[ "$CLEAN" == true ]]; then
-  swift package clean
+  "$NOW_SWIFT" package clean
 fi
 if [[ "$CONFIGURATION" == debug ]]; then
   APP="outputs/debug/${APP_NAME}.app"
@@ -62,7 +60,7 @@ if [[ "$CONFIGURATION" == release ]]; then
   strip -x "$APP/Contents/MacOS/$EXECUTABLE"
 fi
 
-swiftc -sdk "$SDK_PATH" -target arm64-apple-macos13.0 scripts/make-icon.swift -o .build/make-icon
+"$NOW_SWIFTC" -sdk "$SDK_PATH" -target arm64-apple-macos13.0 scripts/make-icon.swift -o .build/make-icon
 .build/make-icon "$ICONSET"
 cp "$ICONSET/icon_512x512@2x.png" "$APP/Contents/Resources/AppIcon.png"
 
@@ -116,6 +114,8 @@ if [[ "$STABLE_SIGNATURE" == true ]]; then
     exit 1
   }
 fi
+python3 scripts/build_metadata.py "$APP/Contents/MacOS/$EXECUTABLE" --sdk "$NOW_SDK_VERSION" \
+  --record "${APP%.app}.build-info.json"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "${APP%.app}.zip"
 
 echo "Built $APP"

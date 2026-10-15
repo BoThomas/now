@@ -2,6 +2,7 @@
 # Read-only source checks. Reports/caches go in .build; no signing or app launch.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/macos-toolchain.sh
 REPORT=false
 if [[ $# -eq 1 && "$1" == --report ]]; then
   REPORT=true
@@ -25,13 +26,12 @@ SWIFTLINT="${SWIFTLINT:-$PWD/.tools/swiftlint/swiftlint}"
   exit 2
 }
 mkdir -p .build/analysis/ModuleCache
-# Recent Command Line Tools put SourceKit here; SwiftLint does not discover it.
-DEVELOPER_DIR_PATH=$(xcode-select -p)
-if [[ -d "$DEVELOPER_DIR_PATH/usr/lib/sourcekitdInProc.framework" ]]; then
-  export DYLD_FRAMEWORK_PATH="$DEVELOPER_DIR_PATH/usr/lib${DYLD_FRAMEWORK_PATH:+:$DYLD_FRAMEWORK_PATH}"
+# Match SourceKit to the resolved compiler, not the globally selected CLT.
+SOURCEKIT_LIB_DIR="${NOW_SWIFTC:h:h}/lib"
+if [[ -d "$SOURCEKIT_LIB_DIR/sourcekitdInProc.framework" ]]; then
+  export DYLD_FRAMEWORK_PATH="$SOURCEKIT_LIB_DIR${DYLD_FRAMEWORK_PATH:+:$DYLD_FRAMEWORK_PATH}"
 fi
-SDK_PATH="${SDK_PATH:-$(xcrun --show-sdk-path)}"
-swiftc --version > .build/analysis/toolchain.txt 2>&1
+"$NOW_SWIFTC" --version > .build/analysis/toolchain.txt 2>&1
 print "Strict concurrency module checks (Swift 5, arm64, macOS 13)…"
 python3 scripts/typecheck-modules.py --sdk "$SDK_PATH" --target arm64-apple-macos13.0
 RESULT=0

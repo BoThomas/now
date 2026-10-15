@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix="now-analysis-") as directory:
     project = Path(directory)
     for folder in ("scripts", "Sources", "analysis"):
         (project / folder).mkdir()
-    for script in ("analyze.sh", "check-concurrency.py", "typecheck-modules.py"):
+    for script in ("analyze.sh", "check-concurrency.py", "typecheck-modules.py", "macos-toolchain.sh"):
         shutil.copy2(ROOT / "scripts" / script, project / "scripts" / script)
     shutil.copy2(ROOT / ".swiftlint.yml", project / ".swiftlint.yml")
     for baseline in ("concurrency", "swiftlint"):
