@@ -51,6 +51,7 @@ fi
 # Validate the supplied shipping artifact, then exercise the same updater code
 # with the explicit headless/fault runner. Test builds never replace release output.
 codesign --verify --deep --strict "$APP_PATH"
+python3 scripts/update-helper-tests.py
 ./scripts/build-app.sh --require-identity --release --test-updater
 APP_PATH="outputs/testing/release/now.app"
 

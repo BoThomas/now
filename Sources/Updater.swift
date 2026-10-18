@@ -1016,7 +1016,18 @@ enum UpdateInstaller {
       sleep 0.1
     done
     fail() {
-      [ -n "${new_pid:-}" ] && kill -0 "$new_pid" 2>/dev/null && kill "$new_pid" 2>/dev/null || true
+      if [ -n "${new_pid:-}" ]; then
+        kill "$new_pid" 2>/dev/null || true
+        # SIGTERM is asynchronous. Reap our child before restoring/reopening:
+        # otherwise LaunchServices can deliver open to the dying new app.
+        stop_polls=0
+        while kill -0 "$new_pid" 2>/dev/null && [ "$stop_polls" -lt 50 ]; do
+          sleep 0.1
+          stop_polls=$((stop_polls + 1))
+        done
+        kill -0 "$new_pid" 2>/dev/null && kill -KILL "$new_pid" 2>/dev/null || true
+        wait "$new_pid" 2>/dev/null || true
+      fi
       if [ -d "$NOW_BACKUP_PATH" ]; then
         if [ -e "$NOW_APP_PATH" ]; then
           mv "$NOW_APP_PATH" "$NOW_FAILED_PATH" || { open "$NOW_RELEASES_URL"; exit 1; }

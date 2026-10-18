@@ -226,7 +226,12 @@ top-level for the same reason). Notification/timer closures delivered on main ho
     failure renames the failed new app aside, restores first, then relaunches the OLD app with
     `--env NOW_UPDATE_ERROR=<reason>` (app shows the error window and never auto-offers that version
     again). Never delete the installed path before the backup rename succeeds or trash the backup
-    before startup health is acknowledged.
+    before startup health is acknowledged. Rollback must stop and reap the directly launched child
+    before restoring/reopening the old bundle: SIGTERM alone is asynchronous, and LaunchServices can
+    route `open` to the dying new process instead of launching the restored app. Allow five seconds
+    for termination, then kill and reap that child. `scripts/update-helper-tests.py` exercises
+    delayed and ignored SIGTERM without a GUI; signed updater smoke case 11 checks the real
+    LaunchServices handoff.
   - **Ordering/invariants**: decide-before-download (`decide()` on the manifest first; no
     release-age delay for automatic or manual checks — deleting a bad GitHub release is the rollback
     brake: it stops the spread but is not an undo); one updater-only URLSession enforces HTTPS for

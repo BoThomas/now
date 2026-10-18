@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.3.1] - 2026-10-18
+
+### Improved
+
+- General performance improvements to reduce unnecessary background work.
+
+### Fixed
+
+- Minor layout fixes in the join-command editor.
+
 ## [2.3.0] - 2026-10-01
 
 ### Added
@@ -313,3 +323,4 @@
 [2.2.0]: https://github.com/BoThomas/now/compare/v2.1.1...v2.2.0
 [2.2.1]: https://github.com/BoThomas/now/compare/v2.2.0...v2.2.1
 [2.3.0]: https://github.com/BoThomas/now/compare/v2.2.1...v2.3.0
+[2.3.1]: https://github.com/BoThomas/now/compare/v2.3.0...v2.3.1
