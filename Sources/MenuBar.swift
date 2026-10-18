@@ -522,6 +522,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Linkless events stay enabled: selecting one opens its useful event
         // details rather than pretending to be a Join action or doing nothing.
         let item = NSMenuItem(title: "", action: event.link == nil ? #selector(showEventDetailsAction) : #selector(joinAction), keyEquivalent: "")
+        if #available(macOS 27, *) {
+            // SDK 27 hides even non-symbol menu images by default. Calendar dots
+            // convey source identity, not decoration: always show them. Use the
+            // public ObjC property via KVC to keep pre-27 SDK builds supported;
+            // NSMenuItem.ImageVisibility.visible has raw value 1.
+            item.setValue(1, forKey: "preferredImageVisibility")
+        }
         item.target = self
         item.representedObject = event
         updateEventMenuItem(item, for: event, now: now, timeFont: timeFont, timeWidth: timeWidth, includeTooltip: false)

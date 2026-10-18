@@ -57,6 +57,7 @@ struct NotificationSmoke {
             if !condition() { print("FAIL: \(label)"); exit(1) }
         }
         let root = URL(fileURLWithPath: CommandLine.arguments[1])
+        if CommandLine.arguments.contains("--publication-smoke") { await publicationTests(root: root); return }
         if CommandLine.arguments.contains("--startup-new") { SetupAppSmoke.run(existingProfile: false); return }
         if CommandLine.arguments.contains("--startup-legacy") { SetupAppSmoke.run(existingProfile: true, legacyProfile: true); return }
         if CommandLine.arguments.contains("--startup-existing") { SetupAppSmoke.run(existingProfile: true); return }

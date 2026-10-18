@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the actual core/consumer boundary; never flatten core into app sources."""
 import argparse
+import os
 from pathlib import Path
 import subprocess
 
@@ -13,7 +14,7 @@ def main():
     report = Path(".build/analysis")
     modules = report / "CoreModules"
     modules.mkdir(parents=True, exist_ok=True)
-    common = ["swiftc", "-parse-as-library", "-swift-version", "5",
+    common = [os.environ.get("NOW_SWIFTC", "swiftc"), "-parse-as-library", "-swift-version", "5",
               "-strict-concurrency=complete", "-package-name", "now",
               "-module-cache-path", str(report / "ModuleCache")]
     if args.sdk:

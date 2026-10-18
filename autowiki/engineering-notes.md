@@ -99,6 +99,13 @@ only when one flipped (interval-based, so a late post-sleep tick catches up in o
 render-time inputs derived from the clock must join that predicate or arrive as real events — never
 as a periodic whole-store publish.
 
+Meeting probe callbacks likewise publish only actual activity/error changes. A known observation
+still clears an existing error even if activity is unchanged; `.unknown` retains that error.
+Provider changes remain observable. Do not use repeated equal `@Published` assignments as a probe
+heartbeat: retained Settings/control graphs pay for those invalidations too. The headless
+`python3 scripts/notification-smoke.py --publication-smoke` checks the real callbacks with repeated
+observations, failures and recovery without starting any windows.
+
 ### Reminder timing
 
 Multiple reminders use per-lead handled membership inside each occurrence's ledger entry. Snooze and
@@ -462,6 +469,14 @@ titles are cut via `Fmt.ellipsized` (48 chars); hover shows a rich multi-line to
 (title/when/timing/location/notes via `tooltipText`, notes word-wrapped by `Fmt.wrapped`; no
 join-link row, and location/notes lines that are nothing but the join link are suppressed —
 `isJustJoinLink`). Refresh has ⌘R (`keyEquivalent: "r"` — works while the menu is open).
+
+SDK 27 changes AppKit's default: even non-symbol `NSMenuItem.image` values are hidden on macOS 27.
+Agenda calendar dots carry source identity, so their items explicitly request visible images when
+created. The public `preferredImageVisibility` property is accessed through KVC, guarded by macOS 27
+availability, so building with older supported SDKs still works (`.visible` has raw value 1). Do not
+replace this with a global menu preference or template-image trick. The reminder-state smoke checks
+visibility, color and muted opacity on initial rows, tracking ticks and rebuilds; an assigned image
+alone is not evidence that AppKit will display it.
 
 ### Reminder location row
 

@@ -2,8 +2,11 @@
 
 [Back to the README](../README.md)
 
-Requires a Swift 6.1+ compiler and Xcode Command Line Tools with a macOS 15 or later SDK (the build
-uses the active SDK reported by `xcrun`; override with `SDK_PATH` if needed).
+Requires full Xcode with a Swift 6.1+ compiler and a macOS 15 or later SDK. The macOS build and
+analysis entry points respect `DEVELOPER_DIR`; otherwise they use the globally selected full Xcode,
+or `/Applications/Xcode.app` when standalone Command Line Tools are selected. They never change
+global `xcode-select`. Compiler and SDK resolution uses that Xcode's `xcrun`; override the SDK with
+`SDK_PATH` if needed. An inherited `SDKROOT` is aligned with the selected SDK.
 
 ```bash
 ./scripts/build-app.sh
@@ -14,6 +17,34 @@ Builds optimized `outputs/now.app` and `outputs/now.zip` using SwiftPM, in Swift
 `--release` is the default. Incremental compilation artifacts are retained; `--clean` explicitly
 clears SwiftPM build artifacts. Use `--require-identity` to require the stable signing identity.
 Bundling, resources, entitlements, and signature verification remain in the wrapper.
+
+The wrapper explicitly selects SwiftPM's `native` build backend and passes `--sdk` to SwiftPM. This
+is a temporary compatibility decision: the Swift 6.4 `swiftbuild` default locally emitted
+`LC_BUILD_VERSION.sdk = 13.0` even when SDK 27 was selected, including in a minimal package. The
+native backend is deprecated, so re-evaluate it when the newer backend passes the final SDK check;
+do not silently fall back or rewrite Mach-O metadata. Language mode stays Swift 5 and the deployment
+target stays macOS 13, independently of the selected SDK version.
+
+Before producing the ZIP, the build statically verifies the final executable's arm64 architecture,
+macOS platform, minimum OS and exact selected SDK version. `outputs/now.build-info.json` (or the
+equivalent debug/testing sidecar) records compiler/Xcode versions, backend, source revision/dirty
+state, dependency-lock hash, executable hash and verified load-command fields. It is an audit
+record, not a guarantee of byte-identical builds from an uncommitted working tree. The artifact
+smoke repeats the SDK check rather than trusting that sidecar.
+
+These checks are headless and never launch now:
+
+```bash
+python3 scripts/build-tooling-smoke.py
+python3 scripts/build_metadata.py outputs/now.app/Contents/MacOS/now
+python3 scripts/artifact-smoke.py --static-only outputs/now.app
+python3 scripts/notification-smoke.py --publication-smoke
+```
+
+The publication smoke exercises production meeting callbacks with disposable preferences/cache and
+fake audio/login adapters. Repeated equal activity/error values must not publish; real transitions,
+unknown-state error retention and recovery must still publish. It does not start AppDelegate or any
+windows. Full notification/activation/updater GUI checks remain separate and require desktop access.
 
 ## Development tools
 
@@ -48,8 +79,8 @@ Swift compiler and place the version-checked executable in `.tools/swiftlint/swi
 `SWIFTLINT`). This devbox uses that source-build route; no host libc upgrade was made. The ignored
 `.tools/` installation survives app builds. Analysis never downloads tools, signs an app, requests
 permissions, or launches now. A missing/wrong tool version is an error. `SWIFTLINT` can point to
-another installation of the same version. Command Line Tools SourceKit discovery is handled by the
-script. Python 3 and the active Swift compiler are also required; npm is not.
+another installation of the same version. SourceKit discovery follows the selected Xcode compiler.
+Python 3 is also required; npm is not.
 
 The default command fails on compiler errors, new compiler warnings, new SwiftLint findings, or tool
 failures. `--report` makes findings informational but still fails on compiler/tool errors. Reports
@@ -128,10 +159,10 @@ same script; production install calls pass no fault environment and strip inheri
 Updater fault tests therefore exercise a test binary, not the byte-identical shipping binary.
 
 `python3 scripts/artifact-smoke.py outputs/now.app` verifies shipping metadata, the exact signing
-requirement and entitlements, arm64/macOS 13 load commands, fixture exclusion, and production parser
-and update-check diagnostics. It launches production code for five seconds in a signed disposable
-bundle with an empty profile. This checks startup liveness; it does not replace manual testing of
-Calendar permission prompts, real Notification Center delivery or older macOS versions.
+requirement and entitlements, arm64/macOS 13 load commands, the selected SDK, fixture exclusion, and
+production parser/update-check diagnostics. It launches production code for five seconds in a signed
+disposable bundle with an empty profile. This checks startup liveness; it does not replace manual
+testing of Calendar permission prompts, real Notification Center delivery or older macOS versions.
 
 The pinned-ID updater fixture uses an explicit disposable preference suite and injected cache;
 changing HOME alone does not isolate macOS preferences. Interactive menu/focus checks require an

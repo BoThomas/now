@@ -236,11 +236,15 @@ final class AppStore: ObservableObject {
         refreshNativeAuthorization()
         nativeSource.onStoreChange = { [weak self] in self?.scheduleNativeStoreRefresh() }
         meetingActivitySource.onActivityChange = { [weak self] activity in
-            self?.meetingActivity = activity
-            if activity != .unknown { self?.meetingDetectionError = nil }
+            guard let self else { return }
+            // @Published sends even for equal values; periodic probes must not
+            // invalidate every retained Settings/setup/control graph needlessly.
+            if self.meetingActivity != activity { self.meetingActivity = activity }
+            if activity != .unknown, self.meetingDetectionError != nil { self.meetingDetectionError = nil }
         }
         meetingActivitySource.onProbeFailure = { [weak self] message in
-            self?.meetingDetectionError = message
+            guard let self, self.meetingDetectionError != message else { return }
+            self.meetingDetectionError = message
         }
         activeObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,

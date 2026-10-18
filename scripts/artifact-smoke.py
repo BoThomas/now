@@ -6,15 +6,20 @@ import pathlib
 import plistlib
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import uuid
 import http.server
 import threading
+import argparse
+from build_metadata import check_binary, selected_sdk_version
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-app = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "outputs/now.app").resolve()
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("app", nargs="?", type=pathlib.Path, default=ROOT / "outputs/now.app")
+parser.add_argument("--static-only", action="store_true", help="Inspect metadata/signature without executing the app")
+arguments = parser.parse_args()
+app = arguments.app.resolve()
 executable = app / "Contents/MacOS/now"
 metadata = plistlib.loads((app / "Contents/Info.plist").read_bytes())
 assert metadata == plistlib.loads((ROOT / "resources" / "Info.plist").read_bytes()), "bundle metadata drift"
@@ -26,14 +31,15 @@ assert 'identifier "com.thomasboch.now"' in requirement, requirement
 assert 'certificate root = H"' + identity.lower() + '"' in requirement, requirement
 entitlements = subprocess.check_output(["codesign", "-d", "--entitlements", ":-", str(app)], stderr=subprocess.DEVNULL)
 assert plistlib.loads(entitlements) == plistlib.loads((ROOT / "resources" / "now.entitlements").read_bytes())
-architecture = subprocess.check_output(["lipo", "-archs", str(executable)], text=True).strip()
-assert architecture == "arm64", architecture
-load_commands = subprocess.check_output(["vtool", "-show-build", str(executable)], text=True)
-assert "minos 13.0" in load_commands, load_commands
+check_binary(executable, selected_sdk_version())
 binary = executable.read_bytes()
 for fixture in (b"SELFTEST OK", b"SELFTEST FAILED", b"SMOKE: old app", b"smokeCommitEvents",
-                b"SelfTestRunner", b"UpdaterTestRunner", b"NOW_TEST_PREFERENCES_DOMAIN", b"NOW_TEST_DEMO_ROOT"):
+                b"SelfTestRunner", b"UpdaterTestRunner", b"NOW_TEST_PREFERENCES_DOMAIN", b"NOW_TEST_DEMO_ROOT",
+                b"PUBLICATION SMOKE OK"):
     assert fixture not in binary, "shipping fixture: " + repr(fixture)
+if arguments.static_only:
+    print("STATIC ARTIFACT CHECK OK — no app execution", flush=True)
+    raise SystemExit(0)
 for flag in ("--selftest", "--update-smoke"):
     result = subprocess.run([str(executable), flag], capture_output=True, text=True, timeout=10)
     assert result.returncode == 64, result
