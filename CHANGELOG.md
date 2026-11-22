@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.4.0] - 2026-11-22
+
+### Added
+
+- Recognize Discord channel, event, and invite links in calendar entries.
+- Open supported Discord links in the desktop app when enabled, with a browser fallback.
+- Show an Open in Discord button with the Discord icon in fullscreen reminders.
+- Use Discord desktop audio activity with your existing in-meeting reminder preference.
+
+### Fixed
+
+- Keep native meeting links available when restoring cached calendar events offline.
+
 ## [2.3.1] - 2026-10-18
 
 ### Improved
@@ -324,3 +337,4 @@
 [2.2.1]: https://github.com/BoThomas/now/compare/v2.2.0...v2.2.1
 [2.3.0]: https://github.com/BoThomas/now/compare/v2.2.1...v2.3.0
 [2.3.1]: https://github.com/BoThomas/now/compare/v2.3.0...v2.3.1
+[2.4.0]: https://github.com/BoThomas/now/compare/v2.3.1...v2.4.0
