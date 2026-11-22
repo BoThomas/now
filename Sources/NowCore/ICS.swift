@@ -1146,6 +1146,7 @@ package enum LinkExtractor {
         if scheme == "msteams" || scheme == "teams" {
             return url.path.hasPrefix("/l/")
         }
+        if scheme == "discord" { return DiscordLink.matches(url) }
         return false
     }
 
@@ -1192,7 +1193,7 @@ package enum LinkExtractor {
             comps.percentEncodedQuery = parts?.percentEncodedQuery
             return comps.url
         }
-        return nil
+        return DiscordLink.nativeForm(of: url)
     }
 
     /// Web-form converter: accepts an http(s) URL unchanged and converts common
@@ -1232,6 +1233,7 @@ package enum LinkExtractor {
             comps.percentEncodedQuery = parts?.percentEncodedQuery
             return comps.url
         }
+        if scheme == "discord" { return DiscordLink.webForm(of: url) }
         return nil
     }
 
@@ -1243,7 +1245,6 @@ package enum LinkExtractor {
         "teams.microsoft.com": "Microsoft Teams", "teams.live.com": "Microsoft Teams",
         "webex.com": "Webex", "gotomeet.me": "GoTo Meeting", "goto.com": "GoTo Meeting",
         "meet.jit.si": "Jitsi Meet", "whereby.com": "Whereby",
-        "discord.gg": "Discord", "discord.com": "Discord",
         "slack.com": "Slack", "chime.aws": "Amazon Chime", "8x8.vc": "8x8 Meet",
         "bluejeans.com": "BlueJeans", "facetime.apple.com": "FaceTime",
         "ringcentral.com": "RingCentral", "join.me": "join.me", "dialpad.com": "Dialpad",
@@ -1257,6 +1258,7 @@ package enum LinkExtractor {
             if scheme == "msteams" || scheme == "teams" { return "Microsoft Teams" }
         }
         guard let host = url.host?.lowercased() else { return nil }
+        if DiscordLink.owns(host) { return "Discord" }
         for (suffix, name) in providerNames where host == suffix || host.hasSuffix("." + suffix) {
             return name
         }
@@ -1284,6 +1286,11 @@ package enum LinkExtractor {
     package static func isMeetingLink(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
               let host = url.host?.lowercased(), !host.isEmpty else { return false }
+        if DiscordLink.owns(host) { return DiscordLink.matches(url) }
+        return hasWebJoinPath(url, host: host)
+    }
+
+    private static func hasWebJoinPath(_ url: URL, host: String) -> Bool {
         let path = url.path.lowercased()
         let segments = path.split(separator: "/").map(String.init)
 
@@ -1316,8 +1323,7 @@ package enum LinkExtractor {
         }
         if host == "meet.jit.si" || host.hasSuffix(".meet.jit.si") ||
            host == "whereby.com" || host.hasSuffix(".whereby.com") ||
-           host == "facetime.apple.com" || host.hasSuffix(".facetime.apple.com") ||
-           host == "discord.gg" || host.hasSuffix(".discord.gg") {
+           host == "facetime.apple.com" || host.hasSuffix(".facetime.apple.com") {
             return !path.split(separator: "/").isEmpty
         }
         if host == "gotomeet.me" || host.hasSuffix(".gotomeet.me") || host == "meet.goto.com" ||

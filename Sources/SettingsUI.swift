@@ -2142,7 +2142,7 @@ struct SettingsView: View {
                 .popover(isPresented: $showJoinInAppInfo, arrowEdge: .trailing) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Always open join links in the meeting app, if installed").font(.headline)
-                        Text("Join links that already use an app protocol such as zoomus:// always open the installed meeting app directly. With this option on, Zoom and Teams browser links also open in the app when it is installed. Without the app, links open in your browser as before.")
+                        Text("Join links that use an app protocol such as zoomus:// open the installed meeting app directly. This option also opens supported Zoom, Teams, and Discord web links in the installed app. Your browser opens the link if the app is missing.")
                     }
                     .font(.callout)
                     .padding(14)

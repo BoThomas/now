@@ -2,7 +2,7 @@ import Foundation
 
 /// Resolves which URL Join should actually open. The event's link stays
 /// exactly what the calendar said; only the click-time target adapts:
-/// - native links (zoomus/zoommtg/msteams) open the meeting app directly when
+/// - native links (zoomus/zoommtg/msteams/discord) open the meeting app directly when
 ///   it is installed, otherwise they fall back to their web form — a native
 ///   link is never silently dropped when the app is missing;
 /// - web links upgrade to the native form only while the join-in-app setting

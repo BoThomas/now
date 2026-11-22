@@ -1998,6 +1998,9 @@ enum SelfTest {
         c.expect(MeetingActivityProbe.activity(owners: zoomOwners, includeBrowsers: false) == .meeting(.zoom), "Zoom input classifies as meeting")
         let teamsOwners = [MeetingAudioOwner(pid: 11, bundleID: "com.microsoft.teams2.helper")]
         c.expect(MeetingActivityProbe.activity(owners: teamsOwners, includeBrowsers: false) == .meeting(.teams), "Teams helper classifies as meeting")
+        let discordOwners = [MeetingAudioOwner(pid: 13, bundleID: "com.hnc.Discord.helper.Renderer")]
+        c.expect(MeetingActivityProbe.activity(owners: discordOwners, includeBrowsers: false) == .meeting(.discord),
+                 "Discord's renderer input classifies as a native meeting")
         let chromeOwners = [MeetingAudioOwner(pid: 12, bundleID: "com.google.Chrome.helper")]
         c.expect(MeetingActivityProbe.activity(owners: chromeOwners, includeBrowsers: false) == .inactive, "browser input ignored by default")
         c.expect(MeetingActivityProbe.activity(owners: chromeOwners, includeBrowsers: true) == .meeting(.browser), "browser input classifies when opted in")

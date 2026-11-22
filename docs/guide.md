@@ -60,8 +60,9 @@ open the app directly, without a browser detour. If the app is not installed, th
 its browser page.
 
 **Always open join links in the meeting app, if installed** in **Settings → General** also opens
-ordinary Zoom and Microsoft Teams links in the installed app. It is on by default; turn it off to
-always use the browser. Without the app installed, links open in your browser either way.
+ordinary Zoom, Microsoft Teams and Discord links in the installed app. Turn it off to open web links
+in your browser. Discord links can open a channel, event, or invite. Discord handles any remaining
+steps such as joining voice or accepting an invitation.
 
 ### Run a command when joining
 

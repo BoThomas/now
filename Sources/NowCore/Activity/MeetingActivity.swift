@@ -1,5 +1,5 @@
 package enum MeetingProvider: Equatable, Sendable {
-    case zoom, teams, browser, webex, slack, faceTime
+    case zoom, teams, browser, webex, slack, faceTime, discord
 
     package var name: String {
         switch self {
@@ -9,6 +9,7 @@ package enum MeetingProvider: Equatable, Sendable {
         case .webex: return "Webex"
         case .slack: return "Slack"
         case .faceTime: return "FaceTime"
+        case .discord: return "Discord"
         }
     }
 }

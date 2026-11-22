@@ -41,6 +41,15 @@ extension CoreTests {
         var damaged = json; damaged["coverageEnd"] = -1
         let invalid = try JSONDecoder().decode(CalendarCacheSnapshot.self, from: JSONSerialization.data(withJSONObject: damaged))
         check.expect(!invalid.isValid, "decoded invalid coverage is rejected")
+
+        let nativeItem = modelEvent(calendarID: sub.id, link: URL(string: "discord://discord.com/channels/123/456")!)
+        let nativeSnapshot = CalendarCacheSnapshot(subscription: sub, events: [nativeItem], fetchedAt: item.start, warning: nil)
+        let nativeRestored = try JSONDecoder().decode(CalendarCacheSnapshot.self, from: JSONEncoder().encode(nativeSnapshot))
+        check.expect(nativeRestored.events(subscription: sub, now: item.start).first?.link == nativeItem.link,
+                     "offline cache restores a validated native Discord destination verbatim")
+        let unsupported = modelEvent(calendarID: sub.id, link: URL(string: "discord://discord.com/login")!)
+        check.expect(!CalendarCacheSnapshot(subscription: sub, events: [unsupported], fetchedAt: item.start, warning: nil).isValid,
+                     "offline cache rejects an unrecognized native Discord destination")
     }
 
     #if os(macOS) || os(Linux)

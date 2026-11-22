@@ -290,9 +290,9 @@ struct FeatureGuideView: View {
                 }
             case .joinInApp:
                 Text("New in this version: Open meetings directly in the app").font(.headline)
-                Text("Join links with a direct app protocol such as zoomus:// now open the meeting app right away without a browser detour. Ordinary Zoom and Teams links can do the same when the app is installed.")
+                Text("Join links with an app protocol such as zoomus:// open the meeting app directly. Supported Zoom, Teams, and Discord web links can also open in the installed app.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Toggle("Open Zoom and Teams links always in the meeting app, if installed", isOn: $joinInAppChoice)
+                Toggle("Always open join links in the meeting app, if installed", isOn: $joinInAppChoice)
             case .information(let title, let message):
                 Text(title).font(.headline)
                 Text(message).font(.callout).fixedSize(horizontal: false, vertical: true)

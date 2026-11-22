@@ -64,7 +64,7 @@ package struct CalendarCacheSnapshot: Codable, Sendable {
         meetings.count <= 10_000 && meetings.allSatisfy {
             $0.start.timeIntervalSince1970.isFinite && (0..<1_000_000_000_000).contains($0.end.timeIntervalSince1970) &&
             $0.start >= coverageStart && $0.start <= coverageEnd && $0.end > $0.start &&
-            ($0.link == nil || ["http", "https"].contains($0.link?.scheme?.lowercased() ?? ""))
+            ($0.link.map { ["http", "https"].contains($0.scheme?.lowercased() ?? "") || LinkExtractor.isNativeJoinLink($0) } ?? true)
         }
     }
 

@@ -138,9 +138,10 @@ extension CoreTests {
         check.expect(removed.map(\.id) == Array(rules.dropFirst()).map(\.id), "rule removal preserves sibling IDs/order")
     }
 
-    static func modelEvent(calendarID: UUID, title: String = "Meeting", start: Date = Date(timeIntervalSince1970: 1_800_000_000), identity: String? = nil) -> MeetingEvent {
+    static func modelEvent(calendarID: UUID, title: String = "Meeting", start: Date = Date(timeIntervalSince1970: 1_800_000_000),
+                           identity: String? = nil, link: URL? = nil) -> MeetingEvent {
         MeetingEvent(uid: "uid", title: title, start: start, end: start.addingTimeInterval(3600), location: nil,
-                     notes: nil, link: nil, calendarID: calendarID, calendarName: "Calendar", colorIndex: 0,
+                     notes: nil, link: link, calendarID: calendarID, calendarName: "Calendar", colorIndex: 0,
                      colorHex: "#123456", notificationIdentity: identity)
     }
 

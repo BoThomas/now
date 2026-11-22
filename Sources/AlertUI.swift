@@ -815,7 +815,7 @@ struct SingleEventView: View {
                 Button {
                     controller.join(event)
                 } label: {
-                    Label("Join Meeting", systemImage: "video.fill")
+                    AlertJoinLabel(link: event.link, title: "Join Meeting")
                 }
                 .buttonStyle(AlertJoinButtonStyle(color: event.alertButtonColor))
             } else {
@@ -905,7 +905,7 @@ struct MultiEventView: View {
                                 Button {
                                     controller.join(event)
                                 } label: {
-                                    Label("Join", systemImage: "video.fill")
+                                    AlertJoinLabel(link: event.link, title: "Join", compact: true)
                                 }
                                 .buttonStyle(AlertJoinButtonStyle(color: event.alertButtonColor, compact: true))
                             } else {
@@ -926,6 +926,36 @@ struct MultiEventView: View {
 
     private func status(_ event: MeetingEvent) -> String {
         Fmt.reminderStatus(start: event.start, end: event.end, now: now, includeEndCountdown: false).lowercased()
+    }
+}
+
+private struct AlertJoinLabel: View {
+    let link: URL?
+    let title: String
+    var compact = false
+
+    // White Clyde symbol from the official brand kit (discord.com/branding).
+    private static let discordIcon = Bundle.main.url(forResource: "DiscordClyde", withExtension: "png")
+        .flatMap { NSImage(contentsOf: $0) }
+
+    var body: some View {
+        if let link, DiscordLink.matches(link) {
+            Label {
+                Text("Open in Discord")
+            } icon: {
+                if let image = Self.discordIcon {
+                    Image(nsImage: image)
+                        .renderingMode(.original)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: compact ? 20 : 24)
+                } else {
+                    Image(systemName: "arrow.up.right.square")
+                }
+            }
+        } else {
+            Label(title, systemImage: "video.fill")
+        }
     }
 }
 

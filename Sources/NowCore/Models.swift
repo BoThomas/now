@@ -87,8 +87,7 @@ package struct AppSettings: Codable, Equatable, Sendable {
     package var notifyDuringMeetings = false
     package var notifyOnCatchUp = false
     package var skipMeetingsOnCatchUp = false
-    /// Open join links directly in the installed meeting app (Zoom, Microsoft
-    /// Teams) instead of routing through the browser. On by default — without
+    /// Open join links directly in the installed meeting app. On by default — without
     /// the app installed links simply open in the browser — and an explicit
     /// off persists. Links that already carry a native app protocol are always
     /// honored natively regardless of this setting; it only upgrades ordinary

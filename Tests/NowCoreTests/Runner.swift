@@ -25,6 +25,7 @@ import NowCore
         datesAndOverrides(&check)
         recurrence(&check)
         links(&check)
+        discordLinks(&check)
         do {
             try modelDecoding(&check)
             try modelRecovery(&check)
@@ -243,5 +244,47 @@ import NowCore
         check.expect(LinkExtractor.isMeetingLink(URL(string: "https://example.webex.com/site/j.php?MTID=opaque")!), "Webex scheduled shape")
         check.expect(!LinkExtractor.isMeetingLink(URL(string: "https://webex.com.evil.invalid/site/j.php?MTID=opaque")!), "Webex lookalike rejected")
         check.expect(LinkExtractor.decodeHTMLEntities("&amp;lt;") == "&lt;", "HTML entities decoded only once")
+    }
+
+    static func discordLinks(_ check: inout Check) {
+        let channel = URL(string: "https://discord.com/channels/123/456?context=a%2Fb#test")!
+        let native = URL(string: "discord://discord.com/channels/123/456?context=a%2Fb#test")!
+        check.expect(LinkExtractor.joinShaped(channel) == channel, "Discord HTTPS channel is a join destination")
+        check.expect(LinkExtractor.joinShaped(native) == native, "explicit Discord native channel stays native")
+        check.expect(LinkExtractor.isBareJoinLink(channel.absoluteString, of: native), "Discord web and native locations compare equal")
+        check.expect(LinkExtractor.displayLocation(nil, link: native) == "Discord", "Discord location uses the provider name")
+        check.expect(JoinTarget.resolve(link: channel, preferNative: true, canOpen: { $0 == native }) == native,
+                     "Discord upgrades only if the native URL is handled")
+        check.expect(JoinTarget.resolve(link: channel, preferNative: true, canOpen: { _ in false }) == channel,
+                     "Discord opens in browser when the app is absent")
+        check.expect(JoinTarget.resolve(link: channel, preferNative: false, canOpen: { _ in true }) == channel,
+                     "Discord opens in browser when native preference is off")
+        check.expect(JoinTarget.resolve(link: native, preferNative: false, canOpen: { _ in true }) == native,
+                     "explicit Discord native links honor the calendar's choice")
+        check.expect(JoinTarget.resolve(link: native, preferNative: true, canOpen: { _ in false }) == channel,
+                     "Discord native channel falls back to an equivalent web link")
+        for (web, expectedNative) in [
+            ("https://discord.com/channels/@me/456", "discord://discord.com/channels/@me/456"),
+            ("https://discordapp.com/channels/123/456/", "discord://discord.com/channels/123/456"),
+            ("https://discord.com/events/123/456", "discord://discord.com/events/123/456"),
+            ("https://discord.gg/aBC123?event=456", "discord://discord.gg/aBC123?event=456"),
+            ("https://discord.com/invite/aBC123?event=456", "discord://discord.gg/aBC123?event=456")
+        ] {
+            let webURL = URL(string: web)!
+            check.expect(LinkExtractor.joinShaped(webURL) == webURL && LinkExtractor.nativeForm(of: webURL)?.absoluteString == expectedNative,
+                         "Discord supports join destination \(web)")
+        }
+        for invalid in [
+            "https://discord.com/channels/123", "https://discord.com/channels/123/456/789",
+            "https://discord.com/channels/123//456", "https://discord.com/channels/123/abc",
+            "https://discord.com/channels/123/456%2F789", "https://discord.com/join/",
+            "https://discord.com/events/123", "https://discord.gg/", "https://discord.gg/a/b",
+            "https://discord.com.evil.invalid/channels/123/456", "https://discord.com:8443/channels/123/456",
+            "discord://discord.com/login", "discord://discord.com@evil.invalid/channels/123/456"
+        ] {
+            let url = URL(string: invalid)!
+            check.expect(LinkExtractor.joinShaped(url) == nil && LinkExtractor.nativeForm(of: url) == nil,
+                         "Discord rejects unrelated or malformed destination \(invalid)")
+        }
     }
 }

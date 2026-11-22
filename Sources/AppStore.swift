@@ -103,7 +103,7 @@ final class AppStore: ObservableObject {
     var updateNotificationSubmitted: ((ReminderNotification) -> Void)?
     var updateNotificationResponse: ((ReminderNotification, String) -> Void)?
     var updateNotificationTick: (() -> Void)?
-    var openNotificationLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    var openNotificationLink: ((URL) -> Void)?
     var openNotificationMeetings: (([MeetingEvent]) -> Void)?
     var openNotificationAgenda: (() -> Void)?
     var openNotificationSyncSettings: (() -> Void)?
@@ -1429,9 +1429,18 @@ final class AppStore: ObservableObject {
             if action == "join" { current.forEach(joinedMeeting) }
             if action == "choose" || (!item.catchUp && item.keys.count > 1 && action != UNNotificationDismissActionIdentifier) { openNotificationAgenda?() }
             else if action == "join", current.count == 1, let url = current[0].link {
-                openNotificationLink(JoinOpener.target(for: url, preferNative: settings.openJoinsInMeetingApp))
+                openMeetingFromNotification(url)
             }
             else if action != UNNotificationDismissActionIdentifier { openNotificationMeetings?(current) }
+        }
+    }
+
+    private func openMeetingFromNotification(_ url: URL) {
+        let preferNative = settings.openJoinsInMeetingApp
+        if let openNotificationLink {
+            openNotificationLink(JoinOpener.target(for: url, preferNative: preferNative))
+        } else {
+            JoinOpener.open(url, preferNative: preferNative)
         }
     }
 

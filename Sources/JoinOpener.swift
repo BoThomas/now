@@ -16,6 +16,10 @@ enum JoinOpener {
     }
 
     static func open(_ link: URL, preferNative: Bool) {
-        NSWorkspace.shared.open(target(for: link, preferNative: preferNative))
+        let target = target(for: link, preferNative: preferNative)
+        if !NSWorkspace.shared.open(target), target.scheme?.lowercased() == "discord",
+           let fallback = LinkExtractor.webForm(of: link) {
+            NSWorkspace.shared.open(fallback)
+        }
     }
 }

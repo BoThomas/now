@@ -63,6 +63,7 @@ fi
 "$NOW_SWIFTC" -sdk "$SDK_PATH" -target arm64-apple-macos13.0 scripts/make-icon.swift -o .build/make-icon
 .build/make-icon "$ICONSET"
 cp "$ICONSET/icon_512x512@2x.png" "$APP/Contents/Resources/AppIcon.png"
+cp resources/DiscordClyde.png "$APP/Contents/Resources/DiscordClyde.png"
 
 cp resources/Info.plist "$APP/Contents/Info.plist"
 

@@ -98,6 +98,7 @@ enum MeetingActivityProbe {
                 return .meeting(provider)
             }
         }
+        if bundleIDs.contains("com.hnc.discord.helper.renderer") { return .meeting(.discord) }
 
         if includeBrowsers {
             let browserPrefixes = [
